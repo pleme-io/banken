@@ -1,0 +1,21 @@
+[package]
+name = "banken-spec"
+description = "The postigo action-legality citizenship primitive — a TYPED-SPEC + INTERPRETER triplet for banken (the pleme-io-native k9s). Types are the hard border; the (defk8sview)/(defk8saction) Lisp forms are the authoring surface; the ClusterEnv trait has no unwitnessed-mutate method by construction. Proven against a mock cluster, no live cluster required."
+keywords = ["kubernetes", "k9s", "gitops", "tui", "tatara"]
+categories = ["development-tools"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tatara-lisp.workspace = true
+tatara-lisp-derive.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints.clippy]
+pedantic = "warn"

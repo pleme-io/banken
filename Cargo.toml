@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = ["banken-spec"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89.0"
+license = "MIT"
+repository = "https://github.com/pleme-io/banken"
+
+[workspace.dependencies]
+# The postigo typed border authoring surface — pleme-io's homoiconic
+# S-expression reader + derive macro, both published on crates.io.
+#
+# INTERIM PIN (mirrors sui/Cargo.toml's blessed pairing): the derive
+# version-drifts independently of tatara-lisp on crates.io. Caret ranges
+# resolve derive to a 0.2.77+ line that emits calls to
+# `tatara_lisp::domain::parse_kwargs_strict`, a runtime symbol NO
+# published tatara-lisp exports (0.2.4 only exports `parse_kwargs`).
+# Exact-pin the derive to the last matching release so the emitted code
+# references a symbol the runtime actually ships. banken uses only
+# `#[tatara(keyword = "…")]`, fully supported by 0.2.2.
+tatara-lisp = "=0.2.4"
+tatara-lisp-derive = "=0.2.2"
+
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+thiserror = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
