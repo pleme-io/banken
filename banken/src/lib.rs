@@ -1,0 +1,47 @@
+//! banken 番犬 — the pleme-io-native k9s (naturalize).
+//!
+//! This crate is the **runnable** half of banken (BANKEN.md §VI M0): the
+//! `:pods` table render + interaction pipeline, built on the shipped
+//! [`banken_spec`] citizenship primitive (the `postigo` action-legality
+//! triplet). It is an **observe-first, GitOps-native cluster navigator** —
+//! it keeps k9s's fast keyboard navigation and routes every action through
+//! the three-class gate: OBSERVE reads freely, DECLARE lowers to a
+//! full-manifest GitOps change a reconciler applies, BREAK-GLASS is
+//! witnessed. There is **no live-mutate path** — the [`banken_spec::env::ClusterEnv`]
+//! seam has no unwitnessed-mutate method.
+//!
+//! ## What is PROVEN vs DESIGN (tier-honest — never rounded up)
+//!
+//! - **PROVEN (this session):** the full render + interaction pipeline over
+//!   a **fixture source** ([`fixture::FixtureClusterEnv`]) — the `:pods`
+//!   table (columns, selection, sort, pathology colors), the postigo
+//!   dispatch through the UI (`l`→OBSERVE, `s`→DECLARE full-manifest
+//!   preview, `S`→BREAK-GLASS witnessed record), and golden-frame +
+//!   dispatch integration tests. This is the sui-spec `MockEnv` discipline:
+//!   a real, verifiable increment whose read is canned data.
+//! - **DESIGN / UNTESTED-LIVE:** the live-cluster read
+//!   ([`KubeClusterEnv`](live::KubeClusterEnv), under the `live` feature).
+//!   No cluster was reachable this session (rio/camelot VPN-gated, local
+//!   k3s down), so the live read path was never exercised. It is wired
+//!   behind the same [`ClusterEnv`](banken_spec::env::ClusterEnv) seam and
+//!   lights up the instant a cluster returns. Do NOT conflate the two.
+//!
+//! ## Module map
+//!
+//! - [`table`] — the `PodTable` view model (columns/selection/sort).
+//!   `pending-banken: promote-tableview-to-egaku`.
+//! - [`render`] — the `:pods` cell drawer over egaku-term's typed `Buffer`.
+//!   `pending-banken: promote-tableview-to-egaku`.
+//! - [`fixture`] — `FixtureClusterEnv`, the default OBSERVE source.
+//! - [`action`] — the postigo dispatch (consumes `banken_spec::apply`).
+//! - [`app`] — the `BankenApp` runtime (`egaku_term::AsyncApp`).
+//! - [`live`] — `KubeClusterEnv` (feature `live`). `pending-banken: live-read`.
+
+pub mod action;
+pub mod app;
+pub mod fixture;
+pub mod render;
+pub mod table;
+
+#[cfg(feature = "live")]
+pub mod live;

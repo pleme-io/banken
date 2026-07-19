@@ -1,0 +1,39 @@
+[package]
+name = "banken"
+description = "banken 番犬 — the pleme-io-native k9s (naturalize). An observe-first, GitOps-native cluster-navigator TUI: a live :pods table rendered through egaku-term's typed cell surface, with every action routed through the postigo three-class action-legality gate (OBSERVE reads, DECLARE lowers to a full-manifest GitOps change, BREAK-GLASS is witnessed). Proven against a fixture cluster source this session; the live-cluster read is wired behind the ClusterEnv seam under the `live` feature."
+keywords = ["kubernetes", "k9s", "gitops", "tui", "egaku"]
+categories = ["command-line-interface"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "banken"
+path = "src/main.rs"
+
+[dependencies]
+banken-spec = { path = "../banken-spec" }
+egaku-term = { version = "0.3.1", features = ["tokio"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+# ── The live-cluster read path (BANKEN.md §VI M0 destination-tier). ──
+# Gated behind the `live` feature so the default build (the fixture path
+# proven this session) stays lean + green. NO `kubectl` subprocess — the
+# NO-SHELL rule holds; this is a typed apiserver client. The code is real
+# (never a fake `Ok`), but is UNTESTED-LIVE this session (no cluster
+# reachable — rio/camelot VPN-gated, local k3s down). `pending-banken:
+# live-read` — the row lights up the instant a cluster returns.
+kube = { version = "0.99", default-features = false, features = ["client", "rustls-tls"], optional = true }
+k8s-openapi = { version = "0.24", features = ["latest"], optional = true }
+anyhow = { version = "1", optional = true }
+
+[features]
+default = []
+# Compile the KubeClusterEnv live-read backend. Heavy dep tree (kube +
+# k8s-openapi + rustls) — off by default so the fixture path is fast.
+live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow"]
+
+[lints.clippy]
+pedantic = "warn"

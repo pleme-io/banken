@@ -36,17 +36,45 @@ banken is a **Quadro** (terminal UI) — QUADRO.md governs the render; it compos
 egaku + egaku-term + moldura (host: mado), shikumi config, ishou theme, awase keys.
 It is a **naturalize** worked example — a **half-citizen by design** (naturalizes
 k9s's observe half, not its mutate half). Per its own 4-check citizenship test it
-is currently a **resident** (native ✓ / no-leak ✓ / proven ✗ until M0 / known ✓).
+is currently a **resident** (native ✓ / no-leak ✓ / proven-on-fixtures ✓ /
+proven-live ✗ until a cluster is reachable / known ✓).
 
 ## Build status (tier-honest — never round up)
 
 - **SHIPPED (mock-green, no cluster):** `banken-spec` = the `postigo` TYPED-SPEC +
   INTERPRETER triplet (18 tests green — `cargo test -p banken-spec`). The
   citizenship core, provable without a cluster, per BANKEN.md §III.
-- **DESIGN / next arc (M0→M4):** the egaku `TableView`/`TreeView` widgets, the
-  `draw::table`/`draw::tree` cell drawers, a live-cluster read (M0's `:pods` table
-  + the mado-MCP e2e gate), the watch informer, the health panel, the
-  resource→`release.yaml` DECLARE resolver. Not built yet — do not imply otherwise.
+- **SHIPPED (fixture-green, no cluster):** the `banken` **binary crate** — a
+  runnable `:pods` navigator (`cargo run -p banken`, `cargo run -p banken -- --help`).
+  The full render + interaction pipeline over a **fixture source**
+  (`FixtureClusterEnv`, the sui-spec `MockEnv` discipline): the `:pods` table
+  (`table::PodTable` model + `render::draw_pod_table` cell drawer over egaku-term
+  0.3.1's typed `Buffer`/`Cell`/`Style` — **no `format!()` of VT**), arrow-key
+  selection + sort, alt-screen enter/Drop-restore via `egaku_term::AsyncApp` +
+  `run_async`, and the **postigo dispatch wired through the UI** (`l`→OBSERVE logs,
+  `s`→DECLARE full-manifest preview, `S`→BREAK-GLASS witnessed record — every path
+  through `banken_spec::apply`, no live-mutate path). Proof: 50 workspace tests
+  green (`cargo test`) incl. a `TestBackend` golden-frame test (asserts via
+  `to_lines()`/`cell()`, never `.contains()`) + a postigo-dispatch integration
+  test; `cargo fmt --check` clean.
+  - **`pending-banken: promote-tableview-to-egaku`** — the `TableView`/`draw::table`
+    are built **in banken for now** (egaku 0.1.4 has only `ListView`, egaku-term
+    0.3.1 has no `draw::table`; promoting a generic widget needs an egaku +
+    egaku-term publish cycle, out of reach without push/nix). Tier-honest interim,
+    not a silent fork — collapses to a thin adapter when egaku gains `TableView<Row>`.
+- **DESIGN / UNTESTED-LIVE:** the live-cluster read (`live::KubeClusterEnv`, feature
+  `live`) — a real typed `kube`/`k8s-openapi` apiserver client (NO `kubectl`
+  subprocess), wired behind the same `ClusterEnv` seam, **compiles + its pure
+  `pod_to_row` projection is tested** (`cargo test -p banken --features live`), but
+  its network read is **never exercised** this session (no cluster reachable —
+  rio/camelot VPN-gated, local k3s down). `pending-banken: live-read`. Default the
+  binary to the fixture; `--live` selects it (and errors clearly without the feature,
+  never a silent fixture fallback). "renders from fixtures" is PROVEN; "live cluster
+  read" is DESIGN — never conflate.
+- **DESIGN / next arc (M1→M4):** the watch informer (poll→true watch), the health
+  ward (Pulses/Popeye/QUIET), the `TreeView`/XRay, the DECLARE branch+PR flow + the
+  resource→`release.yaml` resolver, the mado-MCP e2e gate over a live read. Not
+  built yet — do not imply otherwise.
 
 ## Standing rule
 
