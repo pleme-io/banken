@@ -80,6 +80,27 @@ proven-live ✗ until a cluster is reachable / known ✓).
     (`lisp_face_silently_ignores_an_unknown_kwarg`) that turns red on adopting a
     strict reader. tatara-lisp 0.3.x is **unpublished** (crates.io tops out at
     0.2.5) and a consolidation is mid-flight upstream — the pins stay as-is.
+- **SHIPPED (unit-green):** the **ishou fleet theme derivation** (Quadro T7).
+  `BankenConfig.theme` is the typed `ishou_tokens::FleetTheme`, not a string, and
+  `prescribed_default()` derives its visual half from
+  `FleetDefaults::prescribed()` via `FleetThemedConfig::from_fleet` — the mado
+  pattern (`mado/src/config.rs:3468`). **No local palette constant exists**; a
+  fleet re-theme reaches banken on the next compile. Pinned by
+  `ishou_tokens::convergence::Guard::for_app("banken")` (`.expect_theme` +
+  `.expect_scrollback_lines`), shaped after `escriba-tui/src/render.rs:588-590`
+  since a terminal app owns a theme + a scrollback cap but not a font.
+  `from_fleet` is hand-written, not `#[derive(FleetThemed)]`
+  (pleme-fleet-themed-derive 0.1.1 IS published) — two fleet-derived fields do
+  not meet the third-use test.
+  - **★ Verify-against-the-artifact receipt (2026-07-29).** The *published*
+    `ishou-tokens` 0.1.4 that banken compiles against prescribes **`Vellum`**;
+    the local `ishou` working copy has `FleetTheme::prescribed_default() ==
+    PlemeDark` **unpublished at the same version number**. Authoring
+    `:theme "pleme_dark"` from reading ishou's source failed 3 tests. Every
+    assertion now derives its expectation from `FleetDefaults::prescribed()`;
+    the ONE concrete literal is `:theme` in `banken-config/specs/banken.lisp`,
+    and `prescribed_mirrors_the_authored_lisp` makes a fleet re-theme a loud
+    failure there instead of silent drift.
 - **SHIPPED (unit-green):** the **awase keybinding layer** — closes a documented
   BANKEN.md over-claim. §II rowed `awase BindingMap/KeyChord + detect_conflicts +
   KeyRepeatGate` as **SHIPPED** while `K8sActionSpec.keys` was a bare `String`

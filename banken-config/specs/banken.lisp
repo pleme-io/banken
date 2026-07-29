@@ -23,10 +23,25 @@
   ;; BANKEN.md §VI M0: a 1 Hz POLL. True watch is M1 unbuilt substrate
   ;; (§IX C-watch) — this knob is not renamed until the informer exists.
   :refresh-interval-ms 1000
-  ;; The theme selection. A bare string at this milestone; the typed
-  ;; ishou_tokens::FleetTheme projection is the next tier up.
-  :theme "pleme-dark"
-  ;; The log-pager cap, in lines. 0 ⇒ unbounded.
+  ;; The typed ishou_tokens::FleetTheme, DERIVED from
+  ;; FleetDefaults::prescribed() — never a locally-chosen palette. Note the
+  ;; snake_case wire name: FleetTheme's serde repr is rename_all =
+  ;; "snake_case", and it is deliberately NOT the preset vocabulary (which
+  ;; spells this same palette "nord"). An unknown name has no typed value.
+  ;;
+  ;; This literal is the ONLY hand-written theme value in banken, and it
+  ;; exists only because an authored form must be concrete. It must equal
+  ;; `FleetDefaults::prescribed().theme`'s wire name; the
+  ;; `prescribed_mirrors_the_authored_lisp` test makes a fleet re-theme a
+  ;; LOUD failure here instead of silent drift.
+  ;;
+  ;; Measured 2026-07-29: the PUBLISHED ishou-tokens 0.1.4 (what banken
+  ;; actually compiles against) prescribes `vellum`, while the ishou
+  ;; working copy has `PlemeDark` unpublished at the SAME version number.
+  ;; This file names what the CONSUMED artifact prescribes.
+  :theme "vellum"
+  ;; The log-pager cap, in lines. 0 ⇒ unbounded. DERIVED from
+  ;; FleetDefaults::scrollback_lines — the fleet 10k floor.
   :scrollback-lines 10000
   ;; *** THE SEAM *** — the one field joining the deployment face to the
   ;; tatara-lisp DOMAIN face. Everything under here is (defk8sview …) /

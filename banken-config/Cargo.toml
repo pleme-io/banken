@@ -24,5 +24,17 @@ thiserror.workspace = true
 # second tatara-lisp resolution into the graph for no gain.
 shikumi = "0.1"
 
+# The fleet visual spine. `theme` is the typed `ishou_tokens::FleetTheme`
+# and `prescribed_default()` derives from `FleetDefaults::prescribed()` via
+# `FleetThemedConfig::from_fleet`, so a fleet re-theme reaches banken on the
+# next compile rather than by hand-editing a palette here.
+#
+# `from_fleet` is HAND-WRITTEN, not `#[derive(FleetThemed)]`
+# (pleme-fleet-themed-derive 0.1.1, published): banken has exactly TWO
+# fleet-derived fields, so a proc-macro dep would buy two lines and fail the
+# third-use test. Adopting the derive is a one-line change if banken's
+# visual surface grows.
+ishou-tokens = "0.1"
+
 [lints.clippy]
 pedantic = "warn"
