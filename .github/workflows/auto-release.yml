@@ -1,0 +1,32 @@
+# ★★ AUTO-RELEASE — ship on merge, default-on (the canonical 3-line consumer
+# shim over the substrate polymorphic reusable). Runs through the pleme-io
+# fleet pipeline (rio runners + crates.io as the repo type dictates).
+#
+# TIER-HONEST (banken, 2026-07-29): a committed shim proves ADOPTION, never a
+# RUN. Until Actions is enabled on pleme-io/banken and a green run exists, this
+# row is Tier ⊥ (*unreached*) — do not cite it as "banken auto-releases".
+#
+# Publish surface: the workspace holds `banken-spec` (a library — the postigo
+# typed border + interpreter, genuinely publishable and the thing downstream
+# consumers want) and `banken` (the bin). banken-spec's only non-registry deps
+# are tatara-lisp/tatara-lisp-derive, both on crates.io at the exact pins in
+# Cargo.toml, so the publish arm has no path-dep blocker.
+name: auto-release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump-type:
+        description: "patch | minor | major"
+        required: false
+        default: patch
+
+jobs:
+  release:
+    # Direct per-language reusable, NOT the polymorphic auto-release.yml shim:
+    # that shim startup_failure's for every consumer (0 jobs, no annotations),
+    # so releases never even start.
+    uses: pleme-io/substrate/.github/workflows/rust-auto-release.yml@main
+    secrets: inherit
