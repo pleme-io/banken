@@ -1,0 +1,28 @@
+[package]
+name = "banken-config"
+description = "banken's typed config surface — ONE struct carrying both faces: `#[tatara(keyword = \"defbanken\")]` (the Lisp authoring face) and `impl shikumi::TieredConfig` (the deployment/tier-folding face). Follows the escriba-config precedent exactly: the shikumi tiers are the operator-facing runtime summary; the authored `.lisp` under `specDir` stays the load-bearing DOMAIN prescription (views/actions/columns/sort) that this struct cannot express."
+keywords = ["kubernetes", "config", "shikumi", "tatara", "banken"]
+categories = ["config"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tatara-lisp.workspace = true
+tatara-lisp-derive.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+
+# ★★ CONFIGURATION MANAGEMENT — the fleet tier model. Default features
+# only: shikumi's own `lisp` feature (its figment `LispProvider`) is a
+# SEPARATE mechanism from the `#[derive(DeriveTataraDomain)]` border
+# below, and banken uses the derive. Turning `lisp` on here would pull a
+# second tatara-lisp resolution into the graph for no gain.
+shikumi = "0.1"
+
+[lints.clippy]
+pedantic = "warn"

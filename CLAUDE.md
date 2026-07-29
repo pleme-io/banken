@@ -62,6 +62,24 @@ proven-live ✗ until a cluster is reachable / known ✓).
     0.3.1 has no `draw::table`; promoting a generic widget needs an egaku +
     egaku-term publish cycle, out of reach without push/nix). Tier-honest interim,
     not a silent fork — collapses to a thin adapter when egaku gains `TableView<Row>`.
+- **SHIPPED (unit-green):** `banken-config` = the ★★ CONFIGURATION MANAGEMENT
+  surface. `BankenConfig` carries **both faces on one struct** —
+  `#[tatara(keyword = "defbanken")]` and `impl shikumi::TieredConfig` — exactly
+  the `escriba-config` precedent (`escriba/escriba-config/src/lib.rs:21` + `:143`,
+  whose own comment at `:128-142` states the division of labour). **shikumi owns
+  DEPLOYMENT/runtime** (context, namespace, poll interval, theme, scrollback);
+  **tatara-lisp owns DOMAIN AUTHORING** (`(defk8sview)`/`(defk8saction)`); the
+  seam between them is exactly one field, `specDir`. `deny_unknown_fields` on the
+  YAML face (fail-once proven: a valid doc + one extra key deserializes clean
+  without the attribute, `unknown field` with it).
+  - **`pending-banken: tatara-lisp-0.3.x-adoption`** — honest asymmetry, measured:
+    the YAML face rejects an unknown key; the **Lisp face is LOOSE** at the pinned
+    `=0.2.4` (`domain::parse_kwargs`, `tatara-lisp-0.2.4/src/domain.rs:52-67`,
+    maps every `:keyword` and the derive reads only known ones, so a typo is
+    silently dropped). Pinned by a deliberate CHARACTERIZATION test
+    (`lisp_face_silently_ignores_an_unknown_kwarg`) that turns red on adopting a
+    strict reader. tatara-lisp 0.3.x is **unpublished** (crates.io tops out at
+    0.2.5) and a consolidation is mid-flight upstream — the pins stay as-is.
 - **DESIGN / UNTESTED-LIVE:** the live-cluster read (`live::KubeClusterEnv`, feature
   `live`) — a real typed `kube`/`k8s-openapi` apiserver client (NO `kubectl`
   subprocess), wired behind the same `ClusterEnv` seam, **compiles + its pure
