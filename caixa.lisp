@@ -33,9 +33,17 @@
   ;; The wired-up binary is what `feira publish` releases.
   :exe         ("banken")
 
-  ;; banken-spec is the downstream-consumable typed surface — the postigo
-  ;; action-legality border + the (defk8sview)/(defk8saction) domains + the
-  ;; apply<E: ClusterEnv> interpreter. A consumer that wants the legality
-  ;; gate without the TUI depends on this alone.
-  :bibliotecas ("banken-spec")
+  ;; The downstream-consumable typed surfaces.
+  ;;
+  ;; banken-spec — the postigo action-legality border + the
+  ;; (defk8sview)/(defk8saction) domains + the apply<E: ClusterEnv>
+  ;; interpreter + the awase ActionChord/BindingMap layer. A consumer that
+  ;; wants the legality gate without the TUI depends on this alone.
+  ;;
+  ;; banken-config — the ONE config surface: (defbanken) + shikumi
+  ;; TieredConfig + the ishou FleetThemedConfig derivation. Separate from
+  ;; banken-spec on purpose, so the postigo primitive does not drag
+  ;; shikumi's figment/notify/gen-platform tree into a consumer that only
+  ;; wants the legality gate.
+  :bibliotecas ("banken-spec" "banken-config")
   )

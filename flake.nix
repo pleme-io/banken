@@ -22,8 +22,10 @@
       inherit nixpkgs crate2nix flake-utils;
     }) {
       toolName = "banken";
-      # The workspace holds two crates: `banken-spec` (the postigo TYPED-SPEC
-      # + interpreter triplet, downstream-consumable) and `banken` (the bin).
+      # The workspace holds three crates: `banken-spec` (the postigo
+      # TYPED-SPEC + interpreter triplet, downstream-consumable),
+      # `banken-config` (the shikumi/tatara config surface, also
+      # downstream-consumable) and `banken` (the bin).
       # packageName pins substrate's crateKey to the crate that owns the
       # binary, exactly as tobira does for `tobirato`.
       packageName = "banken";
