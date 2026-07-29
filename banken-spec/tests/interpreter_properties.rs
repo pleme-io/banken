@@ -4,8 +4,10 @@
 
 use std::path::PathBuf;
 
+use awase::Key;
 use banken_spec::{
     SpecError,
+    chord::ActionChord,
     env::{ClusterEnv, Row},
     interp::{Outcome, Selection, apply, lower_to_full_manifest},
     testing::MockClusterEnv,
@@ -18,7 +20,7 @@ use banken_spec::{
 fn scale_action(release: &str) -> K8sActionSpec {
     K8sActionSpec {
         name: "scale".into(),
-        keys: "s".into(),
+        keys: ActionChord::plain(Key::S),
         legality: ActionLegality::Declare {
             target: DeclareTarget::FluxHelmValues {
                 release_path: PathBuf::from(release),
@@ -31,7 +33,7 @@ fn scale_action(release: &str) -> K8sActionSpec {
 fn observe_action() -> K8sActionSpec {
     K8sActionSpec {
         name: "view-logs".into(),
-        keys: "l".into(),
+        keys: ActionChord::plain(Key::L),
         legality: ActionLegality::Observe,
         manifest_scope: ManifestScope::Full,
     }
@@ -40,7 +42,9 @@ fn observe_action() -> K8sActionSpec {
 fn shell_action() -> K8sActionSpec {
     K8sActionSpec {
         name: "shell".into(),
-        keys: "S".into(),
+        // `shift+s`, not `S` — awase folds case, so `S` == `s` == the scale
+        // action's chord (see banken_spec::chord).
+        keys: ActionChord::shifted(Key::S),
         legality: ActionLegality::BreakGlass {
             witness: OperatorId("drzzln".into()),
             runbook: RunbookRef("clusters/rio/RUNBOOK.md".into()),

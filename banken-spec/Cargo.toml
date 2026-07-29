@@ -10,6 +10,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The fleet keybinding vocabulary. `ActionChord` wraps `awase::Hotkey`
+# (NOT `awase::KeyChord`, which is a two-step leader→follower chord —
+# see src/chord.rs for the correction to BANKEN.md §III.a), and
+# `bindings::build_binding_map` makes two actions on one chord an error
+# rather than last-write-wins.
+awase = "0.1"
+
 tatara-lisp.workspace = true
 tatara-lisp-derive.workspace = true
 serde.workspace = true

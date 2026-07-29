@@ -36,7 +36,9 @@
 //! - A plugin authoring a live-mutate action: **parse-time-rejected**
 //!   (no live `DeclareTarget` arm).
 
+pub mod bindings;
 pub mod catalog;
+pub mod chord;
 pub mod env;
 pub mod error;
 pub mod interp;

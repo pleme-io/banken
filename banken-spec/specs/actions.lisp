@@ -31,9 +31,19 @@
 
 ;; BREAK-GLASS — exec is a witnessed, RUNBOOK-logged escape hatch,
 ;; never a default OBSERVE.
+;;
+;; :keys is "shift+s", NOT "S". Two independent reasons, both measured:
+;;   (1) awase::Hotkey::parse is case-insensitive (awase/src/hotkey.rs:435),
+;;       so "S" and "s" are the SAME typed chord — authoring "S" here made
+;;       this action collide with `scale` above, silently.
+;;   (2) egaku-term already delivers a held-shift letter AS shift+s (see
+;;       banken/src/app.rs default_keymap), so "shift+s" is the form the
+;;       runtime actually produces; "S" was the value that disagreed.
+;; `bindings::build_binding_map` now rejects the collision as an error
+;; rather than last-write-wins.
 (defk8saction
   :name "shell"
-  :keys "S"
+  :keys "shift+s"
   :legality (:class break-glass
              :witness "drzzln"
              :runbook "clusters/rio/RUNBOOK.md")

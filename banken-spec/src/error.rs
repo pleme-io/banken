@@ -32,4 +32,32 @@ pub enum SpecError {
     /// callers can offer break-glass or a reviewed rail instead.
     #[error("no DECLARE lowering target: {0}")]
     NoLoweringTarget(String),
+
+    /// Two `(defk8saction)` forms claim the SAME key chord.
+    ///
+    /// This is an **error, never last-write-wins**: silently keeping the
+    /// last binding is how an operator ends up with a chord that fires a
+    /// different legality class than the one the legend advertises — the
+    /// worst possible failure for a tool whose whole point is that the
+    /// operator knows which gate a keystroke crosses.
+    #[error(
+        "key chord `{chord}` is claimed by both `{existing}` and `{incoming}` \
+         — two actions cannot share one chord ({hint})"
+    )]
+    ChordConflict {
+        /// The canonical chord both actions claim.
+        chord: String,
+        /// The action that claimed it first.
+        existing: String,
+        /// The action that collided with it.
+        incoming: String,
+        /// The named fix (usually: author the uppercase form as `shift+…`).
+        hint: &'static str,
+    },
+
+    /// An awase binding surface was rejected for a reason other than a
+    /// straight duplicate — e.g. `awase::detect_conflicts` reported a
+    /// chord-leader colliding with a plain binding.
+    #[error("keybinding error: {0}")]
+    Binding(String),
 }

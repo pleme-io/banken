@@ -80,6 +80,41 @@ proven-live ✗ until a cluster is reachable / known ✓).
     (`lisp_face_silently_ignores_an_unknown_kwarg`) that turns red on adopting a
     strict reader. tatara-lisp 0.3.x is **unpublished** (crates.io tops out at
     0.2.5) and a consolidation is mid-flight upstream — the pins stay as-is.
+- **SHIPPED (unit-green):** the **awase keybinding layer** — closes a documented
+  BANKEN.md over-claim. §II rowed `awase BindingMap/KeyChord + detect_conflicts +
+  KeyRepeatGate` as **SHIPPED** while `K8sActionSpec.keys` was a bare `String`
+  and banken consumed **zero** awase. Now: `banken_spec::chord::ActionChord`
+  wraps `awase::Hotkey` (parse-time-rejected: an unparseable chord has no typed
+  value), `bindings::build_binding_map` makes two actions on one chord a
+  `SpecError::ChordConflict` naming both sides — **never last-write-wins** — and
+  `awase::KeyRepeatGate` debounces the three postigo action chords at the
+  dispatcher (navigation deliberately exempt).
+  - **Correction to BANKEN.md §III.a:** the right awase type is **`Hotkey`, not
+    `KeyChord`** — `awase::KeyChord` (`awase/src/chord.rs:11-21`) is a two-step
+    leader→follower chord; `KeyMode.bindings` is keyed on `Hotkey`
+    (`awase/src/mode.rs:20`). Naming `KeyChord` was a type error.
+  - **Correction to `specs/actions.lisp`:** the shell action is `:keys "shift+s"`,
+    not `"S"`. `Hotkey::parse` is case-insensitive (`awase/src/hotkey.rs:435`), so
+    `"S"` WAS the `scale` chord — a real, silent collision, now CI-red (measured:
+    reverting to `"S"` fails 3 tests with `ChordConflict { chord: "s", existing:
+    "scale", incoming: "shell" }`). egaku-term already delivers held-shift as
+    `shift+s`, so `"S"` was also the value disagreeing with the runtime.
+  - **Where the duplicate is actually caught:** at `KeyMode::add_binding`'s
+    returned previous binding, **not** by `awase::detect_conflicts` — whose own
+    doc (`awase/src/conflict.rs:32-37`) says the same-hotkey-twice class is
+    "only possible with external config merging — `HashMap` insert deduplicates
+    in normal use". `detect_conflicts` is still run for the chord-leader class it
+    does own. Honest tier: **eval/parse-time-rejected**, not
+    truly-unrepresentable — two `(defk8saction)` forms *can* be authored with one
+    `:keys`; the builder rejects the pair and
+    `authored_actions_have_no_chord_conflict` makes the shipped catalog's
+    cleanliness a build-time fact.
+  - **`pending-banken: keymap-derived-from-catalog`** — `app::default_keymap`
+    still hand-binds its three postigo chords beside the navigation keys;
+    `app_keymap_agrees_with_the_authored_chords` is a *drift gate* over that
+    hand-list, not its elimination. Deriving the postigo half from
+    `load_actions()` needs `BankenApp::new` to become fallible (a spec-load
+    failure must not silently fall back to hardcoded chords).
 - **DESIGN / UNTESTED-LIVE:** the live-cluster read (`live::KubeClusterEnv`, feature
   `live`) — a real typed `kube`/`k8s-openapi` apiserver client (NO `kubectl`
   subprocess), wired behind the same `ClusterEnv` seam, **compiles + its pure

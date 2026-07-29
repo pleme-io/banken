@@ -21,6 +21,9 @@
 //! no-op). A periodic `refresh()` call — driven by a `tokio::select!`
 //! tick against a live `ClusterEnv::watch` — lands with the live read.
 
+use std::time::Instant;
+
+use awase::repeat_gate::KeyRepeatGate;
 use banken_spec::env::ClusterEnv;
 use banken_spec::types::{OperatorId, ResourceKind};
 use egaku_term::crossterm::style::Color;
@@ -34,7 +37,7 @@ use crate::render::{draw_pod_table, sort_label};
 use crate::table::PodTable;
 
 /// The one action the app keymap resolves a key to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
     /// Move the selection down (`down` / `j`).
     SelectNext,
@@ -52,6 +55,30 @@ pub enum Action {
     Dismiss,
     /// Quit (`q`).
     Quit,
+}
+
+impl Action {
+    /// `true` when this action must be debounced against an OS/terminal
+    /// key-repeat storm (Quadro T8's `KeyRepeatGate` leg).
+    ///
+    /// The three `postigo` action chords are gated: each performs real
+    /// work (a logs read, a full-manifest lowering, a witnessed record) and
+    /// a held key fires one per repeat tick — the mado 2026-05-21
+    /// runaway-font shape (25 events in 1.5s) applied to a DECLARE.
+    ///
+    /// Navigation and lifecycle keys are deliberately **not** gated:
+    /// awase's own guidance is that for cursor movement "smooth-feeling
+    /// repeat IS the desired behaviour"
+    /// (`awase/src/repeat_gate.rs`), and throttling `j`/`k` would make the
+    /// table feel broken. Gating what is cheap is not free — it is a
+    /// regression.
+    #[must_use]
+    pub fn is_repeat_gated(self) -> bool {
+        matches!(
+            self,
+            Action::ObserveLogs | Action::DeclareScale | Action::BreakGlass
+        )
+    }
 }
 
 /// Which screen the app currently shows — a sum type so an illegal screen
@@ -73,6 +100,10 @@ pub struct BankenApp<E: ClusterEnv> {
     table: PodTable,
     panel: Panel,
     keys: KeyMap<Action>,
+    /// Quadro T8: awase's `KeyRepeatGate` debounces the held-key path on
+    /// the three `postigo` action chords. See [`Action::is_repeat_gated`]
+    /// for why navigation is exempt.
+    repeat_gate: KeyRepeatGate<Action>,
     done: bool,
     /// A short label describing where the pod rows came from (fixture vs
     /// live), rendered in the status line — tier-honesty in the UI itself.
@@ -99,6 +130,7 @@ impl<E: ClusterEnv> BankenApp<E> {
             table: PodTable::pods(rows),
             panel: Panel::Table,
             keys: default_keymap(),
+            repeat_gate: KeyRepeatGate::new(),
             done: false,
             source_label: source_label.into(),
         }
@@ -118,8 +150,29 @@ impl<E: ClusterEnv> BankenApp<E> {
         &self.table
     }
 
+    /// The dispatcher entry point: consult the repeat gate, then apply.
+    ///
+    /// Returns `true` when the action was applied and `false` when it was
+    /// dropped as a key-repeat storm tick. The gate lives **here** rather
+    /// than inside [`Self::apply_action`] so `apply_action` stays a pure
+    /// state transition (awase's own guidance: drop "at the dispatcher").
+    ///
+    /// `now` is explicit so tests are wall-clock-free.
+    pub fn dispatch_action_at(&mut self, action: Action, now: Instant) -> bool {
+        if action.is_repeat_gated() && !self.repeat_gate.try_pass_at(action, now) {
+            return false;
+        }
+        self.apply_action(action);
+        true
+    }
+
+    /// [`Self::dispatch_action_at`] at the current instant.
+    pub fn dispatch_action(&mut self, action: Action) -> bool {
+        self.dispatch_action_at(action, Instant::now())
+    }
+
     /// Apply an action to the app state. Public so tests can drive the app
-    /// without a terminal (the same path `handle` takes).
+    /// without a terminal (the pure state transition, ungated).
     pub fn apply_action(&mut self, action: Action) {
         // Any navigation/action dismisses a stale overlay first, except the
         // explicit Dismiss/Quit which are handled below.
@@ -358,7 +411,9 @@ impl<E: ClusterEnv + Send + Sync> AsyncApp for BankenApp<E> {
     }
 
     async fn handle(&mut self, action: &Action) -> TermResult<()> {
-        self.apply_action(*action);
+        // A dropped repeat tick is not an error — the frame simply does not
+        // change, which is exactly the desired no-flicker behaviour.
+        let _applied = self.dispatch_action(*action);
         Ok(())
     }
 
@@ -374,6 +429,10 @@ impl<E: ClusterEnv + Send + Sync> AsyncApp for BankenApp<E> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use awase::repeat_gate::DEFAULT_MIN_INTERVAL;
+
     use super::*;
     use crate::fixture::FixtureClusterEnv;
 
@@ -448,5 +507,108 @@ mod tests {
             a.keymap().lookup(&KeyCombo::new("s", vec!["shift".into()])),
             Some(&Action::BreakGlass)
         );
+    }
+
+    /// The app keymap and the authored `(defk8saction)` catalog must agree
+    /// on every chord — otherwise the legend advertises one gate and the
+    /// keypress crosses another. Both sides now go through awase's typed
+    /// `Hotkey`, so the comparison is on typed values, not strings.
+    #[test]
+    fn app_keymap_agrees_with_the_authored_chords() {
+        let a = app();
+        let authored = banken_spec::load_actions().expect("authored actions load");
+        for (name, expected_action) in [
+            ("view-logs", Action::ObserveLogs),
+            ("scale", Action::DeclareScale),
+            ("shell", Action::BreakGlass),
+        ] {
+            let spec = authored
+                .iter()
+                .find(|x| x.name == name)
+                .unwrap_or_else(|| panic!("authored action `{name}`"));
+            // Project the AUTHORED chord into the delivered-combo vocabulary
+            // and look it up in the app keymap — so the assertion is on the
+            // authored value, not a hand-repeated literal.
+            let combo = crate::keys::chord_to_combo(spec.keys).unwrap_or_else(|| {
+                panic!(
+                    "authored chord `{}` for `{name}` has no egaku-term combo",
+                    spec.keys
+                )
+            });
+            assert_eq!(
+                a.keymap().lookup(&combo),
+                Some(&expected_action),
+                "the app keymap must bind `{name}`'s AUTHORED chord `{}` to {expected_action:?}",
+                spec.keys,
+            );
+        }
+        // And `shell` is bound to the SHIFTED chord specifically — the whole
+        // point of authoring `shift+s` instead of `S`.
+        assert_ne!(
+            a.keymap().lookup(&KeyCombo::key("s")),
+            Some(&Action::BreakGlass),
+            "bare `s` must be DECLARE, never BREAK-GLASS",
+        );
+    }
+
+    /// THE GATE. A held postigo action key is one event per OS repeat tick;
+    /// without the gate a held `s` fires N full-manifest lowerings.
+    #[test]
+    fn a_held_postigo_action_key_is_debounced() {
+        let mut a = app();
+        let t0 = Instant::now();
+        assert!(
+            a.dispatch_action_at(Action::DeclareScale, t0),
+            "the first press passes"
+        );
+        // Two OS key-repeat ticks inside the 80ms window: both dropped.
+        assert!(
+            !a.dispatch_action_at(Action::DeclareScale, t0 + Duration::from_millis(35)),
+            "a repeat tick at +35ms is dropped"
+        );
+        assert!(
+            !a.dispatch_action_at(Action::DeclareScale, t0 + Duration::from_millis(70)),
+            "a repeat tick at +70ms is dropped"
+        );
+        // Past the window, an intentional second press passes.
+        assert!(
+            a.dispatch_action_at(Action::DeclareScale, t0 + DEFAULT_MIN_INTERVAL),
+            "a deliberate press after the window passes"
+        );
+    }
+
+    /// Each gated action has an INDEPENDENT clock — holding `s` must not
+    /// swallow a deliberate `shift+s`.
+    #[test]
+    fn gated_actions_have_independent_clocks() {
+        let mut a = app();
+        let t0 = Instant::now();
+        assert!(a.dispatch_action_at(Action::DeclareScale, t0));
+        assert!(
+            a.dispatch_action_at(Action::BreakGlass, t0),
+            "a different action is not blocked by the first's window"
+        );
+    }
+
+    /// Navigation is deliberately NOT gated — throttling `j`/`k` would make
+    /// the table feel broken, and gating what is cheap is a regression.
+    #[test]
+    fn navigation_is_not_repeat_gated() {
+        let mut a = app();
+        let t0 = Instant::now();
+        for i in 0..4u64 {
+            assert!(
+                a.dispatch_action_at(Action::SelectNext, t0 + Duration::from_millis(i * 10)),
+                "navigation tick {i} must pass through"
+            );
+        }
+        assert_eq!(
+            a.table().selected_index(),
+            4,
+            "all four navigation ticks moved the selection"
+        );
+        assert!(!Action::SelectNext.is_repeat_gated());
+        assert!(!Action::Quit.is_repeat_gated());
+        assert!(Action::DeclareScale.is_repeat_gated());
     }
 }

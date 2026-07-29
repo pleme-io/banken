@@ -40,6 +40,7 @@
 pub mod action;
 pub mod app;
 pub mod fixture;
+pub mod keys;
 pub mod render;
 pub mod table;
 

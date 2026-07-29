@@ -16,6 +16,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tatara_lisp::DeriveTataraDomain;
 
+use crate::chord::ActionChord;
+
 // ── Reference newtypes ─────────────────────────────────────────────
 //
 // Opaque-string references to fleet primitives the DECLARE rails aim
@@ -382,8 +384,16 @@ pub struct K8sViewSpec {
 pub struct K8sActionSpec {
     /// Action name (`"scale"`, `"view-logs"`, `"shell"`, …).
     pub name: String,
-    /// The key chord that triggers it (`"s"`, `"l"`, `"S"`, …).
-    pub keys: String,
+    /// The typed key chord that triggers it (`"s"`, `"l"`, `"shift+s"`).
+    ///
+    /// An [`ActionChord`] wraps `awase::Hotkey`, so an unparseable chord
+    /// has no typed value — the `(defk8saction)` form fails to compile
+    /// rather than the chord failing at keypress time. Note that awase
+    /// folds case: an uppercase binding is authored as `"shift+s"`, which
+    /// is also the form egaku-term actually delivers. See
+    /// [`crate::chord`] for the full correction to BANKEN.md §III.a
+    /// (which named `KeyChord`, awase's two-step leader/follower type).
+    pub keys: ActionChord,
     /// The legality class — the gate.
     pub legality: ActionLegality,
     /// The manifest scope for DECLARE lowering — always `Full`.

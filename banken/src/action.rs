@@ -18,6 +18,8 @@
 //! `declare` (git) and a shell can only reach `break_glass` (witnessed).
 //! This module adds zero new legality — it consumes the shipped gate.
 
+use awase::Key;
+use banken_spec::chord::ActionChord;
 use banken_spec::env::ClusterEnv;
 use banken_spec::interp::{Outcome, Selection, apply};
 use banken_spec::types::{
@@ -60,13 +62,13 @@ impl RowAction {
         match self {
             RowAction::ViewLogs => K8sActionSpec {
                 name: "view-logs".into(),
-                keys: "l".into(),
+                keys: ActionChord::plain(Key::L),
                 legality: ActionLegality::Observe,
                 manifest_scope: ManifestScope::Full,
             },
             RowAction::DeclareScale => K8sActionSpec {
                 name: "scale".into(),
-                keys: "s".into(),
+                keys: ActionChord::plain(Key::S),
                 legality: ActionLegality::Declare {
                     target: DeclareTarget::FluxHelmValues {
                         release_path: "apps/catch/release.yaml".into(),
@@ -76,7 +78,10 @@ impl RowAction {
             },
             RowAction::BreakGlassShell => K8sActionSpec {
                 name: "shell".into(),
-                keys: "S".into(),
+                // `shift+s`, not `S` — awase folds case (so `S` would BE
+                // the scale chord) and egaku-term delivers held-shift as
+                // `shift+s` anyway. See `banken_spec::chord`.
+                keys: ActionChord::shifted(Key::S),
                 legality: ActionLegality::BreakGlass {
                     witness: operator.clone(),
                     runbook: RunbookRef("clusters/rio/RUNBOOK.md".into()),
@@ -225,13 +230,15 @@ mod tests {
         for (action, key) in [
             (RowAction::ViewLogs, "l"),
             (RowAction::DeclareScale, "s"),
-            (RowAction::BreakGlassShell, "S"),
+            // `shift+s`, not `S` — see `banken_spec::chord`.
+            (RowAction::BreakGlassShell, "shift+s"),
         ] {
             let spec = action.spec(&op);
-            assert_eq!(spec.keys, key);
+            let expected = ActionChord::parse(key).expect("test chord parses");
+            assert_eq!(spec.keys, expected);
             let found = authored
                 .iter()
-                .find(|a| a.keys == key)
+                .find(|a| a.keys == expected)
                 .unwrap_or_else(|| panic!("authored action for key {key}"));
             assert_eq!(
                 spec.legality.class(),
