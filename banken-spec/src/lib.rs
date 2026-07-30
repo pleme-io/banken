@@ -36,7 +36,7 @@
 //! - A plugin authoring a live-mutate action: **parse-time-rejected**
 //!   (no live `DeclareTarget` arm).
 //!
-//! ## The full authored vocabulary (six domains)
+//! ## The full authored vocabulary (seven domains)
 //!
 //! The `postigo` triplet above is the *citizenship* core. The rest of
 //! banken's behaviour is authored too — both the **configuration** half and
@@ -51,6 +51,7 @@
 //! | `(defward …)` | the health landing: Pulses lanes, the linter set, the headline | [`ward`] |
 //! | `(defdrill …)` | a typed drill path (`ctx→ns→pod→container`, `→logs`, `→diagnose`) | [`drill`] |
 //! | `(defnavkey …)` | a navigation keybinding + its local-UI intent | [`nav`] |
+//! | `(defguarita …)` | a pre-warmed tear/mado troubleshooting session | [`guarita`] |
 //!
 //! plus `(defbanken …)` in the sibling `banken-config` crate, which owns the
 //! deployment face (context, namespace, poll cadence, theme, `spec_dir`) —
@@ -69,6 +70,11 @@
 //! - **`(proven)` is un-authorable** ([`ward::Attestation`]) — BANKEN.md §IX
 //!   C-controller's ceiling is a parse-time refusal, not a doc note.
 //! - **An unresolved catalog is unconstructible** ([`Catalog`]).
+//! - **A pre-warmed session cannot lie about its legality**
+//!   ([`guarita::SessionPlan`]) — a `(defguarita)` has no `:legality` kwarg,
+//!   the class is derived from its panes, and a mutating pane has no
+//!   [`guarita::ObservedCommand`] value with which to reach the unwitnessed
+//!   staging arm.
 //!
 //! Each is **truly-unrepresentable within its authored surface** and each is
 //! qualified — none is a fleet-wide guarantee. `pending-banken:
@@ -84,6 +90,7 @@ pub mod closed;
 pub mod drill;
 pub mod env;
 pub mod error;
+pub mod guarita;
 pub mod interp;
 pub mod loader;
 pub mod nav;
@@ -98,6 +105,7 @@ pub use resolve::Catalog;
 
 use crate::{
     drill::DrillSpec,
+    guarita::GuaritaSpec,
     nav::NavKeySpec,
     pathology::PathologySpec,
     types::{K8sActionSpec, K8sViewSpec},
@@ -116,6 +124,8 @@ pub const CANONICAL_WARDS_LISP: &str = include_str!("../specs/wards.lisp");
 pub const CANONICAL_DRILLS_LISP: &str = include_str!("../specs/drills.lisp");
 /// The canonical authored navigation keys.
 pub const CANONICAL_NAVKEYS_LISP: &str = include_str!("../specs/navkeys.lisp");
+/// The canonical authored pre-warmed troubleshooting sessions.
+pub const CANONICAL_GUARITAS_LISP: &str = include_str!("../specs/guaritas.lisp");
 
 /// Compile every authored `(defk8sview)` form.
 ///
@@ -173,6 +183,17 @@ pub fn load_nav_keys() -> Result<Vec<NavKeySpec>, SpecError> {
     loader::load_all::<NavKeySpec>(CANONICAL_NAVKEYS_LISP)
 }
 
+/// Compile every authored `(defguarita)` form.
+///
+/// # Errors
+///
+/// Returns a `SpecError::Compile` if the Lisp source fails to parse. Note
+/// this does **not** validate the recipes' shape or witness obligation —
+/// [`load_catalog`] does, via [`guarita::GuaritaSpec::validate`].
+pub fn load_guaritas() -> Result<Vec<GuaritaSpec>, SpecError> {
+    loader::load_all::<GuaritaSpec>(CANONICAL_GUARITAS_LISP)
+}
+
 /// Load and **cross-resolve** the whole shipped vocabulary.
 ///
 /// This is the entry point a consumer should reach for: the returned
@@ -195,5 +216,6 @@ pub fn load_catalog() -> Result<Catalog, SpecError> {
         load_wards()?,
         load_drills()?,
         load_nav_keys()?,
+        load_guaritas()?,
     )
 }

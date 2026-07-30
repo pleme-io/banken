@@ -12,6 +12,11 @@
 //! - `S` → **BREAK-GLASS**: `banken_spec::apply` routes to
 //!   `env.break_glass`, producing a witnessed [`GlassRecord`] preview.
 //!
+//! - `g` / `shift+g` → a **guarita**: a `(defguarita)` resolved against the
+//!   selected row into a pre-warmed tear session plan ([`plan_guarita`]). Its
+//!   postigo class is DERIVED from the recipe's panes, so the overlay states
+//!   the gate the session would cross rather than taking the author's word.
+//!
 //! Every path goes through [`banken_spec::interp::apply`] over a
 //! [`banken_spec::env::ClusterEnv`]. There is **no live-mutate path** —
 //! the trait has no unwitnessed-mutate method, so a DECLARE can only reach
@@ -21,6 +26,7 @@
 use awase::Key;
 use banken_spec::chord::ActionChord;
 use banken_spec::env::ClusterEnv;
+use banken_spec::guarita::{GuaritaContext, GuaritaSpec, PlannedPane};
 use banken_spec::interp::{Outcome, Selection, apply};
 use banken_spec::types::{
     ActionLegality, DeclareTarget, K8sActionSpec, ManifestScope, OperatorId, RunbookRef,
@@ -111,6 +117,26 @@ pub enum ActionResult {
         selector: String,
         record_id: String,
     },
+    /// A `(defguarita)` resolved into a pre-warmed tear session PLAN — the
+    /// panes, their placement, and the fully-resolved argv each would be
+    /// staged with, plus the recipe's DERIVED postigo class.
+    ///
+    /// A **preview**, exactly like [`Self::DeclarePreview`]: producing the
+    /// plan touches nothing. Handing it to a live `tear-daemon` is the
+    /// [`banken_spec::guarita::SessionEnv`] seam's job, and banken ships no
+    /// implementation of that seam yet — `pending-banken: guarita-live-handoff`.
+    GuaritaPlan {
+        /// The recipe's name.
+        recipe: String,
+        /// Its derived legality class label, uppercased ("OBSERVE" /
+        /// "BREAK-GLASS"). Derived from the panes; there is no field in
+        /// which a recipe could claim otherwise.
+        legality: String,
+        /// The generated tear session name.
+        session_name: String,
+        /// One rendered line per pane.
+        lines: Vec<String>,
+    },
     /// The action could not run — a typed error surfaced (e.g. no owning
     /// `release.yaml` for a DECLARE, the §IX coverage gap).
     Error(String),
@@ -189,6 +215,57 @@ pub fn dispatch<E: ClusterEnv>(
         },
         Err(e) => ActionResult::Error(e.to_string()),
     }
+}
+
+/// Resolve a `(defguarita)` against the selected row into a session plan.
+///
+/// This is the banken → tear/mado bridge at the keystroke: the selected row
+/// plus the cluster banken is reading become a [`GuaritaContext`], and
+/// [`banken_spec::guarita::plan`] turns the authored recipe into concrete
+/// panes with concrete argv.
+///
+/// Every failure is surfaced as [`ActionResult::Error`] carrying the typed
+/// message — in particular the **unknown-cluster refusal**, which is the one
+/// an operator must see rather than have papered over: a pre-warmed session
+/// on the wrong cluster is worse than no pre-warmed session.
+#[must_use]
+pub fn plan_guarita(table: &PodTable, spec: &GuaritaSpec, cluster: &str) -> ActionResult {
+    let Some(selection) = current_selection(table) else {
+        return ActionResult::Error("no row selected".into());
+    };
+    let ctx = GuaritaContext {
+        cluster: cluster.to_owned(),
+        selection,
+        // M0 has no container picker; a recipe referencing `(:context
+        // container)` therefore refuses BY NAME rather than guessing the
+        // first container. `pending-banken: guarita-container-selection`.
+        container: None,
+    };
+    match banken_spec::guarita::plan(spec, &ctx) {
+        Ok(p) => ActionResult::GuaritaPlan {
+            recipe: spec.name.clone(),
+            legality: p.legality().class().label().to_uppercase(),
+            session_name: p.session_name().to_owned(),
+            lines: p.panes().iter().map(render_pane).collect(),
+        },
+        Err(e) => ActionResult::Error(e.to_string()),
+    }
+}
+
+/// `"logs      [root ]  kubectl --context camelot-eks …"` — assembled by
+/// concatenation from typed pieces (★★ TYPED EMISSION), never a `format!()`
+/// of a layout template.
+fn render_pane(pane: &PlannedPane) -> String {
+    let mut s = String::new();
+    s.push_str(pane.role.label());
+    while s.chars().count() < 10 {
+        s.push(' ');
+    }
+    s.push('[');
+    s.push_str(pane.placement.label());
+    s.push_str("]  ");
+    s.push_str(&pane.argv.join(" "));
+    s
 }
 
 /// Perform the OBSERVE logs read for a selection.

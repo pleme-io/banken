@@ -43,6 +43,15 @@ use kube::{Api, Client};
 pub struct KubeClusterEnv {
     client: Client,
     handle: tokio::runtime::Handle,
+    /// The kubeconfig's `current-context`, when it could be read.
+    ///
+    /// `kube::Client` does not surface which context it resolved, so this is
+    /// read separately from the kubeconfig. `None` means UNKNOWN, and a
+    /// `(defguarita)` then REFUSES to pre-warm a session rather than emitting
+    /// `--context ""` — which would open the operator's troubleshooting panes
+    /// on whatever cluster their shell happens to point at. See
+    /// [`banken_spec::guarita`].
+    context_name: Option<String>,
 }
 
 impl KubeClusterEnv {
@@ -58,10 +67,27 @@ impl KubeClusterEnv {
             phase: "connect".into(),
             message: e.to_string(),
         })?;
+        // Best-effort, and its absence is meaningful rather than defaulted:
+        // an unreadable kubeconfig means banken does not know which cluster
+        // it is on, which is exactly when a pre-warmed session must refuse.
+        let context_name = kube::config::Kubeconfig::read()
+            .ok()
+            .and_then(|kc| kc.current_context)
+            .filter(|c| !c.is_empty());
         Ok(Self {
             client,
             handle: tokio::runtime::Handle::current(),
+            context_name,
         })
+    }
+
+    /// The kubeconfig context this env is reading, when it is known.
+    ///
+    /// UNTESTED-LIVE this session, like the rest of this backend
+    /// (`pending-banken: live-read`).
+    #[must_use]
+    pub fn context_name(&self) -> Option<String> {
+        self.context_name.clone()
     }
 
     /// Block on `fut` using the captured runtime handle. Used to satisfy the

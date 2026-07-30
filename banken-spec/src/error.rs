@@ -95,6 +95,73 @@ pub enum SpecError {
         to_level: &'static str,
     },
 
+    // ── (defguarita) ──────────────────────────────────────────────────
+    /// A `(defguarita)` declared no `:panes` — a chord that looks authored
+    /// and opens nothing.
+    #[error("guarita `{0}` has no panes — it would open an empty session")]
+    EmptyGuarita(String),
+
+    /// A `(defguarita)`'s panes are not a valid session shape: the first pane
+    /// is not `root`, or a later pane claims to be.
+    #[error("guarita `{guarita}` has an invalid pane layout: {detail}")]
+    GuaritaPlacement {
+        /// The offending recipe.
+        guarita: String,
+        /// What specifically is wrong, and why it cannot be a session.
+        detail: &'static str,
+    },
+
+    /// A `(defguarita)` stages a MUTATING command but declares no
+    /// `:witness` / `:runbook`.
+    ///
+    /// Staging `kubectl exec` into a pane the operator is dropped into is the
+    /// live-effect path whatever it is called, so it carries the same
+    /// BREAK-GLASS obligation as a `(defk8saction)` that does. The recipe's
+    /// legality is *derived* from its panes, so this is the only way the
+    /// obligation can go unmet — it cannot be dodged by mislabelling.
+    #[error(
+        "guarita `{guarita}` stages a MUTATING command in its `{pane_role}` pane, \
+         which makes the whole recipe BREAK-GLASS — declare `:witness` and \
+         `:runbook`, or make every pane observe-only"
+    )]
+    UnwitnessedGuarita {
+        /// The offending recipe.
+        guarita: String,
+        /// The role of the first mutating pane.
+        pane_role: &'static str,
+    },
+
+    /// A `(defguarita)` of pure observers carries a `:witness` / `:runbook`
+    /// anyway.
+    ///
+    /// Rejected in this direction too: a stray witness reads as "somebody
+    /// signed off on a live effect" when there is none, which is an over-claim
+    /// pointing the way reviewers do not check.
+    #[error(
+        "guarita `{0}` declares a `:witness`/`:runbook` but stages no mutating \
+         command — a witness on a pure-observe recipe claims a sign-off that \
+         nothing needed"
+    )]
+    UnneededWitness(String),
+
+    /// A `(defguarita)` references a context field the planner cannot resolve.
+    ///
+    /// **Never** substituted with an empty string: `kubectl --context ""` and
+    /// `kubectl -c ""` are silently *wrong* rather than failing, which would
+    /// open the pre-warmed session on the wrong cluster or the wrong
+    /// container — the exact class the domain exists to close.
+    #[error(
+        "guarita `{guarita}` references `{field}`, which the current selection \
+         does not carry — refusing to substitute an empty value, which would \
+         silently resolve to a different target"
+    )]
+    UnresolvedContextField {
+        /// The offending recipe.
+        guarita: String,
+        /// The unresolvable field's label.
+        field: &'static str,
+    },
+
     // ── cross-domain resolution (see `crate::resolve`) ────────────────
     /// A view or ward's `:drill-to` names a `(defdrill)` that does not
     /// exist. Previously a silently dead Enter key.

@@ -36,6 +36,31 @@
 //! - [`action`] — the postigo dispatch (consumes `banken_spec::apply`).
 //! - [`app`] — the `BankenApp` runtime (`egaku_term::AsyncApp`).
 //! - [`live`] — `KubeClusterEnv` (feature `live`). `pending-banken: live-read`.
+//! - [`tear_session`] — `TearSessionEnv` (feature `tear`): the LIVE
+//!   `(defguarita)` handoff over a running `tear-daemon`.
+//!
+//! ## The guarita bridge (banken → tear/mado)
+//!
+//! `g` / `shift+g` on a selected row resolves an authored
+//! `(defguarita)` into a pre-warmed troubleshooting session: the panes, their
+//! splits, and the fully-resolved `kubectl` argv for the cluster + namespace +
+//! pod banken is looking at. Its `postigo` class is **derived from the
+//! recipe's panes**, so a session staging a live effect is BREAK-GLASS and
+//! cannot be authored as anything else.
+//!
+//! Tier-honest, and the two halves are different:
+//! - **PROVEN (mock, default build):** compiling the recipes, deriving the
+//!   legality, resolving the context, producing the plan, and previewing it in
+//!   the app — all against `MockSessionEnv`, zero side effects.
+//! - **PROVEN (live, feature `tear`, measured 2026-07-30):** the handoff
+//!   itself. `tests/tear_handoff.rs` (`#[ignore]`d — it opens a real session)
+//!   ran against the operator's daemon and asserted a real **three-pane**
+//!   session whose first pane's rendered grid carries the pre-warmed
+//!   `kubectl --context <cluster> … <pod>` line. Fail-once measured: stubbing
+//!   `type_into` to send no bytes turns it red on exactly that assertion.
+//!   The app does **not** call it yet — pressing `g` previews the plan; wiring
+//!   the app's overlay to a confirm-then-open is `pending-banken:
+//!   guarita-app-open`.
 
 pub mod action;
 pub mod app;
@@ -46,3 +71,6 @@ pub mod table;
 
 #[cfg(feature = "live")]
 pub mod live;
+
+#[cfg(feature = "tear")]
+pub mod tear_session;

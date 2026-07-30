@@ -20,6 +20,9 @@ use crate::{
         LogStream, ResourceRef, Row, WatchStream, WitnessedAction, Workload,
     },
     error::SpecError,
+    guarita::{
+        MutatingCommand, ObservedCommand, PanePlacement, PaneRef, SessionEnv, SessionLayout,
+    },
     types::ResourceKind,
 };
 
@@ -146,4 +149,85 @@ impl ClusterEnv for MockClusterEnv {
     }
 
     // *** No mutate method to implement — because ClusterEnv has none. ***
+}
+
+/// A mock terminal-multiplexer env for the `(defguarita)` triplet — the
+/// [`SessionEnv`] analogue of [`MockClusterEnv`].
+///
+/// It records every session opened, every split, and every staged command,
+/// **keeping the witnessed and unwitnessed staging paths in separate logs**
+/// so a test can assert that a mutating command went through the witnessed
+/// arm rather than merely that "something was staged". No tear daemon, no
+/// subprocess, no PTY — every call appends to a `RefCell` a test inspects.
+#[derive(Default)]
+pub struct MockSessionEnv {
+    /// `(session name, layout)` per [`SessionEnv::open_session`] call.
+    pub sessions: RefCell<Vec<(String, SessionLayout)>>,
+    /// `(origin, placement)` per [`SessionEnv::split`] call.
+    pub splits: RefCell<Vec<(PaneRef, PanePlacement)>>,
+    /// `(pane, argv)` per **unwitnessed** staging.
+    pub staged: RefCell<Vec<(PaneRef, Vec<String>)>>,
+    /// `(pane, argv, witness)` per **witnessed** staging.
+    pub witnessed: RefCell<Vec<(PaneRef, Vec<String>, WitnessedAction)>>,
+    /// Every pane focused, in order.
+    pub focused: RefCell<Vec<PaneRef>>,
+    /// Monotonic pane-handle counter.
+    next_pane: RefCell<u64>,
+}
+
+impl MockSessionEnv {
+    /// A fresh empty mock.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// How many commands were staged through the **witnessed** arm.
+    #[must_use]
+    pub fn witnessed_count(&self) -> usize {
+        self.witnessed.borrow().len()
+    }
+
+    fn mint(&self) -> PaneRef {
+        let mut n = self.next_pane.borrow_mut();
+        *n += 1;
+        PaneRef(*n)
+    }
+}
+
+impl SessionEnv for MockSessionEnv {
+    fn open_session(&self, name: &str, layout: SessionLayout) -> Result<PaneRef, SpecError> {
+        self.sessions.borrow_mut().push((name.to_owned(), layout));
+        Ok(self.mint())
+    }
+
+    fn split(&self, origin: PaneRef, placement: PanePlacement) -> Result<PaneRef, SpecError> {
+        self.splits.borrow_mut().push((origin, placement));
+        Ok(self.mint())
+    }
+
+    fn stage_observed(&self, pane: PaneRef, cmd: &ObservedCommand) -> Result<(), SpecError> {
+        self.staged.borrow_mut().push((pane, cmd.argv().to_vec()));
+        Ok(())
+    }
+
+    fn stage_witnessed(
+        &self,
+        pane: PaneRef,
+        cmd: &MutatingCommand,
+        witness: &WitnessedAction,
+    ) -> Result<(), SpecError> {
+        self.witnessed
+            .borrow_mut()
+            .push((pane, cmd.argv().to_vec(), witness.clone()));
+        Ok(())
+    }
+
+    fn focus(&self, pane: PaneRef) -> Result<(), SpecError> {
+        self.focused.borrow_mut().push(pane);
+        Ok(())
+    }
+
+    // *** No third staging method — an unwitnessed mutating stage has no
+    //     argument value that can reach a call. See `guarita`'s module docs. ***
 }

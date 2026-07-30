@@ -30,7 +30,7 @@ mutation is `E0599` within the authored surface (the re-add case is CI-caught,
 per `substrate_invariant.rs`, graded only-mitigated → CI-caught, never rounded up
 to truly-unrepresentable).
 
-## The authored vocabulary — SIX domains, one resolved catalog
+## The authored vocabulary — SEVEN domains, one resolved catalog
 
 banken's behaviour is **data**, both the configuration half and the
 runtime-manipulation half. `banken_spec::load_catalog()` is the entry point;
@@ -45,6 +45,7 @@ nothing across domains.
 | `(defward)` | the health landing: Pulses lanes, linter set, headline | 1 |
 | `(defdrill)` | a typed drill path (`→logs`, `→diagnose`, `→xray`) | 3 |
 | `(defnavkey)` | a navigation chord + its local-UI intent | 7 |
+| `(defguarita)` | a pre-warmed tear/mado troubleshooting session | 2 |
 
 plus `(defbanken)` in `banken-config` (the deployment face). Every domain has
 a lisp-roundtrip test and a `catalog.rs` axis on the `REQUIRED_AXES` roster
@@ -55,7 +56,81 @@ class, because typing "move the cursor" as `Observe` would make the class stop
 meaning "this performed a cluster read". The two domains share exactly one
 thing, the chord namespace, and `Catalog::resolve` checks it.
 
-### Three construction seals (each truly-unrepresentable *within its authored surface* — none fleet-wide)
+## guarita — the banken → tear/mado bridge (`(defguarita)`)
+
+**guarita** (pt-BR: the sentry box at a gate). From a selected row, one
+authored chord resolves a recipe into a **pre-warmed tear session**: the
+panes, their splits, and the fully-resolved `kubectl` argv for the cluster +
+namespace + pod banken is looking at — so the operator is fixing the problem
+rather than setting up to fix it. `g` → `pod-triage` (3 read panes),
+`shift+g` → `pod-break-glass` (logs + `kubectl exec`).
+
+**The load-bearing invariant: there is NO `:legality` kwarg.** A recipe's
+`postigo` class is *derived* from its panes — any pane whose `:effect` is
+`mutates` makes the whole recipe BREAK-GLASS — so a mutating recipe has no
+field in which to claim it observes. A BREAK-GLASS recipe must carry
+`:witness`/`:runbook` (`UnwitnessedGuarita`); a pure-observe one must not
+(`UnneededWitness`). Fail-once measured: deleting `:witness "drzzln"` from
+`specs/guaritas.lisp` turns three tests red with
+`UnwitnessedGuarita { guarita: "pod-break-glass", pane_role: "shell" }`.
+
+**And the witness is structural at the seam.** `SessionEnv` has exactly two
+staging arms taking *different types*: `stage_observed(ObservedCommand)` and
+`stage_witnessed(MutatingCommand, &WitnessedAction)`. Both newtypes have
+private fields and come only from `PlannedPane::as_observed` /
+`as_mutating`, which are `Some` on their own `CommandEffect`. Staging a
+mutating command unwitnessed is not forbidden — it has **no argument value
+that can reach the call**. A *third* staging arm being added is CI-caught by
+`substrate_invariant.rs` (same only-mitigated→CI-caught tier as the
+`ClusterEnv` re-add case). Do not round either up.
+
+**`(:context cluster)` is what makes "the RIGHT cluster" true.** A pane opened
+without an explicit `--context` lands on whatever the kubeconfig's current
+context happens to be, which is not necessarily what banken is reading. An
+unknown cluster is a typed **refusal** (`UnresolvedContextField`), never an
+emitted `--context ""`. Same for `namespace` / `container`.
+
+**A staged command is a typed argv, never a shell string** — `:program` plus
+`(:literal …)` / `(:context …)` args. `CommandArg` has no join arm on
+purpose; the first recipe needing `--field-selector k=v` is the third-use
+signal to add a typed `(:joined …)`, not to interpolate.
+
+### Tier ledger — three separate claims, do not collapse them
+
+| Claim | Tier |
+|---|---|
+| forms compile, legality derives, plan resolves, plan walks a `SessionEnv` | **SHIPPED, mock-green** (`MockSessionEnv`, zero side effects) |
+| the LIVE handoff to a running `tear-daemon` | **SHIPPED + PROVEN LIVE 2026-07-30** — `banken/tests/tear_handoff.rs` (feature `tear`, `#[ignore]`d) opened a real 3-pane session and asserted the pre-warmed `kubectl` line **on the first pane's rendered grid**. Fail-once: stubbing `type_into` to send zero bytes turns it red there. |
+| pressing `g` in banken OPENS a session | **NOT DONE** — it *previews* the plan (like the DECLARE overlay previews a manifest). `pending-banken: guarita-app-open`. |
+
+- **`pending-banken: tear-argv-spawn`** — the upstream limitation the adapter
+  is shaped around. `MultiplexerControl` spawns a pane's program with **no
+  argv** (`tear-core/src/inproc.rs:667` passes `&[]` to a `PtyHandle::spawn`
+  that *does* take `args: &[String]`, `pty.rs:68`), so the argv is **typed
+  into** the pane instead of spawned. Consequence: `banken::tear_session`
+  **refuses to quote** — an argv word containing whitespace or a shell
+  metacharacter is a typed error naming the word, never escaped, because a
+  quoting function IS a shell-string builder. The load-bearing fix is to
+  thread `args` through `MultiplexerControl` upstream, after which the adapter
+  collapses to a direct spawn with no typing and no refusal. Not done here:
+  banken must not edit tear from this repo.
+- **`pending-banken: guarita-tear-feature-nix-unverified`** — the `tear`
+  feature's dep took banken's `Cargo.lock` from **zero** git sources to four
+  (tear, shikumi, gen, plus a second `ishou-tokens` 0.1.4 from git alongside
+  the registry one banken-config keeps — measured, so banken-config's
+  published-0.1.4 theme receipt is unchanged). Cargo resolves the lock
+  feature-independently, so crate2nix sees those git crates even though the
+  default build never compiles them: that is the documented
+  crate2nix-vs-`fetchgit` base32-vs-SRI drift class. `cargo test`/`fmt` are
+  green on default, `live` and `tear`; **`nix build` is UNVERIFIED** — run it,
+  and reach for `nix run .#hashfix -- loop` if the cascade fires.
+- **`pending-banken: guarita-container-selection`** — M0 has no container
+  picker, so a recipe referencing `(:context container)` refuses by name.
+- The `stage_witnessed` arm sends the argv **without a newline**: the
+  live-effect command sits typed and ready, and the operator's own Enter is
+  the final act. banken records the witness; the human still takes the step.
+
+### Four construction seals (each truly-unrepresentable *within its authored surface* — none fleet-wide)
 
 1. **`WardVerdict`** — fields private, `evaluate` the only constructor, so a
    ward verdict claiming `Green` over an absent core metric is
@@ -71,8 +146,11 @@ thing, the chord namespace, and `Catalog::resolve` checks it.
    (proven)" was reviewer discipline; it is now a refusal. The variant STAYS
    (★★ MODULARIZE, DON'T DELETE) — revival is making one constructor `pub`.
 3. **`Catalog`** — fields private, `resolve`/`load_catalog` the only
-   constructors, so an **unresolved** bundle cannot be held. The six domains
+   constructors, so an **unresolved** bundle cannot be held. The seven domains
    reference each other by name and every such join was a silent-failure class.
+4. **`SessionPlan`** — fields private, `guarita::plan` the only constructor,
+   so a plan's `legality` cannot disagree with its `panes` (it is *derived
+   from* them). Same shape, same qualified tier as the three above.
 
 ### `closed_catalog!` (★★ EMITTER SUBSTRATE)
 
@@ -106,7 +184,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
 
 - **SHIPPED (mock-green, no cluster):** `banken-spec` = the `postigo` TYPED-SPEC +
   INTERPRETER triplet, plus the four health/diagnosis/navigation domains below
-  (**79 tests green** — `cargo test -p banken-spec`). The
+  (**105 tests green** — `cargo test -p banken-spec`). The
   citizenship core, provable without a cluster, per BANKEN.md §III.
 - **SHIPPED (fixture-green, no cluster):** the `banken` **binary crate** — a
   runnable `:pods` navigator (`cargo run -p banken`, `cargo run -p banken -- --help`).
@@ -117,10 +195,10 @@ proven-live ✗ until a cluster is reachable / known ✓).
   selection + sort, alt-screen enter/Drop-restore via `egaku_term::AsyncApp` +
   `run_async`, and the **postigo dispatch wired through the UI** (`l`→OBSERVE logs,
   `s`→DECLARE full-manifest preview, `S`→BREAK-GLASS witnessed record — every path
-  through `banken_spec::apply`, no live-mutate path). Proof: **149 workspace tests**
-  green (`cargo test`; 79 banken-spec + 54 banken + 16 banken-config) incl. a `TestBackend` golden-frame test (asserts via
+  through `banken_spec::apply`, no live-mutate path). Proof: **181 workspace tests**
+  green (`cargo test`; 105 banken-spec + 60 banken + 16 banken-config) incl. a `TestBackend` golden-frame test (asserts via
   `to_lines()`/`cell()`, never `.contains()`) + a postigo-dispatch integration
-  test; `cargo fmt --check` clean. **54 tests green** in the binary crate
+  test; `cargo fmt --check` clean. **60 tests green** in the binary crate
   (`cargo test -p banken`).
   - **`pending-banken: promote-tableview-to-egaku`** — the `TableView`/`draw::table`
     are built **in banken for now** (egaku 0.1.4 has only `ListView`, egaku-term

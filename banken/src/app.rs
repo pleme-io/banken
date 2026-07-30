@@ -35,9 +35,15 @@ use egaku_term::{
     AsyncApp, Buffer, Result as TermResult, Style,
 };
 
-use crate::action::{ActionResult, RowAction, dispatch};
+use banken_spec::guarita::GuaritaSpec;
+
+use crate::action::{ActionResult, RowAction, dispatch, plan_guarita};
 use crate::render::{draw_pod_table, sort_label};
 use crate::table::PodTable;
+
+/// The one view M0 ships. Named once so the keymap, the table columns and the
+/// guarita filter cannot drift onto three different spellings of it.
+pub const VIEW_NAME: &str = "pods";
 
 /// The one action the app keymap resolves a key to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,6 +60,14 @@ pub enum Action {
     DeclareScale,
     /// BREAK-GLASS shell into the selected pod (`shift+s`).
     BreakGlass,
+    /// Open the guarita at this index of the app's recipe list (`g`,
+    /// `shift+g`) — a pre-warmed tear session plan for the selected row.
+    ///
+    /// The index is into [`BankenApp::guaritas`], which is
+    /// `catalog.guaritas_from(VIEW_NAME)` in order, so the keymap and the
+    /// recipe list cannot disagree: [`keymap_from_catalog`] builds both from
+    /// the same filtered iteration.
+    OpenGuarita(usize),
     /// Dismiss the action-result overlay (`esc`).
     Dismiss,
     /// Quit (`q`).
@@ -79,7 +93,14 @@ impl Action {
     pub fn is_repeat_gated(self) -> bool {
         matches!(
             self,
-            Action::ObserveLogs | Action::DeclareScale | Action::BreakGlass
+            Action::ObserveLogs
+                | Action::DeclareScale
+                | Action::BreakGlass
+                // A guarita resolves a whole recipe and (once the live seam
+                // lands) opens a tear session with N panes. A held key firing
+                // one session per repeat tick is the runaway shape at its
+                // most expensive.
+                | Action::OpenGuarita(_)
         )
     }
 }
@@ -100,6 +121,18 @@ enum Panel {
 pub struct BankenApp<E: ClusterEnv> {
     env: E,
     operator: OperatorId,
+    /// The cluster banken is reading, as the kubeconfig context name.
+    ///
+    /// **Empty means UNKNOWN, not "the current one".** It is what a
+    /// `(defguarita)` resolves `(:context cluster)` against, and an empty
+    /// value makes the planner REFUSE rather than emit `--context ""` — which
+    /// would pre-warm a session on whatever cluster the operator's kubeconfig
+    /// happens to point at. See [`banken_spec::guarita`].
+    cluster: String,
+    /// The pre-warmed session recipes reachable from this view, in the SAME
+    /// order [`keymap_from_catalog`] bound them — which is what makes
+    /// [`Action::OpenGuarita`]'s index total.
+    guaritas: Vec<GuaritaSpec>,
     table: PodTable,
     panel: Panel,
     keys: KeyMap<Action>,
@@ -111,15 +144,22 @@ pub struct BankenApp<E: ClusterEnv> {
     /// A short label describing where the pod rows came from (fixture vs
     /// live), rendered in the status line — tier-honesty in the UI itself.
     source_label: String,
-    /// The key legend drawn in the status line, DERIVED from the authored
-    /// catalog by [`key_legend`].
+    /// The key legend entries drawn in the status line, DERIVED from the
+    /// authored catalog by [`key_legend_parts`], **most important first**.
     ///
     /// It used to be the literal `"l:OBSERVE  s:DECLARE  S:BREAK-GLASS …"` —
     /// which already disagreed with reality, advertising `S` for a chord the
     /// runtime binds as `shift+s`. The legend is the one surface that *tells
     /// the operator which gate a keystroke crosses*, so it being a hand-written
     /// string was the highest-consequence hand-list in the app.
-    legend: String,
+    ///
+    /// Held as PARTS rather than one string because the whole legend does not
+    /// always fit: the previous code rendered it only `if legend_w < width`,
+    /// so adding the two guarita chords made the entire legend **silently
+    /// vanish** at 80 columns. [`fit_legend`] now drops whole trailing entries
+    /// and marks the elision, so a narrow terminal costs the *least* important
+    /// hints rather than all of them.
+    legend_parts: Vec<String>,
 }
 
 impl<E: ClusterEnv> BankenApp<E> {
@@ -172,14 +212,38 @@ impl<E: ClusterEnv> BankenApp<E> {
         Ok(Self {
             env,
             operator,
-            table: PodTable::from_view(catalog, "pods", rows)?,
+            cluster: String::new(),
+            guaritas: catalog
+                .guaritas_from(VIEW_NAME)
+                .into_iter()
+                .cloned()
+                .collect(),
+            table: PodTable::from_view(catalog, VIEW_NAME, rows)?,
             panel: Panel::Table,
             keys,
             repeat_gate: KeyRepeatGate::new(),
             done: false,
             source_label: source_label.into(),
-            legend: key_legend(catalog),
+            legend_parts: key_legend_parts(catalog),
         })
+    }
+
+    /// Name the cluster banken is reading (the kubeconfig context).
+    ///
+    /// Builder-style rather than a constructor argument because it is
+    /// *optional information*, and its absence is meaningful: a banken that
+    /// does not know its own cluster refuses to pre-warm a session rather
+    /// than opening one somewhere else. See [`Self::cluster`].
+    #[must_use]
+    pub fn with_cluster(mut self, cluster: impl Into<String>) -> Self {
+        self.cluster = cluster.into();
+        self
+    }
+
+    /// The pre-warmed session recipes this view exposes.
+    #[must_use]
+    pub fn guaritas(&self) -> &[GuaritaSpec] {
+        &self.guaritas
     }
 
     /// Re-read the pod table from the env (the poll refresh). Preserves the
@@ -257,6 +321,20 @@ impl<E: ClusterEnv> BankenApp<E> {
                 );
                 self.panel = Panel::ActionOverlay(r);
             }
+            Action::OpenGuarita(i) => {
+                // A guarita index out of range is not possible through the
+                // keymap (both come from the same filtered iteration), but
+                // reporting it beats an index panic in the operator's TUI.
+                let r = match self.guaritas.get(i) {
+                    Some(spec) => plan_guarita(&self.table, spec, &self.cluster),
+                    None => ActionResult::Error(
+                        "no guarita is bound at that index — the keymap and the \
+                         recipe list disagree"
+                            .into(),
+                    ),
+                };
+                self.panel = Panel::ActionOverlay(r);
+            }
             Action::Dismiss => self.panel = Panel::Table,
             Action::Quit => self.done = true,
         }
@@ -312,12 +390,16 @@ impl<E: ClusterEnv> BankenApp<E> {
         buf.set_stringn(0, y, &left, width, bar);
 
         // Right: the key legend, DERIVED from the authored catalog at
-        // construction (see `key_legend`) — never a hand-written string that
-        // can advertise a chord the runtime does not bind.
-        let legend = &self.legend;
+        // construction (see `key_legend_parts`) — never a hand-written string
+        // that can advertise a chord the runtime does not bind. Fitted to
+        // whatever the left half leaves, dropping the least important entries
+        // rather than the whole legend.
+        let used = u16::try_from(left.chars().count()).unwrap_or(width);
+        let available = width.saturating_sub(used).saturating_sub(2);
+        let legend = fit_legend(&self.legend_parts, available as usize);
         let legend_w = u16::try_from(legend.chars().count()).unwrap_or(0);
-        if legend_w < width {
-            buf.set_stringn(width - legend_w, y, legend, legend_w, bar);
+        if legend_w > 0 && legend_w <= width {
+            buf.set_stringn(width - legend_w, y, &legend, legend_w, bar);
         }
     }
 }
@@ -423,6 +505,35 @@ fn overlay_content(result: &ActionResult) -> (String, Style, Vec<String>) {
             lines.push(rec);
             (t, Style::default().fg(Color::Red).bold(), lines)
         }
+        ActionResult::GuaritaPlan {
+            recipe,
+            legality,
+            session_name,
+            lines,
+        } => {
+            // The title states the DERIVED gate first — a BREAK-GLASS recipe
+            // must not read like a convenience.
+            let mut t = String::from(" GUARITA — ");
+            t.push_str(legality);
+            t.push_str(" — ");
+            t.push_str(recipe);
+            t.push_str(" (plan only, not opened) ");
+            let mut body = Vec::with_capacity(lines.len() + 2);
+            let mut s = String::from("session:  ");
+            s.push_str(session_name);
+            body.push(s);
+            body.push(String::new());
+            body.extend(lines.iter().cloned());
+            // BREAK-GLASS is red, an observe plan is green — the same colour
+            // vocabulary the postigo overlays already use, so the operator
+            // reads the gate before the text.
+            let style = if legality == "OBSERVE" {
+                Style::default().fg(Color::Green).bold()
+            } else {
+                Style::default().fg(Color::Red).bold()
+            };
+            (t, style, body)
+        }
         ActionResult::Error(msg) => (
             String::from(" ERROR "),
             Style::default().fg(Color::Red).bold(),
@@ -517,6 +628,18 @@ pub fn keymap_from_catalog(catalog: &Catalog) -> Result<KeyMap<Action>, SpecErro
         km.bind(combo, *action);
     }
 
+    // guaritas — the pre-warmed tear sessions reachable from THIS view.
+    // Bound by position in the same filtered iteration `BankenApp` stores,
+    // so `Action::OpenGuarita(i)` cannot index a different recipe than the
+    // chord names. A recipe launched from another surface is deliberately
+    // NOT bound here — `unbound_guarita_names` reports it rather than
+    // giving the operator a chord that opens something from a screen they
+    // are not on.
+    for (i, g) in catalog.guaritas_from(VIEW_NAME).into_iter().enumerate() {
+        let combo = project(g.keys, &g.name)?;
+        km.bind(combo, Action::OpenGuarita(i));
+    }
+
     Ok(km)
 }
 
@@ -536,6 +659,51 @@ fn project(chord: ActionChord, owner: &str) -> Result<KeyCombo, SpecError> {
     })
 }
 
+/// Fit as many whole legend entries as `available` columns allow, appending
+/// `…` when any were dropped.
+///
+/// Whole entries only: half of `shift+s:BREAK-GLASS` is worse than none of
+/// it. The elision marker is what keeps a narrow terminal honest — the
+/// operator can see there are more chords than shown, instead of the legend
+/// quietly disappearing (which is what the previous `if legend_w < width`
+/// did the moment the guarita chords landed).
+#[must_use]
+pub fn fit_legend(parts: &[String], available: usize) -> String {
+    const SEP: &str = "  ";
+    const ELLIPSIS: &str = " …";
+    let mut out = String::new();
+    let mut dropped = false;
+    for part in parts {
+        let extra = if out.is_empty() {
+            part.chars().count()
+        } else {
+            SEP.chars().count() + part.chars().count()
+        };
+        // Reserve room for the marker whenever something might still be cut.
+        let budget = available.saturating_sub(ELLIPSIS.chars().count());
+        if out.chars().count() + extra <= budget {
+            if !out.is_empty() {
+                out.push_str(SEP);
+            }
+            out.push_str(part);
+        } else {
+            dropped = true;
+        }
+    }
+    // Nothing fit at all: better an honest marker than a blank status line.
+    if out.is_empty() {
+        return if parts.is_empty() || available == 0 {
+            String::new()
+        } else {
+            String::from("…")
+        };
+    }
+    if dropped {
+        out.push_str(ELLIPSIS);
+    }
+    out
+}
+
 /// Build the status-line key legend from the authored catalog.
 ///
 /// Each postigo entry is `<authored chord>:<LEGALITY CLASS>`, so the legend
@@ -549,6 +717,15 @@ fn project(chord: ActionChord, owner: &str) -> Result<KeyCombo, SpecError> {
 /// never a `format!()` of a layout template.
 #[must_use]
 pub fn key_legend(catalog: &Catalog) -> String {
+    key_legend_parts(catalog).join("  ")
+}
+
+/// The legend's entries, **most important first** — the postigo chords, then
+/// the guarita chords (both of which state a *gate*), then the two navigation
+/// hints. The order is the drop order when the status line is too narrow, so
+/// it is deliberately "what an operator must not misread" first.
+#[must_use]
+pub fn key_legend_parts(catalog: &Catalog) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
 
     for (name, _) in DISPATCHABLE_ACTIONS {
@@ -560,6 +737,21 @@ pub fn key_legend(catalog: &Catalog) -> String {
         }
     }
 
+    // A guarita's class is its DERIVED one, so the legend states the gate the
+    // pre-warmed session would actually cross. A malformed recipe never
+    // reaches here (`Catalog::resolve` validates every one), so the fallback
+    // label is unreachable in a resolved catalog rather than a quiet default.
+    for g in catalog.guaritas_from(VIEW_NAME) {
+        let mut p = g.keys.canonical();
+        p.push(':');
+        p.push_str(
+            &g.legality()
+                .map(|l| l.class().label().to_uppercase())
+                .unwrap_or_else(|_| "INVALID".to_owned()),
+        );
+        parts.push(p);
+    }
+
     for (intent, label) in [(NavIntent::ToggleSort, "sort"), (NavIntent::Quit, "quit")] {
         if let Some(nav) = catalog.nav_keys().iter().find(|n| n.intent == intent) {
             let mut p = nav.keys.canonical();
@@ -569,7 +761,23 @@ pub fn key_legend(catalog: &Catalog) -> String {
         }
     }
 
-    parts.join("  ")
+    parts
+}
+
+/// The guarita recipes the catalog declares but this view cannot launch —
+/// the guaritas analogue of [`unbound_action_names`].
+///
+/// Surfaced as data rather than silence: a recipe whose `:from` names another
+/// surface is authored, valid and unreachable from here, and the operator
+/// should learn that from `--help` rather than from a chord doing nothing.
+#[must_use]
+pub fn unbound_guarita_names(catalog: &Catalog) -> Vec<String> {
+    catalog
+        .guaritas()
+        .iter()
+        .filter(|g| g.from != VIEW_NAME)
+        .map(|g| g.name.clone())
+        .collect()
 }
 
 /// The postigo action names the authored catalog declares but the app cannot
@@ -630,6 +838,12 @@ mod tests {
             "source: fixture",
         )
         .expect("the shipped vocabulary must build an app")
+    }
+
+    /// The same app, told which cluster it is reading — what a guarita needs
+    /// to pre-warm a session on the RIGHT one.
+    fn app_on(cluster: &str) -> BankenApp<FixtureClusterEnv> {
+        app().with_cluster(cluster)
     }
 
     #[test]
@@ -776,6 +990,157 @@ mod tests {
             a.dispatch_action_at(Action::BreakGlass, t0),
             "a different action is not blocked by the first's window"
         );
+    }
+
+    // ── guarita: the banken → tear/mado bridge at the keystroke ──────
+
+    #[test]
+    fn keymap_binds_the_authored_guarita_chords() {
+        let a = app();
+        assert_eq!(a.guaritas().len(), 2, "both recipes launch from :pods");
+        assert_eq!(
+            a.keymap().lookup(&KeyCombo::key("g")),
+            Some(&Action::OpenGuarita(0)),
+        );
+        assert_eq!(
+            a.keymap().lookup(&KeyCombo::new("g", vec!["shift".into()])),
+            Some(&Action::OpenGuarita(1)),
+        );
+        // The index and the recipe agree — the whole reason both come from
+        // one filtered iteration.
+        assert_eq!(a.guaritas()[0].name, "pod-triage");
+        assert_eq!(a.guaritas()[1].name, "pod-break-glass");
+    }
+
+    /// **THE GATE.** The pre-warmed session plan carries the cluster banken
+    /// is reading, the selected pod's namespace, and the selected pod — the
+    /// whole point of the bridge.
+    #[test]
+    fn the_guarita_chord_plans_a_prewarmed_session_on_the_right_cluster() {
+        let mut a = app_on("camelot-eks");
+        a.apply_action(Action::OpenGuarita(0));
+        match a.overlay() {
+            Some(ActionResult::GuaritaPlan {
+                recipe,
+                legality,
+                session_name,
+                lines,
+            }) => {
+                assert_eq!(recipe, "pod-triage");
+                assert_eq!(legality, "OBSERVE", "a recipe of pure reads is OBSERVE");
+                assert!(
+                    session_name.starts_with("triage-camelot-eks-"),
+                    "got: {session_name}"
+                );
+                assert_eq!(lines.len(), 3, "three panes");
+                assert!(
+                    lines[0].contains("--context camelot-eks"),
+                    "the log pane targets the cluster banken is reading: {}",
+                    lines[0],
+                );
+                assert!(lines[0].contains("[root]"), "got: {}", lines[0]);
+                assert!(lines[1].contains("[right]"), "got: {}", lines[1]);
+            }
+            other => panic!("expected a GuaritaPlan overlay, got {other:?}"),
+        }
+    }
+
+    /// **THE GATE.** The break-glass recipe's overlay states BREAK-GLASS. Its
+    /// class is derived from the `kubectl exec` pane, so a recipe cannot
+    /// present a live-effect session as a convenience.
+    #[test]
+    fn the_break_glass_guarita_overlay_states_the_gate_it_crosses() {
+        let mut a = app_on("camelot-eks");
+        a.apply_action(Action::OpenGuarita(1));
+        match a.overlay() {
+            Some(ActionResult::GuaritaPlan {
+                recipe, legality, ..
+            }) => {
+                assert_eq!(recipe, "pod-break-glass");
+                assert_eq!(legality, "BREAK-GLASS");
+            }
+            // M0 has no container picker, so `(:context container)` refuses by
+            // name — which is itself the honest outcome and must SAY so.
+            Some(ActionResult::Error(msg)) => assert!(
+                msg.contains("container"),
+                "the only acceptable refusal names the unresolved field: {msg}"
+            ),
+            other => panic!("expected a GuaritaPlan or a named refusal, got {other:?}"),
+        }
+    }
+
+    /// **THE GATE.** A banken that does not know its own cluster REFUSES to
+    /// pre-warm a session rather than opening one on whatever the operator's
+    /// kubeconfig currently points at. A wrong-cluster session is worse than
+    /// no session.
+    #[test]
+    fn without_a_known_cluster_the_guarita_refuses_by_name() {
+        let mut a = app(); // no `with_cluster`
+        a.apply_action(Action::OpenGuarita(0));
+        match a.overlay() {
+            Some(ActionResult::Error(msg)) => {
+                assert!(
+                    msg.contains("cluster"),
+                    "the refusal names the field: {msg}"
+                );
+                assert!(
+                    msg.contains("refusing"),
+                    "and says it is refusing rather than guessing: {msg}"
+                );
+            }
+            other => panic!("expected a named refusal, got {other:?}"),
+        }
+    }
+
+    /// A guarita opens a whole session — the most expensive thing a held key
+    /// could repeat.
+    #[test]
+    fn opening_a_guarita_is_repeat_gated() {
+        assert!(Action::OpenGuarita(0).is_repeat_gated());
+        let mut a = app_on("camelot-eks");
+        let t0 = Instant::now();
+        assert!(a.dispatch_action_at(Action::OpenGuarita(0), t0));
+        assert!(
+            !a.dispatch_action_at(Action::OpenGuarita(0), t0 + Duration::from_millis(35)),
+            "a repeat tick must not plan a second session"
+        );
+    }
+
+    // ── the legend must not vanish when it does not fit ──────────────
+
+    /// **THE GATE, and it is a REGRESSION gate.** The status line used to draw
+    /// the legend only `if legend_w < width`, so adding the two guarita chords
+    /// made the WHOLE legend silently disappear at 80 columns — the one
+    /// surface that says which gate a keystroke crosses. Now the least
+    /// important entries drop and the elision is marked.
+    #[test]
+    fn a_narrow_legend_drops_entries_rather_than_vanishing() {
+        let parts: Vec<String> = ["l:OBSERVE", "s:DECLARE", "shift+s:BREAK-GLASS", "q:quit"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+
+        // Everything fits: no marker.
+        let wide = fit_legend(&parts, 100);
+        assert_eq!(wide, "l:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  q:quit");
+        assert!(!wide.contains('…'));
+
+        // Too narrow: the FIRST (most important) entries survive, marked.
+        let narrow = fit_legend(&parts, 24);
+        assert!(narrow.starts_with("l:OBSERVE"), "got: {narrow}");
+        assert!(narrow.ends_with('…'), "the elision is visible: {narrow}");
+        assert!(
+            narrow.chars().count() <= 24,
+            "and it still fits: {} chars",
+            narrow.chars().count()
+        );
+        // Whole entries only — never half a chord label.
+        assert!(!narrow.contains("s:DEC "), "no partial entry: {narrow}");
+
+        // Nothing fits at all: an honest marker, never a blank line.
+        assert_eq!(fit_legend(&parts, 3), "…");
+        assert_eq!(fit_legend(&parts, 0), "");
+        assert_eq!(fit_legend(&[], 40), "");
     }
 
     /// Navigation is deliberately NOT gated — throttling `j`/`k` would make

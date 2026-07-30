@@ -30,7 +30,9 @@
 //! | a ward's `:view` exists and is `HealthWard` | [`SpecError::WardViewMissing`] / [`SpecError::WardViewKindMismatch`] |
 //! | ward lanes ↔ view columns correspond | [`SpecError::WardLaneColumnMismatch`] |
 //! | a ward's `:pathologies` resolve | [`SpecError::UnknownPathology`] |
-//! | no two chords collide, across actions AND nav keys | [`SpecError::ChordConflict`] |
+//! | each guarita's shape + WITNESS OBLIGATION | [`SpecError::EmptyGuarita`] / [`SpecError::GuaritaPlacement`] / [`SpecError::UnwitnessedGuarita`] / [`SpecError::UnneededWitness`] |
+//! | a guarita's `:from` resolves | [`SpecError::UnknownDrillSource`] |
+//! | no two chords collide, across actions AND nav keys AND guaritas | [`SpecError::ChordConflict`] |
 //!
 //! An **unreferenced** drill is deliberately NOT an error: a drill is also
 //! reachable from the `:` command bar (BANKEN.md §V makes the command bar a
@@ -43,6 +45,7 @@ use crate::{
     bindings::build_binding_map,
     drill::DrillSpec,
     error::SpecError,
+    guarita::GuaritaSpec,
     nav::NavKeySpec,
     pathology::PathologySpec,
     types::{K8sActionSpec, K8sViewSpec, ViewKind},
@@ -62,6 +65,7 @@ pub struct Catalog {
     wards: Vec<WardSpec>,
     drills: Vec<DrillSpec>,
     nav_keys: Vec<NavKeySpec>,
+    guaritas: Vec<GuaritaSpec>,
 }
 
 impl Catalog {
@@ -81,6 +85,7 @@ impl Catalog {
         wards: Vec<WardSpec>,
         drills: Vec<DrillSpec>,
         nav_keys: Vec<NavKeySpec>,
+        guaritas: Vec<GuaritaSpec>,
     ) -> Result<Self, SpecError> {
         // ── 1. Names are join keys; duplicates silently shadow ──
         unique_names("view", views.iter().map(|v| v.name.as_str()))?;
@@ -89,10 +94,19 @@ impl Catalog {
         unique_names("ward", wards.iter().map(|w| w.name.as_str()))?;
         unique_names("drill", drills.iter().map(|d| d.name.as_str()))?;
         unique_names("nav-key", nav_keys.iter().map(|n| n.name.as_str()))?;
+        unique_names("guarita", guaritas.iter().map(|g| g.name.as_str()))?;
 
-        // ── 2. Each drill's own shape ──
+        // ── 2. Each drill's / guarita's own shape ──
         for d in &drills {
             d.validate()?;
+        }
+        // A guarita's `validate` also enforces the WITNESS OBLIGATION: a
+        // recipe staging a mutating command must carry `:witness`/`:runbook`,
+        // because its legality is derived from its panes rather than authored.
+        // Running it here is what makes the shipped catalog's compliance a
+        // build-time fact rather than a claim.
+        for g in &guaritas {
+            g.validate()?;
         }
 
         // ── 3. Cross-references ──
@@ -141,15 +155,29 @@ impl Catalog {
             check_ward_view_correspondence(w, &views)?;
         }
 
-        // ── 4. One chord namespace across BOTH keyed domains ──
+        // A guarita is reachable from a declared view or ward, exactly like a
+        // drill's `:from` — the same silent-failure class (a chord bound to a
+        // recipe whose launch surface was renamed away).
+        for g in &guaritas {
+            if !view_names.contains(g.from.as_str()) && !ward_names.contains(g.from.as_str()) {
+                return Err(SpecError::UnknownDrillSource {
+                    drill: g.name.clone(),
+                    from: g.from.clone(),
+                });
+            }
+        }
+
+        // ── 4. One chord namespace across ALL THREE keyed domains ──
         //
-        // A nav key and a postigo action share the operator's keyboard, so
-        // checking them separately would let `j` (nav) and `j` (a future
-        // OBSERVE action) coexist with last-write-wins in the app's keymap.
-        // Nav keys are projected onto the action shape purely to reuse the
-        // one conflict checker — never to give them a legality class.
+        // A nav key, a postigo action and a guarita share the operator's
+        // keyboard, so checking them separately would let `j` (nav) and `j`
+        // (a future OBSERVE action) coexist with last-write-wins in the app's
+        // keymap. Both non-action domains are projected onto the action shape
+        // purely to reuse the one conflict checker — a nav key never gains a
+        // legality class that way, and a guarita's is its own derived one.
         let mut keyed = actions.clone();
         keyed.extend(nav_keys.iter().map(NavKeySpec::as_chord_claim));
+        keyed.extend(guaritas.iter().map(GuaritaSpec::as_chord_claim));
         build_binding_map(&keyed)?;
 
         Ok(Self {
@@ -159,6 +187,7 @@ impl Catalog {
             wards,
             drills,
             nav_keys,
+            guaritas,
         })
     }
 
@@ -196,6 +225,21 @@ impl Catalog {
     #[must_use]
     pub fn nav_keys(&self) -> &[NavKeySpec] {
         &self.nav_keys
+    }
+
+    /// The declared pre-warmed troubleshooting sessions.
+    #[must_use]
+    pub fn guaritas(&self) -> &[GuaritaSpec] {
+        &self.guaritas
+    }
+
+    /// The guaritas reachable from one surface (a view or ward name).
+    ///
+    /// Total by construction: [`Self::resolve`] already proved every `:from`
+    /// names a declared surface, so a recipe cannot be silently unreachable.
+    #[must_use]
+    pub fn guaritas_from(&self, surface: &str) -> Vec<&GuaritaSpec> {
+        self.guaritas.iter().filter(|g| g.from == surface).collect()
     }
 
     /// The pathology rules one ward runs, resolved to values.
@@ -350,6 +394,31 @@ mod tests {
         }
     }
 
+    fn guarita(name: &str, keys: &str, from: &str) -> crate::guarita::GuaritaSpec {
+        use crate::guarita::{
+            CommandArg, CommandEffect, GuaritaPane, GuaritaSpec, PanePlacement, PaneRole,
+            SessionLayout, StagedCommand,
+        };
+        GuaritaSpec {
+            name: name.into(),
+            keys: crate::chord::ActionChord::parse(keys).expect("test chord"),
+            from: from.into(),
+            layout: SessionLayout::Tiled,
+            session_prefix: name.into(),
+            panes: vec![GuaritaPane {
+                role: PaneRole::Logs,
+                placement: PanePlacement::Root,
+                command: StagedCommand {
+                    program: "kubectl".into(),
+                    args: vec![CommandArg::Literal("logs".into())],
+                    effect: CommandEffect::Observes,
+                },
+            }],
+            witness: None,
+            runbook: None,
+        }
+    }
+
     fn nav(name: &str, keys: &str, intent: NavIntent) -> NavKeySpec {
         NavKeySpec {
             name: name.into(),
@@ -365,7 +434,15 @@ mod tests {
         drills: Vec<DrillSpec>,
         nav_keys: Vec<NavKeySpec>,
     ) -> Result<Catalog, SpecError> {
-        Catalog::resolve(views, Vec::new(), pathologies, wards, drills, nav_keys)
+        Catalog::resolve(
+            views,
+            Vec::new(),
+            pathologies,
+            wards,
+            drills,
+            nav_keys,
+            Vec::new(),
+        )
     }
 
     #[test]
@@ -563,12 +640,79 @@ mod tests {
             vec![ward("ward", &["MEM"])],
             Vec::new(),
             vec![nav("sort", "s", NavIntent::ToggleSort)],
+            Vec::new(),
         )
         .expect_err("a nav key on a postigo chord must be rejected");
         match err {
             SpecError::ChordConflict { chord, .. } => assert_eq!(chord, "s"),
             other => panic!("expected ChordConflict, got {other:?}"),
         }
+    }
+
+    /// **THE GATE.** The guarita chord joins the SAME namespace. A recipe
+    /// bound to a chord a `(defnavkey)` already claims would otherwise
+    /// resolve by bind order — in the tool whose whole point is that the
+    /// operator knows which gate a keystroke crosses.
+    #[test]
+    fn a_guarita_colliding_with_a_nav_chord_is_rejected() {
+        let err = Catalog::resolve(
+            vec![health_view(&["WORKLOAD", "MEM"])],
+            Vec::new(),
+            Vec::new(),
+            vec![ward("ward", &["MEM"])],
+            Vec::new(),
+            vec![nav("sort", "o", NavIntent::ToggleSort)],
+            vec![guarita("triage", "o", "ward")],
+        )
+        .expect_err("a guarita on a nav chord must be rejected");
+        match err {
+            SpecError::ChordConflict { chord, .. } => assert_eq!(chord, "o"),
+            other => panic!("expected ChordConflict, got {other:?}"),
+        }
+    }
+
+    /// A guarita whose `:from` names no declared surface is rejected — the
+    /// same class as a dangling drill source (a chord bound to a recipe that
+    /// can never be reached).
+    #[test]
+    fn a_guarita_from_an_unknown_surface_is_rejected() {
+        let err = Catalog::resolve(
+            vec![health_view(&["WORKLOAD", "MEM"])],
+            Vec::new(),
+            Vec::new(),
+            vec![ward("ward", &["MEM"])],
+            Vec::new(),
+            Vec::new(),
+            vec![guarita("triage", "g", "nosuchview")],
+        )
+        .expect_err("an unreachable guarita must be rejected");
+        assert!(
+            matches!(&err, SpecError::UnknownDrillSource { from, .. } if from == "nosuchview"),
+            "got: {err}"
+        );
+    }
+
+    /// **THE GATE.** `Catalog::resolve` runs each recipe's witness obligation,
+    /// which is what makes the SHIPPED catalog's compliance a build-time fact
+    /// rather than a claim in a comment.
+    #[test]
+    fn an_unwitnessed_mutating_guarita_fails_the_whole_catalog() {
+        let mut g = guarita("triage", "g", "ward");
+        g.panes[0].command.effect = crate::guarita::CommandEffect::Mutates;
+        let err = Catalog::resolve(
+            vec![health_view(&["WORKLOAD", "MEM"])],
+            Vec::new(),
+            Vec::new(),
+            vec![ward("ward", &["MEM"])],
+            Vec::new(),
+            Vec::new(),
+            vec![g],
+        )
+        .expect_err("an unwitnessed mutating recipe must fail the catalog");
+        assert!(
+            matches!(&err, SpecError::UnwitnessedGuarita { guarita, .. } if guarita == "triage"),
+            "got: {err}"
+        );
     }
 
     /// An unreferenced drill is ALLOWED — the `:` command bar is a

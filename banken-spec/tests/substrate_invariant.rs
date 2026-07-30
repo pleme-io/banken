@@ -46,16 +46,32 @@ const FORBIDDEN_SUBSTRINGS: &[&str] = &[
     "replace", "remove", "restart", "drain", "cordon",
 ];
 
-/// Extract the method names declared in the `ClusterEnv` trait body from
-/// the given source. Cheap, dependency-free: find the trait, walk to its
-/// matching brace, and collect `fn <name>` occurrences.
-fn cluster_env_methods(src: &str) -> Vec<String> {
-    let Some(trait_pos) = src.find("pub trait ClusterEnv") else {
-        panic!("could not find `pub trait ClusterEnv` in src/env.rs");
+/// The whole allowlist of `SessionEnv` method names (the `(defguarita)`
+/// seam). Two of the five are the staging arms, and they are deliberately
+/// asymmetric: `stage_observed` takes an `ObservedCommand`,
+/// `stage_witnessed` takes a `MutatingCommand` **plus** a `WitnessedAction`.
+/// A THIRD staging method would be an unwitnessed path for a mutating
+/// command — the [`ClusterEnv`] re-add case, at the multiplexer seam.
+const ALLOWED_SESSION_METHODS: &[&str] = &[
+    "open_session",
+    "split",
+    "stage_observed",
+    "stage_witnessed",
+    "focus",
+];
+
+/// Extract the method names declared in a trait body from the given source.
+/// Cheap, dependency-free: find the trait, walk to its matching brace, and
+/// collect `fn <name>` occurrences.
+fn trait_methods(src: &str, trait_name: &str) -> Vec<String> {
+    let mut needle = String::from("pub trait ");
+    needle.push_str(trait_name);
+    let Some(trait_pos) = src.find(&needle) else {
+        panic!("could not find `{needle}` in the scanned source");
     };
     let after = &src[trait_pos..];
     let Some(open) = after.find('{') else {
-        panic!("ClusterEnv trait has no opening brace");
+        panic!("{trait_name} trait has no opening brace");
     };
     // Walk braces to find the trait body's matching close.
     let body_bytes = after[open..].as_bytes();
@@ -74,7 +90,7 @@ fn cluster_env_methods(src: &str) -> Vec<String> {
             _ => {}
         }
     }
-    let end = end.expect("ClusterEnv trait body never closes");
+    let end = end.unwrap_or_else(|| panic!("{trait_name} trait body never closes"));
     let body = &after[open..=open + end];
 
     // Collect `fn <ident>` — the declared methods. Comment lines
@@ -100,15 +116,19 @@ fn cluster_env_methods(src: &str) -> Vec<String> {
     names
 }
 
-fn read_env_source() -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/env.rs");
+fn read_source(rel: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+}
+
+fn read_env_source() -> String {
+    read_source("src/env.rs")
 }
 
 #[test]
 fn cluster_env_exposes_only_allowlisted_methods() {
     let src = read_env_source();
-    let methods = cluster_env_methods(&src);
+    let methods = trait_methods(&src, "ClusterEnv");
     assert!(
         !methods.is_empty(),
         "parser found no ClusterEnv methods — the guard would be vacuous",
@@ -135,7 +155,7 @@ fn cluster_env_exposes_only_allowlisted_methods() {
 #[test]
 fn cluster_env_has_no_mutating_verb_method() {
     let src = read_env_source();
-    let methods = cluster_env_methods(&src);
+    let methods = trait_methods(&src, "ClusterEnv");
     for m in &methods {
         for forbidden in FORBIDDEN_SUBSTRINGS {
             assert!(
@@ -146,4 +166,46 @@ fn cluster_env_has_no_mutating_verb_method() {
             );
         }
     }
+}
+
+/// The same CI-caught floor at the `(defguarita)` seam.
+///
+/// `SessionEnv`'s two staging arms take DIFFERENT argument types
+/// (`ObservedCommand` vs `MutatingCommand` + `WitnessedAction`), and those
+/// newtypes are only constructible from a `PlannedPane` of the matching
+/// `CommandEffect` — which is what makes "stage a mutating command
+/// unwitnessed" truly-unrepresentable *within the authored surface*. What
+/// the type system cannot forbid is an author ADDING a third, permissive
+/// staging method. Same honest tier as the `ClusterEnv` guard above:
+/// **only-mitigated → CI-caught.**
+#[test]
+fn session_env_exposes_only_allowlisted_methods() {
+    let src = read_source("src/guarita.rs");
+    let methods = trait_methods(&src, "SessionEnv");
+    assert!(
+        !methods.is_empty(),
+        "parser found no SessionEnv methods — the guard would be vacuous",
+    );
+    for m in &methods {
+        assert!(
+            ALLOWED_SESSION_METHODS.contains(&m.as_str()),
+            "SessionEnv declares method `{m}` which is NOT on the sanctioned \
+             allowlist. If it stages a command, note that the WITNESS split is \
+             structural: `stage_observed` takes an ObservedCommand and \
+             `stage_witnessed` takes a MutatingCommand + a WitnessedAction. A \
+             third staging arm is an unwitnessed path for a live effect.",
+        );
+    }
+    for allowed in ALLOWED_SESSION_METHODS {
+        assert!(
+            methods.iter().any(|m| m == allowed),
+            "allowlisted method `{allowed}` is missing from the SessionEnv trait",
+        );
+    }
+    // And exactly two staging arms — no more, no fewer.
+    assert_eq!(
+        methods.iter().filter(|m| m.starts_with("stage")).count(),
+        2,
+        "SessionEnv must have exactly two staging arms (observed / witnessed)",
+    );
 }
