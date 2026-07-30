@@ -11,18 +11,18 @@ repository = "https://github.com/pleme-io/banken"
 
 [workspace.dependencies]
 # The postigo typed border authoring surface — pleme-io's homoiconic
-# S-expression reader + derive macro, both published on crates.io.
+# S-expression reader, published on crates.io from the canonical
+# `pleme-io/tatara-lisp` workspace (all 17 members released in lockstep
+# at 0.3.3; the retired `pleme-io/tatara` sibling is `publish = false`).
 #
-# INTERIM PIN (mirrors sui/Cargo.toml's blessed pairing): the derive
-# version-drifts independently of tatara-lisp on crates.io. Caret ranges
-# resolve derive to a 0.2.77+ line that emits calls to
-# `tatara_lisp::domain::parse_kwargs_strict`, a runtime symbol NO
-# published tatara-lisp exports (0.2.4 only exports `parse_kwargs`).
-# Exact-pin the derive to the last matching release so the emitted code
-# references a symbol the runtime actually ships. banken uses only
-# `#[tatara(keyword = "…")]`, fully supported by 0.2.2.
-tatara-lisp = "=0.2.4"
-tatara-lisp-derive = "=0.2.2"
+# ONE dependency, deliberately: `tatara-lisp` re-exports the derive
+# macros RENAMED — `DeriveTataraDomain` / `DeriveKeywordSexp` (lib.rs:54)
+# — so a consumer never names `tatara-lisp-derive` itself. That kills the
+# split-pin class outright: the lib pins its own derive at `=0.3.3`, so
+# the derive's emitted `::tatara_lisp::domain::parse_kwargs` call can no
+# longer reference a symbol the resolved runtime doesn't ship. banken
+# uses only `#[tatara(keyword = "…")]`.
+tatara-lisp = "0.3.3"
 
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"

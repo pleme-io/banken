@@ -113,7 +113,6 @@ dependencies = [
  "serde_yaml",
  "shikumi",
  "tatara-lisp",
- "tatara-lisp-derive",
  "thiserror",
 ]
 
@@ -126,7 +125,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tatara-lisp",
- "tatara-lisp-derive",
  "thiserror",
 ]
 
@@ -1523,9 +1521,9 @@ checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
 
 [[package]]
 name = "tatara-lisp"
-version = "0.2.4"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e5f8a9c5a4835544490d7276eaa5fa71bbc6b480e526232d0f63c1af667669d"
+checksum = "27a7c753fd91475ae3385fcac0840599eff0649166f6a832f50bb1c573660d5c"
 dependencies = [
  "blake3",
  "serde",
@@ -1536,9 +1534,9 @@ dependencies = [
 
 [[package]]
 name = "tatara-lisp-derive"
-version = "0.2.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aca2ea9795bfcae07e78500cd16f50b84ced1d14a666be71619e545fbd3c47e3"
+checksum = "c928e303f68959965bec794883acfebb93cd3267e4641502d28454bf73440baa"
 dependencies = [
  "proc-macro2",
  "quote",

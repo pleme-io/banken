@@ -137,14 +137,21 @@ proven-live ✗ until a cluster is reachable / known ✓).
   seam between them is exactly one field, `specDir`. `deny_unknown_fields` on the
   YAML face (fail-once proven: a valid doc + one extra key deserializes clean
   without the attribute, `unknown field` with it).
-  - **`pending-banken: tatara-lisp-0.3.x-adoption`** — honest asymmetry, measured:
-    the YAML face rejects an unknown key; the **Lisp face is LOOSE** at the pinned
-    `=0.2.4` (`domain::parse_kwargs`, `tatara-lisp-0.2.4/src/domain.rs:52-67`,
-    maps every `:keyword` and the derive reads only known ones, so a typo is
-    silently dropped). Pinned by a deliberate CHARACTERIZATION test
-    (`lisp_face_silently_ignores_an_unknown_kwarg`) that turns red on adopting a
-    strict reader. tatara-lisp 0.3.x is **unpublished** (crates.io tops out at
-    0.2.5) and a consolidation is mid-flight upstream — the pins stay as-is.
+  - **`pending-banken: strict-kwargs-reader`** — honest asymmetry, measured:
+    the YAML face rejects an unknown key; the **Lisp face is LOOSE** at
+    `tatara-lisp = "0.3.3"` (`domain::parse_kwargs`,
+    `tatara-lisp-0.3.3/src/domain.rs:63-78`, maps every `:keyword` and the derive
+    reads only known ones, so a typo is silently dropped). Pinned by a deliberate
+    CHARACTERIZATION test (`lisp_face_silently_ignores_an_unknown_kwarg`) that
+    turns red on adopting a strict reader.
+    **Corrected 2026-07-30 — the row was renamed because its premise was wrong.**
+    It used to be called `tatara-lisp-0.3.x-adoption`, i.e. it asserted that
+    adopting 0.3.x *is* the fix. banken now runs canonical 0.3.3 and the
+    characterization test **stayed green**: 0.3.3 ships `parse_kwargs` and **no
+    strict variant at all**, and its derive emits a call to exactly that lenient
+    function. Verified by reading the supplier's `domain.rs`, not by inferring
+    capability from a version number — the version bump was never the blocker.
+    The row is now blocked on the strict reader being *written* upstream.
 - **SHIPPED (unit-green):** the **ishou fleet theme derivation** (Quadro T7).
   `BankenConfig.theme` is the typed `ishou_tokens::FleetTheme`, not a string, and
   `prescribed_default()` derives its visual half from
@@ -269,6 +276,15 @@ proven-live ✗ until a cluster is reachable / known ✓).
 Every PR advances a `theory/BANKEN.md` §VII ledger row's tier or leaves a typed
 `pending-banken: <row>` note. The `substrate_invariant.rs` guard stays green (any
 `ClusterEnv` mutating-method addition fails the build). No DECLARE rail is
-direct-to-main. Toolchain: `tatara-lisp` is exact-pinned (`=0.2.4` + derive
-`=0.2.2`, sui's blessed interim pair — a caret range floats to 0.2.5 and breaks
-the 0.2.2 derive; keep the pin).
+direct-to-main. Toolchain: **`tatara-lisp = "0.3.3"`, and it is the ONLY tatara
+dependency** — never add `tatara-lisp-derive` back. The derive macros arrive
+RENAMED through the lib (`tatara_lisp::DeriveTataraDomain` /
+`DeriveKeywordSexp`, `tatara-lisp/src/lib.rs:54`), and note
+`tatara_lisp::TataraDomain` is the **trait** while `DeriveTataraDomain` is the
+**macro**. This replaces the old two-crate exact pin (`=0.2.4` + derive `=0.2.2`)
+whose whole purpose was to stop the two versions drifting into a derive that
+called a runtime symbol the lib didn't export. Naming one dep removes that
+failure mode by construction — 0.3.3's lib pins its own derive at `=0.3.3`, so
+the pair cannot desynchronize and there is nothing left for a caret range to
+break. Crates now resolve from canonical `pleme-io/tatara-lisp`; the retired
+`pleme-io/tatara` sibling is `publish = false`, so never source them from it.

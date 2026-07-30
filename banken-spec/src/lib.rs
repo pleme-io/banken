@@ -72,9 +72,10 @@
 //!
 //! Each is **truly-unrepresentable within its authored surface** and each is
 //! qualified — none is a fleet-wide guarantee. `pending-banken:
-//! tatara-lisp-0.3.x-adoption` (the strict-kwargs reader that would make an
-//! unknown kwarg a parse error rather than a silently-ignored key) is
-//! unchanged by this work; the pins stay `=0.2.4` / `=0.2.2`.
+//! strict-kwargs-reader` (the reader that would make an unknown kwarg a
+//! parse error rather than a silently-ignored key) is unchanged by the
+//! 2026-07-30 move to canonical `tatara-lisp = "0.3.3"`: 0.3.3 ships
+//! `parse_kwargs` and no strict variant, so the row is still open.
 
 pub mod bindings;
 pub mod catalog;

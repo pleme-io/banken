@@ -37,8 +37,8 @@
 //! The YAML/shikumi face carries `#[serde(deny_unknown_fields)]`, so a
 //! typo'd key is a hard deserialize error (**eval/parse-time-rejected**;
 //! see `unknown_yaml_field_is_rejected`). The **Lisp face is LOOSE** at
-//! banken's pinned `tatara-lisp = "=0.2.4"`: `domain::parse_kwargs`
-//! (`tatara-lisp-0.2.4/src/domain.rs:52-67`) inserts every `:keyword`
+//! banken's `tatara-lisp = "0.3.3"`: `domain::parse_kwargs`
+//! (`tatara-lisp-0.3.3/src/domain.rs:63-78`) inserts every `:keyword`
 //! into a map and the derive only ever *reads* the ones it knows, so an
 //! unknown kwarg is silently ignored — proven, not assumed, by
 //! `lisp_face_silently_ignores_an_unknown_kwarg`. That characterization
@@ -46,11 +46,15 @@
 //! BEHAVIOUR, so it turns red the moment banken adopts a strict reader
 //! and must be flipped to an expect-error.
 //!
-//! `pending-banken: tatara-lisp-0.3.x-adoption` — the strict-kwargs
-//! reader that closes this asymmetry lives in tatara-lisp 0.3.x, which
-//! is unpublished as of 2026-07-29 (crates.io tops out at 0.2.5). The
-//! pins here stay `=0.2.4` / `=0.2.2` until that lands; moving them now
-//! would collide with the in-flight consolidation.
+//! `pending-banken: strict-kwargs-reader` — **corrected 2026-07-30**, and
+//! the correction is the point: the previous row claimed the strict reader
+//! "lives in tatara-lisp 0.3.x", so adopting 0.3.3 was expected to close
+//! this. It did not. Canonical 0.3.3 ships `parse_kwargs` and **no strict
+//! variant at all** (verified by reading `domain.rs`, not by trusting the
+//! version number), and the 0.3.3 derive emits a call to exactly that
+//! lenient function. So the asymmetry is unchanged by the migration and
+//! the row stays open, now blocked on the reader being *written* upstream
+//! rather than on a release being *published*.
 
 use std::path::{Path, PathBuf};
 
@@ -604,15 +608,17 @@ specDir: banken-spec/specs
         );
     }
 
-    /// CHARACTERIZATION, not aspiration. At `tatara-lisp = "=0.2.4"`,
-    /// `domain::parse_kwargs` (domain.rs:52-67) is LOOSE: it maps every
+    /// CHARACTERIZATION, not aspiration. At `tatara-lisp = "0.3.3"`,
+    /// `domain::parse_kwargs` (domain.rs:63-78) is LOOSE: it maps every
     /// `:keyword` and the derive reads only the ones it knows, so an
     /// unknown kwarg is silently dropped. The YAML face rejects the same
     /// class loudly (`unknown_yaml_field_is_rejected`).
     ///
     /// This asserts the CURRENT behaviour on purpose, so adopting the
     /// strict reader turns it red and forces the flip to an
-    /// expect-error. `pending-banken: tatara-lisp-0.3.x-adoption`.
+    /// expect-error. It stayed GREEN across the 0.2.4 → 0.3.3 migration,
+    /// which is precisely how we learned 0.3.3 does not carry the strict
+    /// reader after all. `pending-banken: strict-kwargs-reader`.
     #[test]
     fn lisp_face_silently_ignores_an_unknown_kwarg() {
         let src = "\

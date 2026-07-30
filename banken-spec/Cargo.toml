@@ -17,8 +17,10 @@ repository.workspace = true
 # rather than last-write-wins.
 awase = "0.1"
 
+# ONE dep, not two: the derive macros arrive RENAMED through
+# `tatara_lisp::DeriveTataraDomain`, so `tatara-lisp-derive` is never
+# named here (see the workspace manifest).
 tatara-lisp.workspace = true
-tatara-lisp-derive.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 serde_json.workspace = true

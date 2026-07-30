@@ -8,9 +8,9 @@
 #
 # Publish surface: the workspace holds `banken-spec` (a library — the postigo
 # typed border + interpreter, genuinely publishable and the thing downstream
-# consumers want) and `banken` (the bin). banken-spec's only non-registry deps
-# are tatara-lisp/tatara-lisp-derive, both on crates.io at the exact pins in
-# Cargo.toml, so the publish arm has no path-dep blocker.
+# consumers want) and `banken` (the bin). banken-spec has NO non-registry deps:
+# its tatara surface is the single crates.io dependency `tatara-lisp = "0.3.3"`
+# (canonical pleme-io/tatara-lisp), so the publish arm has no path-dep blocker.
 name: auto-release
 
 on:
