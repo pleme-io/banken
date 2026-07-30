@@ -154,7 +154,15 @@ pub enum DeclareTarget {
 }
 
 /// Coarse discriminant of a `DeclareTarget`, for catalog reflection.
+///
+/// `rename_all = "kebab-case"` makes the serde wire name equal `label()`,
+/// which is what lets a *rail* be authored directly —
+/// `(defpathology … :remedy (:kind declare :rail flux-helm-values))` reuses
+/// this one catalog instead of opening a second rail vocabulary that could
+/// grow a live-mutate arm independently. `catalog::tests::
+/// declare_target_kind_label_is_the_wire_name` pins the two together.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "kebab-case")]
 pub enum DeclareTargetKind {
     /// `DeclareTarget::FluxHelmValues`.
     FluxHelmValues,

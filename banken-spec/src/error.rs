@@ -60,4 +60,123 @@ pub enum SpecError {
     /// chord-leader colliding with a plain binding.
     #[error("keybinding error: {0}")]
     Binding(String),
+
+    // ── (defpathology) ────────────────────────────────────────────────
+    /// A `(defpathology)` declared no `:evidence`.
+    ///
+    /// An evidence-free rule can never be evaluated. Returning "did not
+    /// fire" would be the silent-never-fires failure this crate exists to
+    /// refuse, so it is an error at evaluation time and the whole verdict
+    /// fails rather than optimistically reporting health.
+    #[error(
+        "pathology `{0}` declares no evidence — it could never fire, which is an authoring error, not a rule"
+    )]
+    PathologyWithoutEvidence(String),
+
+    // ── (defdrill) ────────────────────────────────────────────────────
+    /// A `(defdrill)` declared no `:steps` — a dead Enter key that looks
+    /// authored.
+    #[error("drill `{0}` has no steps")]
+    EmptyDrill(String),
+
+    /// Two consecutive drill steps do not strictly descend the hierarchy —
+    /// a path that zooms out, revisits a rung, or chains two terminals.
+    #[error(
+        "drill `{drill}` does not descend: step `{from_level}` is followed by \
+         `{to_level}`, which is not deeper — a drill descends, never ascends \
+         or repeats"
+    )]
+    NonDescendingDrill {
+        /// The offending drill's name.
+        drill: String,
+        /// The earlier step's level label.
+        from_level: &'static str,
+        /// The later step's level label.
+        to_level: &'static str,
+    },
+
+    // ── cross-domain resolution (see `crate::resolve`) ────────────────
+    /// A view or ward's `:drill-to` names a `(defdrill)` that does not
+    /// exist. Previously a silently dead Enter key.
+    #[error("`{surface}` drills to `{drill}`, but no (defdrill) declares that name")]
+    DanglingDrill {
+        /// The view or ward that declared the drill.
+        surface: String,
+        /// The name it named.
+        drill: String,
+    },
+
+    /// A `(defdrill)`'s `:from` names neither a declared view nor a
+    /// declared ward.
+    #[error(
+        "drill `{drill}` starts from `{from}`, which is neither a declared (defk8sview) nor a declared (defward)"
+    )]
+    UnknownDrillSource {
+        /// The drill.
+        drill: String,
+        /// The surface it claimed to start from.
+        from: String,
+    },
+
+    /// A `(defward)`'s `:pathologies` names a `(defpathology)` that does
+    /// not exist — the linter would silently run one rule fewer.
+    #[error("ward `{ward}` runs pathology `{pathology}`, but no (defpathology) declares that name")]
+    UnknownPathology {
+        /// The ward.
+        ward: String,
+        /// The name it named.
+        pathology: String,
+    },
+
+    /// A `(defward)`'s `:view` names a `(defk8sview)` that does not exist.
+    #[error("ward `{ward}` augments view `{view}`, but no (defk8sview) declares that name")]
+    WardViewMissing {
+        /// The ward.
+        ward: String,
+        /// The view it named.
+        view: String,
+    },
+
+    /// A `(defward)` augments a view that is not a `HealthWard` — the ward
+    /// composition only means anything over the health view kind.
+    #[error("ward `{ward}` augments view `{view}`, which is kind `{kind}`, not `health-ward`")]
+    WardViewKindMismatch {
+        /// The ward.
+        ward: String,
+        /// The view it named.
+        view: String,
+        /// The view's actual kind label.
+        kind: &'static str,
+    },
+
+    /// A `(defward)`'s lanes and its view's non-identity columns disagree.
+    ///
+    /// Two authored files describing one screen is the drift class the
+    /// resolver exists to kill: the view owns the geometry, the ward owns
+    /// the signals, and the correspondence between them is checked rather
+    /// than hoped for.
+    #[error(
+        "ward `{ward}` and view `{view}` disagree about the ward's columns: \
+         {detail}. The view's columns are [identity, ...lane headers]; fix \
+         whichever side is wrong."
+    )]
+    WardLaneColumnMismatch {
+        /// The ward.
+        ward: String,
+        /// The view it augments.
+        view: String,
+        /// What specifically differs.
+        detail: String,
+    },
+
+    /// Two forms on the same axis claim the same name. Names are join keys
+    /// (a `drill_to`, a ward's `:pathologies` entry, a detection label), so
+    /// a duplicate silently shadows one of the two.
+    #[error("two `{axis}` forms are both named `{name}` — names are join keys and must be unique")]
+    DuplicateName {
+        /// Which axis (`"view"`, `"ward"`, `"pathology"`, `"drill"`, …).
+        axis: &'static str,
+        /// The duplicated name.
+        name: String,
+    },
 }

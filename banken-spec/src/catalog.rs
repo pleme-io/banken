@@ -1,14 +1,35 @@
-//! Catalog reflection (★★ CATALOG REFLECTION) — the postigo primitive
-//! self-describes.
+//! Catalog reflection (★★ CATALOG REFLECTION) — banken's whole typed
+//! vocabulary self-describes.
 //!
-//! Every closed enum in the typed border carries an `ALL` const (see
-//! `types.rs`). This module composes them into a self-describing
-//! inventory of the action-legality universe, and the tests here prove
-//! that every variant appears in its `ALL` const — the exhaustive-match
-//! guarantee. If a new variant lands without a catalog row, the
-//! corresponding `every_*_variant_in_all` test fails the build.
+//! Every closed enum in every domain carries an `ALL` const. This module
+//! composes them into one self-describing inventory spanning all six
+//! authored domains — `(defk8sview)` / `(defk8saction)` (the postigo core,
+//! [`crate::types`]), `(defpathology)` ([`crate::pathology`]), `(defward)`
+//! ([`crate::ward`]), `(defdrill)` ([`crate::drill`]) and `(defnavkey)`
+//! ([`crate::nav`]).
+//!
+//! # Two tiers of enforcement, stated separately
+//!
+//! - **Variant ∈ `ALL`.** For the ten axes emitted by
+//!   [`crate::closed_catalog!`] this is **truly-unrepresentable**: the
+//!   variant list and the `ALL` list are the same list. For the four
+//!   hand-written axes in [`crate::types`] it stays **CI-caught** by the
+//!   `every_*_variant_in_all` tests below (`pending-banken:
+//!   closed-catalog-macro-backfill`).
+//! - **Axis ∈ the catalog.** Always **CI-caught**, by
+//!   `catalog_covers_every_axis` against the [`REQUIRED_AXES`] roster — in
+//!   both directions, so neither a domain shipping without its catalog entry
+//!   nor an axis appearing without a roster row can pass.
+//!
+//! Do not collapse those two into one claim.
 
-use crate::types::{DeclareTargetKind, LegalityClass, ResourceKind, ViewKind};
+use crate::{
+    drill::DrillLevel,
+    nav::NavIntent,
+    pathology::{EvidenceKind, RemedyKind, Severity, Verdict},
+    types::{DeclareTargetKind, LegalityClass, ResourceKind, ViewKind},
+    ward::{AttestationKind, BandDimension, LaneSignalKind, WardScope},
+};
 
 /// One catalog row describing a discriminant of the postigo border.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,36 +40,119 @@ pub struct CatalogRow {
     pub label: &'static str,
 }
 
-/// The full self-describing catalog of the postigo border — every
-/// discriminant across every closed axis.
+/// Push one axis's `ALL` list into `rows`.
+///
+/// Generic over the label projection so a new axis is **one line** in
+/// [`catalog`] rather than a copy-pasted `for` loop. (The five hand-written
+/// loops this replaced were the second-copy signal ★★ EMITTER SUBSTRATE
+/// names.)
+fn push_axis<T: Copy>(
+    rows: &mut Vec<CatalogRow>,
+    axis: &'static str,
+    all: &'static [T],
+    label: impl Fn(T) -> &'static str,
+) {
+    for v in all {
+        rows.push(CatalogRow {
+            axis,
+            label: label(*v),
+        });
+    }
+}
+
+/// The full self-describing catalog of banken's typed border — every
+/// discriminant across every closed axis, in every domain.
+///
+/// ★★ CATALOG REFLECTION: adding a domain requires landing its catalog
+/// entry, and `catalog_covers_every_axis` fails the build when an axis is
+/// missing from this function.
 pub fn catalog() -> Vec<CatalogRow> {
     let mut rows = Vec::new();
-    for c in LegalityClass::ALL {
-        rows.push(CatalogRow {
-            axis: "legality",
-            label: c.label(),
-        });
-    }
-    for t in DeclareTargetKind::ALL {
-        rows.push(CatalogRow {
-            axis: "declare-target",
-            label: t.label(),
-        });
-    }
-    for v in ViewKind::ALL {
-        rows.push(CatalogRow {
-            axis: "view-kind",
-            label: v.label(),
-        });
-    }
-    for k in ResourceKind::ALL {
-        rows.push(CatalogRow {
-            axis: "resource-kind",
-            label: k.label(),
-        });
-    }
+    // postigo — (defk8saction) / (defk8sview)
+    push_axis(
+        &mut rows,
+        "legality",
+        LegalityClass::ALL,
+        LegalityClass::label,
+    );
+    push_axis(
+        &mut rows,
+        "declare-target",
+        DeclareTargetKind::ALL,
+        DeclareTargetKind::label,
+    );
+    push_axis(&mut rows, "view-kind", ViewKind::ALL, ViewKind::label);
+    push_axis(
+        &mut rows,
+        "resource-kind",
+        ResourceKind::ALL,
+        ResourceKind::label,
+    );
+    // (defpathology)
+    push_axis(&mut rows, "severity", Severity::ALL, Severity::label);
+    push_axis(
+        &mut rows,
+        "evidence-kind",
+        EvidenceKind::ALL,
+        EvidenceKind::label,
+    );
+    push_axis(&mut rows, "remedy-kind", RemedyKind::ALL, RemedyKind::label);
+    push_axis(&mut rows, "verdict", Verdict::ALL, Verdict::label);
+    // (defward)
+    push_axis(
+        &mut rows,
+        "band-dimension",
+        BandDimension::ALL,
+        BandDimension::label,
+    );
+    push_axis(
+        &mut rows,
+        "lane-signal-kind",
+        LaneSignalKind::ALL,
+        LaneSignalKind::label,
+    );
+    push_axis(&mut rows, "ward-scope", WardScope::ALL, WardScope::label);
+    push_axis(
+        &mut rows,
+        "attestation-kind",
+        AttestationKind::ALL,
+        AttestationKind::label,
+    );
+    // (defdrill)
+    push_axis(&mut rows, "drill-level", DrillLevel::ALL, DrillLevel::label);
+    // (defnavkey)
+    push_axis(&mut rows, "nav-intent", NavIntent::ALL, NavIntent::label);
     rows
 }
+
+/// Every axis the catalog must cover — the ★★ CATALOG REFLECTION roster.
+///
+/// A new domain lands its axes **here** in the same commit, and
+/// `catalog_covers_every_axis` fails the build if [`catalog`] does not emit
+/// one of them. (The roster is a separate list from [`catalog`]'s body on
+/// purpose: that is what makes "the domain landed but its catalog row did
+/// not" a red test rather than an under-reporting catalog nobody notices.)
+pub const REQUIRED_AXES: &[&str] = &[
+    // postigo
+    "legality",
+    "declare-target",
+    "view-kind",
+    "resource-kind",
+    // (defpathology)
+    "severity",
+    "evidence-kind",
+    "remedy-kind",
+    "verdict",
+    // (defward)
+    "band-dimension",
+    "lane-signal-kind",
+    "ward-scope",
+    "attestation-kind",
+    // (defdrill)
+    "drill-level",
+    // (defnavkey)
+    "nav-intent",
+];
 
 #[cfg(test)]
 mod tests {
@@ -137,20 +241,98 @@ mod tests {
         }
     }
 
+    /// **THE GATE** for ★★ CATALOG REFLECTION: every axis on the
+    /// [`REQUIRED_AXES`] roster must actually be emitted by [`catalog`], and
+    /// the catalog must emit nothing that is not on the roster.
+    ///
+    /// Both directions matter. Roster-without-emission is "a domain landed,
+    /// its catalog row did not"; emission-without-roster is "an axis grew and
+    /// nobody recorded that the catalog owns it".
     #[test]
     fn catalog_covers_every_axis() {
         let rows = catalog();
         let axes: HashSet<&str> = rows.iter().map(|r| r.axis).collect();
-        for required in ["legality", "declare-target", "view-kind", "resource-kind"] {
-            assert!(axes.contains(required), "catalog missing axis {required}");
+        for required in REQUIRED_AXES {
+            assert!(
+                axes.contains(required),
+                "catalog is missing axis `{required}` — a domain landed without \
+                 its catalog entry (★★ CATALOG REFLECTION)"
+            );
         }
+        for emitted in &axes {
+            assert!(
+                REQUIRED_AXES.contains(emitted),
+                "catalog emits axis `{emitted}` which is not on REQUIRED_AXES — \
+                 add it to the roster in the same commit"
+            );
+        }
+        assert_eq!(axes.len(), REQUIRED_AXES.len());
         // The catalog size is the sum of every axis's ALL length — a
-        // partition-complete count.
+        // partition-complete count, so a row cannot be dropped or doubled.
         let expected = LegalityClass::ALL.len()
             + DeclareTargetKind::ALL.len()
             + ViewKind::ALL.len()
-            + ResourceKind::ALL.len();
+            + ResourceKind::ALL.len()
+            + Severity::ALL.len()
+            + EvidenceKind::ALL.len()
+            + RemedyKind::ALL.len()
+            + Verdict::ALL.len()
+            + BandDimension::ALL.len()
+            + LaneSignalKind::ALL.len()
+            + WardScope::ALL.len()
+            + AttestationKind::ALL.len()
+            + DrillLevel::ALL.len()
+            + NavIntent::ALL.len();
         assert_eq!(rows.len(), expected);
+    }
+
+    /// Every axis emitted through `closed_catalog!` uses a `kebab-case`
+    /// serde repr, so its `label()` IS its wire name — which is what lets a
+    /// value be authored in Lisp by the same spelling the catalog reports.
+    ///
+    /// The four hand-written `types.rs` axes are excluded on purpose:
+    /// `ViewKind`'s wire form is PascalCase (`ResourceTable`) while its label
+    /// is kebab (`resource-table`), which is the one real obstacle recorded
+    /// under `pending-banken: closed-catalog-macro-backfill`. Asserting the
+    /// property where it holds, and naming where it does not, is the honest
+    /// shape.
+    #[test]
+    fn labels_are_the_wire_names_for_every_macro_emitted_axis() {
+        fn check<T: Copy + serde::Serialize>(all: &[T], label: impl Fn(T) -> &'static str) {
+            for v in all {
+                let wire = serde_json::to_string(v).expect("serializes");
+                let mut expected = String::from("\"");
+                expected.push_str(label(*v));
+                expected.push('"');
+                assert_eq!(wire, expected, "label and serde wire name must agree");
+            }
+        }
+        check(Severity::ALL, Severity::label);
+        check(EvidenceKind::ALL, EvidenceKind::label);
+        check(RemedyKind::ALL, RemedyKind::label);
+        check(Verdict::ALL, Verdict::label);
+        check(BandDimension::ALL, BandDimension::label);
+        check(LaneSignalKind::ALL, LaneSignalKind::label);
+        check(WardScope::ALL, WardScope::label);
+        check(AttestationKind::ALL, AttestationKind::label);
+        check(DrillLevel::ALL, DrillLevel::label);
+        check(NavIntent::ALL, NavIntent::label);
+    }
+
+    /// `DeclareTargetKind` is the one *hand-written* axis that now must also
+    /// satisfy label==wire, because `(defpathology)`'s `:remedy (:kind
+    /// declare :rail …)` authors a rail by that spelling. Pinned separately
+    /// so removing its `rename_all` is a red test rather than an
+    /// un-authorable remedy discovered later.
+    #[test]
+    fn declare_target_kind_label_is_the_wire_name() {
+        for k in DeclareTargetKind::ALL {
+            let wire = serde_json::to_string(k).expect("serializes");
+            let mut expected = String::from("\"");
+            expected.push_str(k.label());
+            expected.push('"');
+            assert_eq!(wire, expected);
+        }
     }
 
     /// The load-bearing negative: `DeclareTarget` has no `Kubectl`/`Apply`
