@@ -35,10 +35,12 @@
 
   ;; The downstream-consumable typed surfaces.
   ;;
-  ;; banken-spec — the postigo action-legality border + the
-  ;; (defk8sview)/(defk8saction) domains + the apply<E: ClusterEnv>
-  ;; interpreter + the awase ActionChord/BindingMap layer. A consumer that
-  ;; wants the legality gate without the TUI depends on this alone.
+  ;; banken-spec — the postigo action-legality border + the SIX authored
+  ;; domains ((defk8sview) (defk8saction) (defpathology) (defward) (defdrill)
+  ;; (defnavkey)) + the apply<E: ClusterEnv> interpreter + the WardVerdict
+  ;; health evaluator + the cross-resolving Catalog + the awase
+  ;; ActionChord/BindingMap layer. A consumer that wants the legality gate or
+  ;; the pathology taxonomy without the TUI depends on this alone.
   ;;
   ;; banken-config — the ONE config surface: (defbanken) + shikumi
   ;; TieredConfig + the ishou FleetThemedConfig derivation. Separate from
