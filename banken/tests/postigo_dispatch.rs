@@ -19,11 +19,12 @@ use banken::fixture::FixtureClusterEnv;
 use banken_spec::types::OperatorId;
 
 fn app() -> BankenApp<FixtureClusterEnv> {
-    BankenApp::new(
+    BankenApp::try_new(
         FixtureClusterEnv::new(),
         OperatorId("drzzln".into()),
         "source: fixture",
     )
+    .expect("the shipped vocabulary must build an app")
 }
 
 /// Selecting a row + the `s` key produces a DECLARE Outcome whose

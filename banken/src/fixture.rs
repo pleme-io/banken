@@ -50,11 +50,17 @@ fn fixture_pods() -> Vec<Row> {
     let mk = |name: &str, ready: &str, status: &str, restarts: &str, age: &str| Row {
         name: name.into(),
         namespace: Some("catch".into()),
+        // Keyed by the AUTHORED `(defk8sview "pods")` `:field` values
+        // (`ready`/`phase`/`restarts`/`age`), not by the header text. The
+        // authored field is the join key; keying by header made the authored
+        // `:field` decorative and a typo in it invisible. `name` is the
+        // reserved identity field and is never a cell
+        // (`banken::table::IDENTITY_FIELD`).
         cells: vec![
-            ("READY".into(), ready.into()),
-            ("STATUS".into(), status.into()),
-            ("RESTARTS".into(), restarts.into()),
-            ("AGE".into(), age.into()),
+            ("ready".into(), ready.into()),
+            ("phase".into(), status.into()),
+            ("restarts".into(), restarts.into()),
+            ("age".into(), age.into()),
         ],
     };
     vec![
@@ -186,7 +192,7 @@ mod tests {
             .filter_map(|p| {
                 p.cells
                     .iter()
-                    .find(|(k, _)| k == "STATUS")
+                    .find(|(k, _)| k == "phase")
                     .map(|(_, v)| v.as_str())
             })
             .collect();

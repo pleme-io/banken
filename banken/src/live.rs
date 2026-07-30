@@ -89,8 +89,9 @@ impl KubeClusterEnv {
     }
 }
 
-/// Project a `k8s_openapi` Pod into a banken [`Row`] with the canonical
-/// `:pods` columns (READY / STATUS / RESTARTS / AGE). Read-only projection.
+/// Project a `k8s_openapi` Pod into a banken [`Row`] keyed by the authored
+/// `(defk8sview "pods")` fields (`ready`/`phase`/`restarts`/`age`, rendered
+/// under the headers READY/STATUS/RESTARTS/AGE). Read-only projection.
 fn pod_to_row(pod: Pod) -> Row {
     let name = pod.metadata.name.clone().unwrap_or_default();
     let namespace = pod.metadata.namespace.clone();
@@ -136,13 +137,15 @@ fn pod_to_row(pod: Pod) -> Row {
     Row {
         name,
         namespace,
+        // Keyed by the AUTHORED `(defk8sview "pods")` `:field` values, same
+        // as the fixture reader — see `banken::table::Column::field`.
         cells: vec![
-            ("READY".into(), ready_cell),
-            ("STATUS".into(), display_status),
-            ("RESTARTS".into(), restarts.to_string()),
+            ("ready".into(), ready_cell),
+            ("phase".into(), display_status),
+            ("restarts".into(), restarts.to_string()),
             // AGE derivation from creation_timestamp is a follow-up
             // (needs a clock); shown as "-" rather than a wrong value.
-            ("AGE".into(), "-".into()),
+            ("age".into(), "-".into()),
         ],
     }
 }
@@ -285,9 +288,9 @@ mod tests {
                 .find(|(kk, _)| kk == k)
                 .map(|(_, v)| v.as_str())
         };
-        assert_eq!(get("READY"), Some("1/1"));
-        assert_eq!(get("STATUS"), Some("Running"));
-        assert_eq!(get("RESTARTS"), Some("3"));
+        assert_eq!(get("ready"), Some("1/1"));
+        assert_eq!(get("phase"), Some("Running"));
+        assert_eq!(get("restarts"), Some("3"));
     }
 
     #[test]
@@ -301,7 +304,7 @@ mod tests {
         let status = row
             .cells
             .iter()
-            .find(|(k, _)| k == "STATUS")
+            .find(|(k, _)| k == "phase")
             .map(|(_, v)| v.as_str());
         assert_eq!(
             status,
@@ -311,7 +314,7 @@ mod tests {
         let ready = row
             .cells
             .iter()
-            .find(|(k, _)| k == "READY")
+            .find(|(k, _)| k == "ready")
             .map(|(_, v)| v.as_str());
         assert_eq!(ready, Some("0/1"));
     }

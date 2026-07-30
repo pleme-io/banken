@@ -167,7 +167,13 @@ fn draw_row_cells(
                 colorize_status,
             } => {
                 let v = table.cell_value(row, col).to_string();
-                let s = if *colorize_status && col.field == "STATUS" {
+                // Keyed on the HEADER, not the field: the header is the
+                // operator-facing name and is stable across readers, while
+                // the field is the reader's join key. `pending-banken:
+                // column-render-hints` — the destination is a typed
+                // `:colorize` hint on the authored `ColumnSpec` so a magic
+                // header string is not the selector at all.
+                let s = if *colorize_status && col.header == "STATUS" {
                     status_style(&v, base)
                 } else {
                     base
@@ -207,10 +213,10 @@ mod tests {
             name: name.into(),
             namespace: Some("catch".into()),
             cells: vec![
-                ("READY".into(), "1/1".into()),
-                ("STATUS".into(), status.into()),
-                ("RESTARTS".into(), "0".into()),
-                ("AGE".into(), "5m".into()),
+                ("ready".into(), "1/1".into()),
+                ("phase".into(), status.into()),
+                ("restarts".into(), "0".into()),
+                ("age".into(), "5m".into()),
             ],
         }
     }

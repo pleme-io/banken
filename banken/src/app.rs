@@ -24,8 +24,11 @@
 use std::time::Instant;
 
 use awase::repeat_gate::KeyRepeatGate;
+use banken_spec::chord::ActionChord;
 use banken_spec::env::ClusterEnv;
+use banken_spec::nav::NavIntent;
 use banken_spec::types::{OperatorId, ResourceKind};
+use banken_spec::{Catalog, SpecError};
 use egaku_term::crossterm::style::Color;
 use egaku_term::{
     __re::{KeyCombo, KeyMap},
@@ -108,32 +111,75 @@ pub struct BankenApp<E: ClusterEnv> {
     /// A short label describing where the pod rows came from (fixture vs
     /// live), rendered in the status line — tier-honesty in the UI itself.
     source_label: String,
+    /// The key legend drawn in the status line, DERIVED from the authored
+    /// catalog by [`key_legend`].
+    ///
+    /// It used to be the literal `"l:OBSERVE  s:DECLARE  S:BREAK-GLASS …"` —
+    /// which already disagreed with reality, advertising `S` for a chord the
+    /// runtime binds as `shift+s`. The legend is the one surface that *tells
+    /// the operator which gate a keystroke crosses*, so it being a hand-written
+    /// string was the highest-consequence hand-list in the app.
+    legend: String,
 }
 
 impl<E: ClusterEnv> BankenApp<E> {
-    /// Build the app over a cluster env, performing the initial OBSERVE
-    /// read of the pod table.
+    /// Build the app over a cluster env, loading the authored vocabulary and
+    /// performing the initial OBSERVE read of the pod table.
+    ///
+    /// **Fallible on purpose.** The keymap and the table columns now come
+    /// from `banken_spec::load_catalog()`, and a spec-load or cross-resolution
+    /// failure must SURFACE — falling back to hardcoded chords would be the
+    /// silent-wrong-behaviour class this repo refuses (and would put the
+    /// operator on a keyboard the authored legend does not describe).
     ///
     /// # Errors
     ///
-    /// Propagates a `SpecError` if the initial `list_resources` read fails.
-    pub fn new(env: E, operator: OperatorId, source_label: impl Into<String>) -> Self {
+    /// - Any `SpecError` from `load_catalog()` (a spec file that fails to
+    ///   compile, or a cross-reference that does not resolve).
+    /// - [`SpecError::Binding`] when an authored chord has no egaku-term
+    ///   projection.
+    pub fn try_new(
+        env: E,
+        operator: OperatorId,
+        source_label: impl Into<String>,
+    ) -> Result<Self, SpecError> {
+        let catalog = banken_spec::load_catalog()?;
+        Self::with_catalog(env, operator, source_label, &catalog)
+    }
+
+    /// [`Self::try_new`] over an explicit catalog — the seam a test or a
+    /// consumer reading a custom `spec_dir` uses.
+    ///
+    /// # Errors
+    ///
+    /// [`SpecError::Binding`] when an authored chord has no egaku-term
+    /// projection, or when the app's dispatch table names an action the
+    /// catalog does not declare.
+    pub fn with_catalog(
+        env: E,
+        operator: OperatorId,
+        source_label: impl Into<String>,
+        catalog: &Catalog,
+    ) -> Result<Self, SpecError> {
+        let keys = keymap_from_catalog(catalog)?;
         // Initial read. A read failure yields an empty table (the app still
         // runs and shows "0 pods"); the read is retried on the next
-        // refresh. Never a panic on a read error.
+        // refresh. Never a panic on a read error. A *spec* failure is
+        // different in kind and is propagated above, not defaulted away.
         let rows = env
             .list_resources(ResourceKind::Pod, None)
             .unwrap_or_default();
-        Self {
+        Ok(Self {
             env,
             operator,
-            table: PodTable::pods(rows),
+            table: PodTable::from_view(catalog, "pods", rows)?,
             panel: Panel::Table,
-            keys: default_keymap(),
+            keys,
             repeat_gate: KeyRepeatGate::new(),
             done: false,
             source_label: source_label.into(),
-        }
+            legend: key_legend(catalog),
+        })
     }
 
     /// Re-read the pod table from the env (the poll refresh). Preserves the
@@ -265,8 +311,10 @@ impl<E: ClusterEnv> BankenApp<E> {
         left.push_str(&sort_label(&self.table));
         buf.set_stringn(0, y, &left, width, bar);
 
-        // Right: the key legend (the postigo chords).
-        let legend = "l:OBSERVE  s:DECLARE  S:BREAK-GLASS  o:sort  q:quit";
+        // Right: the key legend, DERIVED from the authored catalog at
+        // construction (see `key_legend`) — never a hand-written string that
+        // can advertise a chord the runtime does not bind.
+        let legend = &self.legend;
         let legend_w = u16::try_from(legend.chars().count()).unwrap_or(0);
         if legend_w < width {
             buf.set_stringn(width - legend_w, y, legend, legend_w, bar);
@@ -383,22 +431,161 @@ fn overlay_content(result: &ActionResult) -> (String, Style, Vec<String>) {
     }
 }
 
-/// The default keymap — the postigo chords (BANKEN.md §III.b / §VIII: the
-/// muscle-memory chords transfer from k9s).
-fn default_keymap() -> KeyMap<Action> {
+/// The local-UI intent a `(defnavkey)` carries, projected onto the app's
+/// [`Action`] enum.
+///
+/// Exhaustive on purpose: adding a [`NavIntent`] variant is a compile error
+/// here until it is handled, so an authored intent the app silently ignores —
+/// a dead key — is unrepresentable.
+impl From<NavIntent> for Action {
+    fn from(intent: NavIntent) -> Self {
+        match intent {
+            NavIntent::SelectNext => Action::SelectNext,
+            NavIntent::SelectPrev => Action::SelectPrev,
+            NavIntent::ToggleSort => Action::ToggleSort,
+            NavIntent::Dismiss => Action::Dismiss,
+            NavIntent::Quit => Action::Quit,
+        }
+    }
+}
+
+/// The postigo action names the app can dispatch, and the [`Action`] each
+/// maps to.
+///
+/// This is the ONE remaining hand-written join between the authored catalog
+/// and the app, and it is irreducible: a `(defk8saction)` name is a string in
+/// a spec file and an `Action` is a Rust variant, so something must relate
+/// them. What [`keymap_from_catalog`] guarantees is that the relation is
+/// *total in both directions* — an authored action with no row here, or a row
+/// here naming an action the catalog does not declare, is an error rather
+/// than a chord that silently does nothing.
+const DISPATCHABLE_ACTIONS: &[(&str, Action)] = &[
+    ("view-logs", Action::ObserveLogs),
+    ("scale", Action::DeclareScale),
+    ("shell", Action::BreakGlass),
+    // `describe` is authored OBSERVE but the app has no describe panel yet —
+    // it is deliberately absent, and `keymap_from_catalog` reports it as
+    // UNBOUND rather than pretending the chord works.
+];
+
+/// Build the app keymap from the authored vocabulary.
+///
+/// Closes `pending-banken: keymap-derived-from-catalog`. Both keyed domains
+/// come from the [`Catalog`], which means:
+///
+/// - the nav chords and the postigo chords have already been conflict-checked
+///   against ONE namespace by `Catalog::resolve` (they used to be two
+///   unchecked `km.bind` sequences whose collision resolved by bind order),
+///   and
+/// - re-spelling a chord in `specs/actions.lisp` or `specs/navkeys.lisp`
+///   moves the runtime binding, with no Rust edit.
+///
+/// # Errors
+///
+/// - [`SpecError::Binding`] when an authored chord has no egaku-term
+///   projection (see [`crate::keys::chord_to_combo`]) — a refusal, never a
+///   guessed mapping.
+/// - [`SpecError::Binding`] when a [`DISPATCHABLE_ACTIONS`] row names an
+///   action the catalog does not declare (the hand-list drifted ahead of the
+///   spec).
+pub fn keymap_from_catalog(catalog: &Catalog) -> Result<KeyMap<Action>, SpecError> {
     let mut km = KeyMap::new();
-    km.bind(KeyCombo::key("down"), Action::SelectNext);
-    km.bind(KeyCombo::key("j"), Action::SelectNext);
-    km.bind(KeyCombo::key("up"), Action::SelectPrev);
-    km.bind(KeyCombo::key("k"), Action::SelectPrev);
-    km.bind(KeyCombo::key("o"), Action::ToggleSort);
-    km.bind(KeyCombo::key("l"), Action::ObserveLogs);
-    km.bind(KeyCombo::key("s"), Action::DeclareScale);
-    // Uppercase S arrives as shift+s (event.rs lowercases + adds shift).
-    km.bind(KeyCombo::new("s", vec!["shift".into()]), Action::BreakGlass);
-    km.bind(KeyCombo::key("esc"), Action::Dismiss);
-    km.bind(KeyCombo::key("q"), Action::Quit);
-    km
+
+    // Navigation — the intent projection is exhaustive, so every authored
+    // nav key binds.
+    for nav in catalog.nav_keys() {
+        let combo = project(nav.keys, &nav.name)?;
+        km.bind(combo, Action::from(nav.intent));
+    }
+
+    // postigo — only the actions the app can actually dispatch.
+    for (name, action) in DISPATCHABLE_ACTIONS {
+        let spec = catalog
+            .actions()
+            .iter()
+            .find(|a| a.name == *name)
+            .ok_or_else(|| {
+                let mut m = String::from("the app binds action `");
+                m.push_str(name);
+                m.push_str(
+                    "` but no (defk8saction) declares it — DISPATCHABLE_ACTIONS \
+                     drifted ahead of specs/actions.lisp",
+                );
+                SpecError::Binding(m)
+            })?;
+        let combo = project(spec.keys, &spec.name)?;
+        km.bind(combo, *action);
+    }
+
+    Ok(km)
+}
+
+/// Project an authored chord onto the delivered combo, or refuse by name.
+fn project(chord: ActionChord, owner: &str) -> Result<KeyCombo, SpecError> {
+    crate::keys::chord_to_combo(chord).ok_or_else(|| {
+        let mut m = String::from("authored chord `");
+        m.push_str(&chord.canonical());
+        m.push_str("` on `");
+        m.push_str(owner);
+        m.push_str(
+            "` has no egaku-term projection — the awase and egaku-term key \
+             vocabularies diverge on it and banken refuses to guess a mapping \
+             (see banken::keys)",
+        );
+        SpecError::Binding(m)
+    })
+}
+
+/// Build the status-line key legend from the authored catalog.
+///
+/// Each postigo entry is `<authored chord>:<LEGALITY CLASS>`, so the legend
+/// states which gate the keystroke crosses using the *authored* chord and the
+/// *typed* class — the two things a hand-written legend can get wrong. The two
+/// navigation hints are looked up by [`NavIntent`], not by chord, so re-binding
+/// `o` or `q` in `specs/navkeys.lisp` moves the legend with them.
+///
+/// Typed emission: assembled by concatenation from typed pieces
+/// ([`ActionChord::canonical`], [`banken_spec::types::LegalityClass::label`]),
+/// never a `format!()` of a layout template.
+#[must_use]
+pub fn key_legend(catalog: &Catalog) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    for (name, _) in DISPATCHABLE_ACTIONS {
+        if let Some(spec) = catalog.actions().iter().find(|a| a.name == *name) {
+            let mut p = spec.keys.canonical();
+            p.push(':');
+            p.push_str(&spec.legality.class().label().to_uppercase());
+            parts.push(p);
+        }
+    }
+
+    for (intent, label) in [(NavIntent::ToggleSort, "sort"), (NavIntent::Quit, "quit")] {
+        if let Some(nav) = catalog.nav_keys().iter().find(|n| n.intent == intent) {
+            let mut p = nav.keys.canonical();
+            p.push(':');
+            p.push_str(label);
+            parts.push(p);
+        }
+    }
+
+    parts.join("  ")
+}
+
+/// The postigo action names the authored catalog declares but the app cannot
+/// dispatch yet.
+///
+/// Surfaced as data rather than silence: an authored chord with no app
+/// handler is a key the legend implies and nothing performs, and a test pins
+/// the current set so growing it is deliberate.
+#[must_use]
+pub fn unbound_action_names(catalog: &Catalog) -> Vec<String> {
+    catalog
+        .actions()
+        .iter()
+        .filter(|a| !DISPATCHABLE_ACTIONS.iter().any(|(n, _)| *n == a.name))
+        .map(|a| a.name.clone())
+        .collect()
 }
 
 // `AsyncApp::draw` takes `&self` and returns `impl Future + Send`, so the
@@ -437,11 +624,12 @@ mod tests {
     use crate::fixture::FixtureClusterEnv;
 
     fn app() -> BankenApp<FixtureClusterEnv> {
-        BankenApp::new(
+        BankenApp::try_new(
             FixtureClusterEnv::new(),
             OperatorId("drzzln".into()),
             "source: fixture",
         )
+        .expect("the shipped vocabulary must build an app")
     }
 
     #[test]

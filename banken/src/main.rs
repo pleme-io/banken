@@ -56,11 +56,15 @@ fn main() {
 
 /// Run the navigator over the fixture source (the proven path).
 async fn run_fixture(operator: OperatorId) -> Result<(), String> {
-    let mut app = BankenApp::new(
+    // Fallible: the keymap and the table columns come from the authored
+    // vocabulary, and a spec failure must SURFACE rather than fall back to
+    // hardcoded chords the legend does not describe.
+    let mut app = BankenApp::try_new(
         FixtureClusterEnv::new(),
         operator,
         "source: fixture (no cluster reachable this session)",
-    );
+    )
+    .map_err(|e| e.to_string())?;
     egaku_term::run_async(&mut app)
         .await
         .map_err(|e| e.to_string())
@@ -76,7 +80,8 @@ async fn run_live(operator: OperatorId) -> Result<(), String> {
     let env = KubeClusterEnv::connect()
         .await
         .map_err(|e| format!("live connect failed (VPN/kubeconfig?): {e}"))?;
-    let mut app = BankenApp::new(env, operator, "source: LIVE (current kubeconfig context)");
+    let mut app = BankenApp::try_new(env, operator, "source: LIVE (current kubeconfig context)")
+        .map_err(|e| e.to_string())?;
     egaku_term::run_async(&mut app)
         .await
         .map_err(|e| e.to_string())
@@ -108,12 +113,36 @@ fn print_usage() {
     println!("  --live           read from the live cluster (requires --features live)");
     println!("  -h, --help       print this help");
     println!();
-    println!("KEYS (in the :pods table):");
-    println!("  down/j up/k      move the selection");
-    println!("  o                cycle the sort direction");
-    println!("  l                OBSERVE  — read the selected pod's logs");
-    println!("  s                DECLARE  — full-manifest GitOps change preview");
-    println!("  S                BREAK-GLASS — witnessed record preview (not executed)");
-    println!("  esc              dismiss an action overlay");
-    println!("  q                quit");
+    println!("KEYS (in the :pods table) — read from the authored vocabulary:");
+    match banken_spec::load_catalog() {
+        Ok(catalog) => {
+            // The nav keys, grouped by intent so `down`/`j` read as one row.
+            for intent in banken_spec::nav::NavIntent::ALL {
+                let chords: Vec<String> = catalog
+                    .nav_keys()
+                    .iter()
+                    .filter(|n| n.intent == *intent)
+                    .map(|n| n.keys.canonical())
+                    .collect();
+                if !chords.is_empty() {
+                    println!("  {:<16} {}", chords.join(" / "), intent.label());
+                }
+            }
+            // The postigo actions, each with the gate its keystroke crosses.
+            for a in catalog.actions() {
+                let unbound = banken::app::unbound_action_names(&catalog).contains(&a.name);
+                let note = if unbound { "  (not wired yet)" } else { "" };
+                println!(
+                    "  {:<16} {} — {}{}",
+                    a.keys.canonical(),
+                    a.legality.class().label().to_uppercase(),
+                    a.name,
+                    note,
+                );
+            }
+        }
+        // Honest: if the vocabulary does not load, say so rather than print a
+        // hand-written key list that might not match what would have run.
+        Err(e) => println!("  <the authored vocabulary failed to load: {e}>"),
+    }
 }

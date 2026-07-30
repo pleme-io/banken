@@ -126,11 +126,12 @@ fn status_cells_are_pathology_colored() {
 /// line — proving the runtime's draw path, not just the bare table drawer.
 #[test]
 fn app_frame_renders_title_table_and_status_line() {
-    let app = BankenApp::new(
+    let app = BankenApp::try_new(
         FixtureClusterEnv::new(),
         OperatorId("drzzln".into()),
         "source: fixture",
-    );
+    )
+    .expect("the shipped vocabulary must build an app");
     let mut backend = TestBackend::new(80, 16);
     backend.draw(|buf| app.render(buf));
     let lines = backend.to_lines();
