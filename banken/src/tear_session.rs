@@ -74,11 +74,11 @@
 
 use std::cell::RefCell;
 
-use banken_spec::env::WitnessedAction;
-use banken_spec::error::SpecError;
 use banken_spec::bancada::{
     MutatingCommand, ObservedCommand, PanePlacement, PaneRef, SessionEnv, SessionLayout,
 };
+use banken_spec::env::WitnessedAction;
+use banken_spec::error::SpecError;
 use tear_types::control::MultiplexerControl;
 use tear_types::direction::Direction;
 use tear_types::id::{PaneId, SessionId};

@@ -42,10 +42,10 @@
 use std::collections::BTreeSet;
 
 use crate::{
+    bancada::BancadaSpec,
     bindings::build_binding_map,
     drill::DrillSpec,
     error::SpecError,
-    bancada::BancadaSpec,
     nav::NavKeySpec,
     pathology::PathologySpec,
     types::{K8sActionSpec, K8sViewSpec, ViewKind},
@@ -396,7 +396,7 @@ mod tests {
 
     fn bancada(name: &str, keys: &str, from: &str) -> crate::bancada::BancadaSpec {
         use crate::bancada::{
-            CommandArg, CommandEffect, BancadaPane, BancadaSpec, PanePlacement, PaneRole,
+            BancadaPane, BancadaSpec, CommandArg, CommandEffect, PanePlacement, PaneRole,
             SessionLayout, StagedCommand,
         };
         BancadaSpec {

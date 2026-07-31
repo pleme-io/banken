@@ -15,14 +15,14 @@
 use std::cell::RefCell;
 
 use crate::{
+    bancada::{
+        MutatingCommand, ObservedCommand, PanePlacement, PaneRef, SessionEnv, SessionLayout,
+    },
     env::{
         ChangeRef, ClusterEnv, DeclareChange, DepTree, Event, GlassRecord, HealthReading,
         LogStream, ResourceRef, Row, WatchStream, WitnessedAction, Workload,
     },
     error::SpecError,
-    bancada::{
-        MutatingCommand, ObservedCommand, PanePlacement, PaneRef, SessionEnv, SessionLayout,
-    },
     types::ResourceKind,
 };
 

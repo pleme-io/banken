@@ -32,6 +32,11 @@
 //!   `pending-banken: promote-tableview-to-egaku`.
 //! - [`render`] — the `:pods` cell drawer over egaku-term's typed `Buffer`.
 //!   `pending-banken: promote-tableview-to-egaku`.
+//! - [`cli`] — the typed argv surface. `--live` **requires** an explicit
+//!   `--context <name>`: riding the kubeconfig's `current-context` reads
+//!   whichever estate the merged `KUBECONFIG` points at, which is the
+//!   wrong-cluster class one layer above the one
+//!   [`banken_spec::bancada`] already refuses.
 //! - [`fixture`] — `FixtureClusterEnv`, the default OBSERVE source.
 //! - [`action`] — the postigo dispatch (consumes `banken_spec::apply`).
 //! - [`app`] — the `BankenApp` runtime (`egaku_term::AsyncApp`).
@@ -64,6 +69,7 @@
 
 pub mod action;
 pub mod app;
+pub mod cli;
 pub mod fixture;
 pub mod keys;
 pub mod render;

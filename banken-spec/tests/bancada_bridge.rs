@@ -15,9 +15,9 @@
 //! machine.
 
 use banken_spec::{
-    bancada::{CommandEffect, BancadaContext, PanePlacement, PaneRole, SessionLayout, open, plan},
+    bancada::{BancadaContext, CommandEffect, PanePlacement, PaneRole, SessionLayout, open, plan},
     interp::Selection,
-    load_catalog, load_bancadas,
+    load_bancadas, load_catalog,
     testing::MockSessionEnv,
     types::{ActionLegality, LegalityClass, ResourceKind},
 };

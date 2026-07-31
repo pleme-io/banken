@@ -24,9 +24,9 @@
 //! This module adds zero new legality — it consumes the shipped gate.
 
 use awase::Key;
+use banken_spec::bancada::{BancadaContext, BancadaSpec, PlannedPane};
 use banken_spec::chord::ActionChord;
 use banken_spec::env::ClusterEnv;
-use banken_spec::bancada::{BancadaContext, BancadaSpec, PlannedPane};
 use banken_spec::interp::{Outcome, Selection, apply};
 use banken_spec::types::{
     ActionLegality, DeclareTarget, K8sActionSpec, ManifestScope, OperatorId, RunbookRef,

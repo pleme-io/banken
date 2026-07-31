@@ -33,7 +33,35 @@ use banken_spec::types::ResourceKind;
 
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::ListParams;
-use kube::{Api, Client};
+use kube::config::{KubeConfigOptions, Kubeconfig};
+use kube::{Api, Client, Config};
+
+/// The kubeconfig's `current-context`, when it can be read.
+///
+/// Exposed so a caller can *name the hazard* in a refusal: the merged
+/// KUBECONFIG on an operator workstation routinely points somewhere other
+/// than the estate they mean to look at, and telling them which context they
+/// would have silently landed on is what turns a refusal into a one-keystroke
+/// fix.
+#[must_use]
+pub fn kubeconfig_current_context() -> Option<String> {
+    Kubeconfig::read()
+        .ok()
+        .and_then(|kc| kc.current_context)
+        .filter(|c| !c.is_empty())
+}
+
+/// Every context name the kubeconfig declares, in file order.
+///
+/// Empty means the kubeconfig could not be read at all — which is different
+/// from "declares no contexts", and both are honest outcomes to report rather
+/// than defaults to paper over.
+#[must_use]
+pub fn kubeconfig_context_names() -> Vec<String> {
+    Kubeconfig::read()
+        .map(|kc| kc.contexts.into_iter().map(|c| c.name).collect())
+        .unwrap_or_default()
+}
 
 /// A live cluster env reading through the typed `kube` client against the
 /// current kubeconfig context. Constructed async (the client resolves the
@@ -70,14 +98,69 @@ impl KubeClusterEnv {
         // Best-effort, and its absence is meaningful rather than defaulted:
         // an unreadable kubeconfig means banken does not know which cluster
         // it is on, which is exactly when a pre-warmed session must refuse.
-        let context_name = kube::config::Kubeconfig::read()
-            .ok()
-            .and_then(|kc| kc.current_context)
-            .filter(|c| !c.is_empty());
+        //
+        // Note this is READ SEPARATELY from what `try_default` resolved. The
+        // two agree in practice, but nothing here *proves* they do — which is
+        // one more reason [`Self::connect_with_context`] is the path the CLI
+        // takes: there, the name banken reports and the name banken connected
+        // with are the same value.
+        let context_name = kubeconfig_current_context();
         Ok(Self {
             client,
             handle: tokio::runtime::Handle::current(),
             context_name,
+        })
+    }
+
+    /// Build a live env against an **explicitly named** kubeconfig context.
+    ///
+    /// This is the constructor the CLI uses, and the reason it exists is a
+    /// measured hazard rather than a convenience: [`Self::connect`] rides
+    /// `Client::try_default`, which resolves the kubeconfig's
+    /// `current-context` — and on a merged operator KUBECONFIG that is
+    /// routinely a *different estate* than the one the operator means to
+    /// look at. Reading the wrong cluster silently is the same failure class
+    /// [`banken_spec::bancada`] already refuses one layer down (a pane opened
+    /// on "whatever context the shell happens to be on"); it is refused here
+    /// too, by making the caller name the context.
+    ///
+    /// The name is carried into [`Self::context_name`] **as the value that
+    /// was connected with**, not re-read from the kubeconfig afterwards — so
+    /// the `(:context cluster)` a `(defbancada)` resolves is the same string
+    /// that selected the apiserver, and the two cannot drift.
+    ///
+    /// # Errors
+    ///
+    /// A `SpecError::Interp { phase: "connect" }` when the kubeconfig cannot
+    /// be read, when it declares no such context, or when the client cannot
+    /// be built from it. A missing context is an error naming what was asked
+    /// for — never a silent fall back to the current one, which would defeat
+    /// the entire point of the flag.
+    pub async fn connect_with_context(context: &str) -> Result<Self, SpecError> {
+        let options = KubeConfigOptions {
+            context: Some(context.to_owned()),
+            ..Default::default()
+        };
+        let config = Config::from_kubeconfig(&options)
+            .await
+            .map_err(|e| SpecError::Interp {
+                phase: "connect".into(),
+                message: {
+                    let mut m = String::from("kubeconfig context `");
+                    m.push_str(context);
+                    m.push_str("`: ");
+                    m.push_str(&e.to_string());
+                    m
+                },
+            })?;
+        let client = Client::try_from(config).map_err(|e| SpecError::Interp {
+            phase: "connect".into(),
+            message: e.to_string(),
+        })?;
+        Ok(Self {
+            client,
+            handle: tokio::runtime::Handle::current(),
+            context_name: Some(context.to_owned()),
         })
     }
 

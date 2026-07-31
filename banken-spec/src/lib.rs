@@ -83,6 +83,7 @@
 //! 2026-07-30 move to canonical `tatara-lisp = "0.3.3"`: 0.3.3 ships
 //! `parse_kwargs` and no strict variant, so the row is still open.
 
+pub mod bancada;
 pub mod bindings;
 pub mod catalog;
 pub mod chord;
@@ -90,7 +91,6 @@ pub mod closed;
 pub mod drill;
 pub mod env;
 pub mod error;
-pub mod bancada;
 pub mod interp;
 pub mod loader;
 pub mod nav;
@@ -104,8 +104,8 @@ pub use error::SpecError;
 pub use resolve::Catalog;
 
 use crate::{
-    drill::DrillSpec,
     bancada::BancadaSpec,
+    drill::DrillSpec,
     nav::NavKeySpec,
     pathology::PathologySpec,
     types::{K8sActionSpec, K8sViewSpec},

@@ -24,8 +24,8 @@
 //! Do not collapse those two into one claim.
 
 use crate::{
-    drill::DrillLevel,
     bancada::{CommandEffect, ContextField, PanePlacement, PaneRole, SessionLayout},
+    drill::DrillLevel,
     nav::NavIntent,
     pathology::{EvidenceKind, RemedyKind, Severity, Verdict},
     types::{DeclareTargetKind, LegalityClass, ResourceKind, ViewKind},
