@@ -192,7 +192,12 @@ fn opening_the_triage_recipe_builds_the_split_session_with_no_witness() {
         ],
         "each split hangs off the pane before it",
     );
-    assert_eq!(env.staged.borrow().len(), 3);
+    assert_eq!(env.spawned.borrow().len(), 3);
+    assert!(
+        env.shells.borrow().is_empty(),
+        "a pure-read recipe spawns every pane as its own argv — no shell, so \
+         nothing is typed at a prompt and nothing needs quoting",
+    );
     assert_eq!(
         env.witnessed_count(),
         0,
@@ -217,9 +222,15 @@ fn opening_the_break_glass_recipe_routes_the_exec_through_the_witnessed_arm() {
     open(&p, &env).expect("opens");
 
     assert_eq!(
-        env.staged.borrow().len(),
+        env.spawned.borrow().len(),
         1,
-        "only the log pane is unwitnessed",
+        "only the log pane is spawned as its own argv",
+    );
+    assert_eq!(
+        env.shells.borrow().len(),
+        1,
+        "the exec pane is a shell, so its command waits for the operator's \
+         own Enter rather than running the moment the pane appears",
     );
     let witnessed = env.witnessed.borrow();
     assert_eq!(witnessed.len(), 1, "the exec pane is the witnessed one");

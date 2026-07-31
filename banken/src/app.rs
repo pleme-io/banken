@@ -1325,20 +1325,20 @@ mod tests {
             sessions[0].0, previewed,
             "and it opens the session the PREVIEW named",
         );
-        // Three panes: one root + two splits, each staged.
+        // Three panes: one root + two splits, each born as its own command.
         assert_eq!(a.session().splits.borrow().len(), 2);
-        assert_eq!(a.session().staged.borrow().len(), 3);
+        assert_eq!(a.session().spawned.borrow().len(), 3);
         assert_eq!(
             a.session().witnessed_count(),
             0,
             "a pure-observe recipe witnesses nothing",
         );
-        // The staged argv is the pre-warmed one, on the cluster banken reads.
-        let staged = a.session().staged.borrow();
+        // The spawned argv is the pre-warmed one, on the cluster banken reads.
+        let spawned = a.session().spawned.borrow();
         assert!(
-            staged[0].1.contains(&"camelot-eks".to_string()),
+            spawned[0].1.contains(&"camelot-eks".to_string()),
             "the first pane targets the cluster banken is reading: {:?}",
-            staged[0].1,
+            spawned[0].1,
         );
 
         // And the overlay flips from preview to opened.

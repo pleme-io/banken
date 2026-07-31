@@ -39,7 +39,7 @@
 use std::sync::Mutex;
 
 use banken_spec::bancada::{
-    MutatingCommand, ObservedCommand, PanePlacement, PaneRef, SessionEnv, SessionLayout,
+    MutatingCommand, PanePlacement, PaneProgram, PaneRef, SessionEnv, SessionLayout,
 };
 use banken_spec::env::WitnessedAction;
 use banken_spec::error::SpecError;
@@ -58,7 +58,7 @@ impl UnwiredSessionEnv {
         Self
     }
 
-    /// The one refusal, so all five methods say the same thing.
+    /// The one refusal, so all four methods say the same thing.
     fn refuse(phase: &'static str) -> SpecError {
         SpecError::Interp {
             phase: phase.into(),
@@ -72,16 +72,22 @@ impl UnwiredSessionEnv {
 }
 
 impl SessionEnv for UnwiredSessionEnv {
-    fn open_session(&self, _name: &str, _layout: SessionLayout) -> Result<PaneRef, SpecError> {
+    fn open_session(
+        &self,
+        _name: &str,
+        _layout: SessionLayout,
+        _program: PaneProgram<'_>,
+    ) -> Result<PaneRef, SpecError> {
         Err(Self::refuse("open-session"))
     }
 
-    fn split(&self, _origin: PaneRef, _placement: PanePlacement) -> Result<PaneRef, SpecError> {
+    fn split(
+        &self,
+        _origin: PaneRef,
+        _placement: PanePlacement,
+        _program: PaneProgram<'_>,
+    ) -> Result<PaneRef, SpecError> {
         Err(Self::refuse("split-pane"))
-    }
-
-    fn stage_observed(&self, _pane: PaneRef, _cmd: &ObservedCommand) -> Result<(), SpecError> {
-        Err(Self::refuse("stage-observed"))
     }
 
     fn stage_witnessed(
@@ -97,7 +103,7 @@ impl SessionEnv for UnwiredSessionEnv {
         Err(Self::refuse("focus-pane"))
     }
 
-    // *** Still no third staging method — this impl adds no arm the trait
+    // *** Still no second staging method — this impl adds no arm the trait
     //     does not declare, which is what `substrate_invariant.rs` guards. ***
 }
 
@@ -160,7 +166,7 @@ impl LazyTearSessionEnv {
 
     /// Run `f` against an adapter that must ALREADY be connected.
     ///
-    /// The four non-opening methods deliberately do not connect on their own:
+    /// The three non-opening methods deliberately do not connect on their own:
     /// `bancada::open` walks the plan's root pane first, so reaching a
     /// split/stage/focus with no session is a malformed plan, and connecting
     /// here would paper over it by opening a session nobody asked for.
@@ -196,16 +202,22 @@ impl LazyTearSessionEnv {
 
 #[cfg(feature = "tear")]
 impl SessionEnv for LazyTearSessionEnv {
-    fn open_session(&self, name: &str, layout: SessionLayout) -> Result<PaneRef, SpecError> {
-        self.with_connected(|e| e.open_session(name, layout))
+    fn open_session(
+        &self,
+        name: &str,
+        layout: SessionLayout,
+        program: PaneProgram<'_>,
+    ) -> Result<PaneRef, SpecError> {
+        self.with_connected(|e| e.open_session(name, layout, program))
     }
 
-    fn split(&self, origin: PaneRef, placement: PanePlacement) -> Result<PaneRef, SpecError> {
-        self.with_established(|e| e.split(origin, placement))
-    }
-
-    fn stage_observed(&self, pane: PaneRef, cmd: &ObservedCommand) -> Result<(), SpecError> {
-        self.with_established(|e| e.stage_observed(pane, cmd))
+    fn split(
+        &self,
+        origin: PaneRef,
+        placement: PanePlacement,
+        program: PaneProgram<'_>,
+    ) -> Result<PaneRef, SpecError> {
+        self.with_established(|e| e.split(origin, placement, program))
     }
 
     fn stage_witnessed(
@@ -233,7 +245,7 @@ mod tests {
     fn the_unwired_env_refuses_rather_than_faking_success() {
         let env = UnwiredSessionEnv::new();
         let err = env
-            .open_session("triage-x", SessionLayout::MainVertical)
+            .open_session("triage-x", SessionLayout::MainVertical, PaneProgram::Shell)
             .expect_err("an unwired env must not report a session it never opened");
         let msg = err.to_string();
         assert!(
@@ -242,7 +254,10 @@ mod tests {
         );
         // And every other arm refuses too — a partial refusal would leave the
         // plan walk half-applied.
-        assert!(env.split(PaneRef(1), PanePlacement::Right).is_err());
+        assert!(
+            env.split(PaneRef(1), PanePlacement::Right, PaneProgram::Shell)
+                .is_err()
+        );
         assert!(env.focus(PaneRef(1)).is_err());
     }
 }

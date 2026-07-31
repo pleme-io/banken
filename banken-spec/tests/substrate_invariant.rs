@@ -47,18 +47,16 @@ const FORBIDDEN_SUBSTRINGS: &[&str] = &[
 ];
 
 /// The whole allowlist of `SessionEnv` method names (the `(defbancada)`
-/// seam). Two of the five are the staging arms, and they are deliberately
-/// asymmetric: `stage_observed` takes an `ObservedCommand`,
+/// seam). Exactly ONE of the four stages anything, and it demands a witness:
 /// `stage_witnessed` takes a `MutatingCommand` **plus** a `WitnessedAction`.
-/// A THIRD staging method would be an unwitnessed path for a mutating
-/// command — the [`ClusterEnv`] re-add case, at the multiplexer seam.
-const ALLOWED_SESSION_METHODS: &[&str] = &[
-    "open_session",
-    "split",
-    "stage_observed",
-    "stage_witnessed",
-    "focus",
-];
+/// A read pane is not staged at all — it is spawned as its own argv through
+/// `PaneProgram::Observe`, whose `ObservedCommand` a mutating pane cannot
+/// produce. A SECOND staging method would be an unwitnessed path for a
+/// mutating command — the [`ClusterEnv`] re-add case, at the multiplexer seam.
+///
+/// This tightened on 2026-07-31: the seam used to carry an unwitnessed
+/// `stage_observed` arm and lean on its argument type. The arm is gone.
+const ALLOWED_SESSION_METHODS: &[&str] = &["open_session", "split", "stage_witnessed", "focus"];
 
 /// Extract the method names declared in a trait body from the given source.
 /// Cheap, dependency-free: find the trait, walk to its matching brace, and
@@ -170,14 +168,14 @@ fn cluster_env_has_no_mutating_verb_method() {
 
 /// The same CI-caught floor at the `(defbancada)` seam.
 ///
-/// `SessionEnv`'s two staging arms take DIFFERENT argument types
-/// (`ObservedCommand` vs `MutatingCommand` + `WitnessedAction`), and those
-/// newtypes are only constructible from a `PlannedPane` of the matching
-/// `CommandEffect` — which is what makes "stage a mutating command
-/// unwitnessed" truly-unrepresentable *within the authored surface*. What
-/// the type system cannot forbid is an author ADDING a third, permissive
-/// staging method. Same honest tier as the `ClusterEnv` guard above:
-/// **only-mitigated → CI-caught.**
+/// `SessionEnv` has ONE staging arm and it requires a `MutatingCommand` + a
+/// `WitnessedAction`; a read pane reaches a pane through `PaneProgram::Observe`
+/// instead, carrying an `ObservedCommand`. Both newtypes are only constructible
+/// from a `PlannedPane` of the matching `CommandEffect` — which is what makes
+/// "stage a mutating command unwitnessed" truly-unrepresentable *within the
+/// authored surface*. What the type system cannot forbid is an author ADDING a
+/// second, permissive staging method. Same honest tier as the `ClusterEnv`
+/// guard above: **only-mitigated → CI-caught.**
 #[test]
 fn session_env_exposes_only_allowlisted_methods() {
     let src = read_source("src/bancada.rs");
@@ -191,9 +189,10 @@ fn session_env_exposes_only_allowlisted_methods() {
             ALLOWED_SESSION_METHODS.contains(&m.as_str()),
             "SessionEnv declares method `{m}` which is NOT on the sanctioned \
              allowlist. If it stages a command, note that the WITNESS split is \
-             structural: `stage_observed` takes an ObservedCommand and \
-             `stage_witnessed` takes a MutatingCommand + a WitnessedAction. A \
-             third staging arm is an unwitnessed path for a live effect.",
+             structural: there is exactly ONE staging arm and it takes a \
+             MutatingCommand + a WitnessedAction; a read pane is spawned via \
+             PaneProgram::Observe, never staged. A second staging arm is an \
+             unwitnessed path for a live effect.",
         );
     }
     for allowed in ALLOWED_SESSION_METHODS {
@@ -202,10 +201,13 @@ fn session_env_exposes_only_allowlisted_methods() {
             "allowlisted method `{allowed}` is missing from the SessionEnv trait",
         );
     }
-    // And exactly two staging arms — no more, no fewer.
+    // And exactly ONE staging arm — the witnessed one.
+    let staging: Vec<&String> = methods.iter().filter(|m| m.starts_with("stage")).collect();
     assert_eq!(
-        methods.iter().filter(|m| m.starts_with("stage")).count(),
-        2,
-        "SessionEnv must have exactly two staging arms (observed / witnessed)",
+        staging.as_slice(),
+        &[&"stage_witnessed".to_string()],
+        "SessionEnv must have exactly one staging arm, and it must be the \
+         witnessed one — an unwitnessed staging method is a live-effect path \
+         with no witness on it",
     );
 }

@@ -16,46 +16,59 @@
 //! |---|---|
 //! | `open_session` | `new_session_with_source_and_size` + `apply_layout` |
 //! | `split` | `split_pane` (`PanePlacement` → `Direction`) |
-//! | `stage_observed` / `stage_witnessed` | `send_keys` |
+//! | `PaneProgram::Observe` | the `shell` + `args` those two spawn |
+//! | `stage_witnessed` | `send_keys` |
 //! | `focus` | `select_pane` |
 //!
 //! Sessions are tagged `SessionSource::Named("banken-bancada")`, so
 //! `tear list --source` shows at a glance which sessions banken opened.
 //!
-//! # THE UPSTREAM LIMITATION, stated rather than worked around
+//! # `pending-banken: tear-argv-spawn` — CLOSED (2026-07-31), for READS
 //!
-//! `MultiplexerControl` spawns a pane's program with **no arguments**:
-//! `tear-core/src/inproc.rs:667` calls `PtyHandle::spawn(shell, &[], …)`, and
-//! `new_session*` / `split_pane` take only `shell: &str`. `PtyHandle::spawn`
-//! itself takes a real `args: &[String]` (`tear-core/src/pty.rs:68`) — the
-//! argv is dropped one layer above it.
+//! The limitation this module used to document is gone. tear `5974375` threaded
+//! `args: &[String]` through `MultiplexerControl::new_session_with_source_and_size`
+//! / `split_pane` / `new_window` to the `PtyHandle::spawn` that had accepted one
+//! since it was written. So a read pane is now **spawned as its own argv**:
+//! `program_of` splits a [`PaneProgram::Observe`]'s argv into `(argv[0],
+//! argv[1..])` and hands it straight to tear, which hands it to `execvp` as a
+//! vector.
 //!
-//! So a pre-warmed pane cannot be *spawned* as `kubectl logs -f <pod>` today.
-//! It spawns the operator's shell and the argv is **typed into it** via
-//! `send_keys`. That is the honest mechanism, and it has a sharp edge: typing
-//! an argv at a shell prompt is where argv-vs-shell-string safety lives.
+//! **The refusal-to-quote therefore does not apply to a read pane at all** —
+//! not because it was relaxed, but because there is no shell in the path to
+//! quote for. An argument like `-o jsonpath={.status.phase}`, which
+//! [`stageable`] rejects on sight, now reaches a pane unaltered.
 //!
-//! **This adapter refuses to quote.** [`stageable`] rejects any argv word
-//! containing whitespace or a shell metacharacter, with a typed error naming
-//! the word. It does not escape it, does not wrap it in quotes, and does not
-//! "handle" it — because a quoting function IS a shell-string builder, and the
-//! whole claim of [`banken_spec::bancada`] is that a staged command is a typed
-//! argv. An argv that cannot be typed safely has no path to a pane.
+//! # `pending-banken: tear-argv-witnessed-arm` — the half that CANNOT convert
 //!
-//! The load-bearing fix is upstream: thread `args: &[String]` through
-//! `MultiplexerControl::new_session*` / `split_pane` to the `PtyHandle::spawn`
-//! that already accepts it, and this module collapses to a direct spawn with
-//! no typing and no refusal. `pending-banken: tear-argv-spawn` — the row lives
-//! here because banken must not edit tear from this repo.
+//! A spawned program **runs immediately**, and that is exactly what a mutating
+//! pane must not do. [`SessionEnv::stage_witnessed`] types its argv **without a
+//! newline** on purpose: the live-effect command sits typed and ready, and the
+//! operator's own Enter is the final act. banken records the witness; the human
+//! still takes the step. Spawning it would delete that step silently, which is
+//! a worse outcome than any quoting inconvenience.
 //!
-//! # The witnessed arm does NOT press Enter
+//! So the witnessed arm still types, and therefore **still refuses to quote**.
+//! [`stageable`] rejects any argv word containing whitespace or a shell
+//! metacharacter, with a typed error naming the word. It does not escape it,
+//! does not wrap it in quotes, and does not "handle" it — a quoting function IS
+//! a shell-string builder, and the whole claim of [`banken_spec::bancada`] is
+//! that a staged command is a typed argv.
 //!
-//! [`SessionEnv::stage_observed`] sends the argv **and a newline** — the read
-//! starts immediately, which is the whole point of pre-warming. [`SessionEnv::stage_witnessed`]
-//! sends the argv **without** one: the live-effect command sits typed and
-//! ready, and the operator's own Enter is the final act. banken records the
-//! witness; the human still takes the step. That asymmetry is a property of
-//! the `CommandEffect` split, not a policy an author can forget to apply.
+//! This is not a limitation waiting on an upstream fix; it is a property of
+//! "typed but not yet run". Closing it means a tear surface that can *place
+//! text on a pane's input line without executing it as that pane's program* —
+//! e.g. spawning the shell with a pre-seeded, unsubmitted line. The row records
+//! the shape, not a promise.
+//!
+//! # A read pane now EXITS when its command does
+//!
+//! The direct consequence of spawning, stated rather than discovered: a pane
+//! running `kubectl describe` finishes and goes `PaneState::Exited`, where
+//! before it ran the command inside a shell and returned a prompt. tear keeps a
+//! watched session's exited panes and their final grid (remain-on-exit), so the
+//! output stays readable; the operator just cannot type in that pane. Both
+//! shipped recipes hold a long-running pane (`logs --follow`, `get events
+//! --watch`), so neither session can fully exit and be reaped.
 //!
 //! # Tier: PROVEN LIVE (measured 2026-07-30), not merely compiled
 //!
@@ -90,7 +103,7 @@
 use std::cell::RefCell;
 
 use banken_spec::bancada::{
-    MutatingCommand, ObservedCommand, PanePlacement, PaneRef, SessionEnv, SessionLayout,
+    MutatingCommand, PanePlacement, PaneProgram, PaneRef, SessionEnv, SessionLayout,
 };
 use banken_spec::env::WitnessedAction;
 use banken_spec::error::SpecError;
@@ -117,7 +130,12 @@ const UNSAFE_CHARS: &[char] = &[
     '[', ']', '*', '?', '~', '#', '!',
 ];
 
-/// Render an argv into the exact bytes to type, or refuse by word.
+/// Render an argv into the exact bytes to type at a prompt, or refuse by word.
+///
+/// **Reached only from the witnessed arm.** A read pane is spawned as its argv
+/// and never passes through here — see the module docs. This exists because a
+/// mutating command must sit *typed and unsubmitted*, which means it must
+/// survive a shell's parser, which is where quoting lives.
 ///
 /// # Errors
 ///
@@ -138,10 +156,12 @@ pub fn stageable(argv: &[String]) -> Result<String, SpecError> {
                 "` would need shell quoting to be typed at a prompt, and this \
                  adapter refuses to quote — a quoting function is a shell-string \
                  builder, which is exactly what a typed argv exists to avoid. \
-                 Fix upstream (pending-banken: tear-argv-spawn: thread \
-                 `args: &[String]` through MultiplexerControl to the \
-                 PtyHandle::spawn that already takes it), or author the \
-                 (defbancada) argument without the offending character.",
+                 This is the WITNESSED arm: a mutating command is typed and left \
+                 unsubmitted so the operator's own Enter is the final act, which \
+                 is why it cannot simply be spawned the way a read pane now is \
+                 (pending-banken: tear-argv-witnessed-arm). Author the \
+                 (defbancada) argument without the offending character, or make \
+                 the pane a read.",
             );
             return Err(SpecError::Interp {
                 phase: "stage".into(),
@@ -150,6 +170,46 @@ pub fn stageable(argv: &[String]) -> Result<String, SpecError> {
         }
     }
     Ok(argv.join(" "))
+}
+
+/// Split a [`PaneProgram`] into the `(program, args)` pair tear spawns.
+///
+/// A [`PaneProgram::Observe`] becomes its own argv — `argv[0]` is the program,
+/// the rest is the argument vector, handed to tear as a vector and reaching
+/// `execvp` with no shell in between. [`PaneProgram::Shell`] becomes the
+/// operator's shell with no arguments; its command is typed in afterwards by
+/// [`SessionEnv::stage_witnessed`].
+///
+/// # Errors
+///
+/// [`SpecError::Interp`] when an observed pane names no program — an empty argv
+/// *or* an empty `argv[0]`. Both are reachable: `plan` on a `(defbancada)` whose
+/// `:program` is `""` yields the argv `[""]`, which `split_first` accepts, so
+/// checking only for an empty vector would hand tear a nameless program and let
+/// the daemon report it. Measured, not assumed — the first cut of this function
+/// checked only the vector and
+/// `an_empty_read_argv_is_refused_rather_than_spawned` went red with
+/// `("", [])`.
+fn program_of<'a>(
+    program: PaneProgram<'a>,
+    shell: &'a str,
+) -> Result<(&'a str, &'a [String]), SpecError> {
+    match program {
+        PaneProgram::Observe(cmd) => {
+            let (head, tail) = cmd
+                .argv()
+                .split_first()
+                .filter(|(head, _)| !head.is_empty())
+                .ok_or_else(|| SpecError::Interp {
+                    phase: "spawn".into(),
+                    message: "a planned read pane names no program to spawn — its argv \
+                              is empty or begins with an empty word"
+                        .into(),
+                })?;
+            Ok((head.as_str(), tail))
+        }
+        PaneProgram::Shell => Ok((shell, &[])),
+    }
 }
 
 /// Project a `(defbancada)` placement onto tear's split direction.
@@ -181,8 +241,9 @@ fn layout_of(layout: SessionLayout) -> LayoutKind {
 /// A live [`SessionEnv`] over a connected `tear-daemon`.
 pub struct TearSessionEnv {
     client: tear_client::Client,
-    /// The program each pane spawns — the operator's shell, into which the
-    /// staged argv is typed. See the module docs' upstream-limitation note.
+    /// The program a [`PaneProgram::Shell`] pane spawns — the operator's
+    /// shell, into which a WITNESSED argv is typed and left unsubmitted. A read
+    /// pane does not use it: it spawns its own argv. See the module docs.
     shell: String,
     /// The session this env opened, once it has opened one. Kept so a caller
     /// (or a test) can address or tear down what it created.
@@ -272,12 +333,19 @@ impl TearSessionEnv {
 }
 
 impl SessionEnv for TearSessionEnv {
-    fn open_session(&self, name: &str, layout: SessionLayout) -> Result<PaneRef, SpecError> {
+    fn open_session(
+        &self,
+        name: &str,
+        layout: SessionLayout,
+        program: PaneProgram<'_>,
+    ) -> Result<PaneRef, SpecError> {
+        let (prog, args) = program_of(program, &self.shell)?;
         let id = self
             .client
             .new_session_with_source_and_size(
                 name,
-                &self.shell,
+                prog,
+                args,
                 SessionSource::Named(BANCADA_SOURCE.to_owned()),
                 DEFAULT_SIZE_CELLS,
             )
@@ -305,27 +373,27 @@ impl SessionEnv for TearSessionEnv {
         Ok(PaneRef(self.first_pane(id)?.0))
     }
 
-    fn split(&self, origin: PaneRef, placement: PanePlacement) -> Result<PaneRef, SpecError> {
+    fn split(
+        &self,
+        origin: PaneRef,
+        placement: PanePlacement,
+        program: PaneProgram<'_>,
+    ) -> Result<PaneRef, SpecError> {
         let direction = direction_of(placement).ok_or_else(|| SpecError::Interp {
             phase: "tear-split-pane".into(),
             message: "`root` is not a split direction — the root pane is the \
                       session itself"
                 .into(),
         })?;
+        let (prog, args) = program_of(program, &self.shell)?;
         let pane = self
             .client
-            .split_pane(PaneId(origin.0), direction, &self.shell)
+            .split_pane(PaneId(origin.0), direction, prog, args)
             .map_err(|e| SpecError::Interp {
                 phase: "tear-split-pane".into(),
                 message: e.to_string(),
             })?;
         Ok(PaneRef(pane.0))
-    }
-
-    fn stage_observed(&self, pane: PaneRef, cmd: &ObservedCommand) -> Result<(), SpecError> {
-        let line = stageable(cmd.argv())?;
-        // A read starts immediately — that IS the pre-warming.
-        self.type_into(pane, &line, /* submit */ true)
     }
 
     fn stage_witnessed(
@@ -354,10 +422,61 @@ impl SessionEnv for TearSessionEnv {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use banken_spec::bancada::{
+        BancadaContext, CommandArg, CommandEffect, PaneRole, StagedCommand, plan,
+    };
 
-    /// **THE GATE.** The adapter refuses to quote. An argv word that would
-    /// need shell quoting has no path into a pane — it is not escaped, not
-    /// wrapped, not "handled".
+    /// An [`ObservedCommand`] carrying `argv` — built the only way one can be,
+    /// through a real `PlannedPane`, so the test exercises the same
+    /// construction seal production does.
+    fn observed(argv: &[&str]) -> banken_spec::bancada::ObservedCommand {
+        use banken_spec::bancada::{BancadaPane, BancadaSpec, PanePlacement, SessionLayout};
+        use banken_spec::chord::ActionChord;
+        use banken_spec::interp::Selection;
+        use banken_spec::types::ResourceKind;
+
+        let (program, rest) = argv.split_first().map_or(("", &[][..]), |(h, t)| (*h, t));
+        let spec = BancadaSpec {
+            name: "t".into(),
+            keys: ActionChord::parse("g").expect("a valid chord"),
+            from: "pods".into(),
+            layout: SessionLayout::MainVertical,
+            session_prefix: "t".into(),
+            witness: None,
+            runbook: None,
+            panes: vec![BancadaPane {
+                role: PaneRole::Logs,
+                placement: PanePlacement::Root,
+                command: StagedCommand {
+                    program: program.to_owned(),
+                    args: rest
+                        .iter()
+                        .map(|a| CommandArg::Literal((*a).to_owned()))
+                        .collect(),
+                    effect: CommandEffect::Observes,
+                },
+            }],
+        };
+        let ctx = BancadaContext {
+            cluster: "c".into(),
+            selection: Selection {
+                kind: ResourceKind::Pod,
+                name: "p".into(),
+                namespace: Some("n".into()),
+                current: Vec::new(),
+            },
+            container: None,
+        };
+        plan(&spec, &ctx).expect("plans").panes()[0]
+            .as_observed()
+            .expect("an observing pane projects to an ObservedCommand")
+    }
+
+    /// **THE GATE, and it is now about the WITNESSED arm only.** A mutating
+    /// command is typed at a prompt and left unsubmitted, so it must survive a
+    /// shell's parser — and this adapter refuses to quote rather than build one.
+    /// A word that would need quoting has no path into a *witnessed* pane: it
+    /// is not escaped, not wrapped, not "handled".
     #[test]
     fn an_argv_word_needing_quoting_is_refused_by_name() {
         let ok = stageable(&["kubectl".into(), "logs".into(), "-f".into(), "pod-1".into()])
@@ -377,6 +496,79 @@ mod tests {
         assert!(
             stageable(&[]).is_err(),
             "an empty argv has no program to run"
+        );
+    }
+
+    /// **THE CONVERSION GATE.** A read pane is spawned as its own argv — the
+    /// program is `argv[0]` and the rest is the argument vector tear hands to
+    /// `execvp`. This is what `pending-banken: tear-argv-spawn` bought.
+    #[test]
+    fn a_read_pane_is_spawned_as_its_own_argv_not_typed_into_a_shell() {
+        let cmd = observed(&[
+            "kubectl",
+            "--context",
+            "camelot-eks",
+            "logs",
+            "-f",
+            "catch-0",
+        ]);
+        let (prog, args) = program_of(PaneProgram::Observe(&cmd), "/bin/zsh")
+            .expect("a resolved read pane spawns");
+        assert_eq!(prog, "kubectl", "argv[0] IS the program tear spawns");
+        assert_eq!(
+            args,
+            ["--context", "camelot-eks", "logs", "-f", "catch-0"],
+            "argv[1..] reaches execvp as a vector — no shell, so nothing is \
+             joined into a command string",
+        );
+    }
+
+    /// **THE POINT OF THE WHOLE CHANGE.** An argv word `stageable` refuses on
+    /// sight now reaches a read pane untouched, because there is no shell in
+    /// the path to quote for. Before the tear argv change this argument had no
+    /// way into a pane at all.
+    #[test]
+    fn an_argument_the_typed_path_refuses_reaches_a_spawned_read_pane_intact() {
+        let jsonpath = "-o=jsonpath={.status.phase}";
+        assert!(
+            stageable(&["kubectl".into(), jsonpath.into()]).is_err(),
+            "positive control: the typed path must still refuse this word",
+        );
+
+        let cmd = observed(&["kubectl", "get", "pod", jsonpath]);
+        let (prog, args) = program_of(PaneProgram::Observe(&cmd), "/bin/zsh").expect("spawns");
+        assert_eq!(prog, "kubectl");
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some(jsonpath),
+            "the braces survive verbatim — a vector has nothing to quote",
+        );
+    }
+
+    /// A mutating pane is a SHELL. It must not resolve to a spawn, because a
+    /// spawned program runs immediately and the operator's Enter is the whole
+    /// point of the witnessed arm.
+    #[test]
+    fn a_shell_pane_spawns_the_operators_shell_with_no_arguments() {
+        let (prog, args) = program_of(PaneProgram::Shell, "/bin/zsh").expect("shell spawns");
+        assert_eq!(prog, "/bin/zsh");
+        assert!(
+            args.is_empty(),
+            "a shell pane carries no argv — its command is TYPED in afterwards, \
+             unsubmitted",
+        );
+    }
+
+    /// An empty read argv is refused, never spawned as an empty program name.
+    /// `plan` cannot construct one; this is the typed floor, not an `unwrap`.
+    #[test]
+    fn an_empty_read_argv_is_refused_rather_than_spawned() {
+        let cmd = observed(&[]);
+        let err = program_of(PaneProgram::Observe(&cmd), "/bin/zsh")
+            .expect_err("an empty argv has no program to spawn");
+        assert!(
+            err.to_string().contains("no program"),
+            "the refusal says what is missing: {err}",
         );
     }
 

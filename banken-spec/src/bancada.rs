@@ -44,19 +44,26 @@
 //!
 //! # And the witness is structural at the seam too
 //!
-//! [`SessionEnv`] has **two** staging methods, and they take **different
-//! types**: [`SessionEnv::stage_observed`] takes an [`ObservedCommand`] and
-//! [`SessionEnv::stage_witnessed`] takes a [`MutatingCommand`] *plus* a
-//! [`WitnessedAction`]. Both newtypes have private fields and are only
-//! obtainable from [`PlannedPane::as_observed`] / [`PlannedPane::as_mutating`],
-//! which are `Some` exactly on their own [`CommandEffect`]. So "stage a
-//! mutating command through the unwitnessed path" is not a rule — there is no
-//! `ObservedCommand` value a mutating pane can produce.
+//! [`SessionEnv`] has **exactly one** staging method, [`SessionEnv::stage_witnessed`],
+//! and it takes a [`MutatingCommand`] *plus* a [`WitnessedAction`]. A read-only
+//! pane is not staged at all: it is *born* as its command, via
+//! [`PaneProgram::Observe`], whose payload is an [`ObservedCommand`]. Both
+//! newtypes have private fields and are only obtainable from
+//! [`PlannedPane::as_observed`] / [`PlannedPane::as_mutating`], which are
+//! `Some` exactly on their own [`CommandEffect`]. So "stage a mutating command
+//! through the unwitnessed path" is not a rule — there is no unwitnessed
+//! staging path, and there is no `ObservedCommand` a mutating pane can produce
+//! to reach the spawn one.
+//!
+//! **This got stronger on 2026-07-31, not merely rearranged.** The seam used to
+//! carry a second, *unwitnessed* staging arm (`stage_observed`) and rely on the
+//! argument type to keep a mutating command out of it. Now the arm is gone
+//! outright: there is one staging method and it demands a witness.
 //!
 //! Honest tier, per this repo's standing rule: **truly-unrepresentable within
 //! this authored surface** (the same qualified tier as [`crate::Catalog`] and
 //! [`crate::pathology::WardVerdict`]), *not* a fleet-wide guarantee. An author
-//! extending `SessionEnv` with a third, unwitnessed staging method is
+//! extending `SessionEnv` with a second, unwitnessed staging method is
 //! CI-caught by `tests/substrate_invariant.rs`, exactly like the
 //! [`crate::env::ClusterEnv`] re-add case. Do not round either up.
 //!
@@ -79,7 +86,7 @@
 //! | [`SessionLayout`] | `layout::LayoutKind` (minus `Custom`) | `apply_layout` |
 //! | [`PanePlacement::Root`] | — | `new_session_with_source_and_size` |
 //! | [`PanePlacement`] (the four splits) | `direction::Direction` | `split_pane` |
-//! | [`PlannedPane::argv`] | the `shell: &str` a split spawns | `split_pane` / `new_session` |
+//! | [`PaneProgram::Observe`] | the `shell: &str` + `args: &[String]` a pane spawns | `split_pane` / `new_session` |
 //! | [`SessionEnv::focus`] | — | `select_pane` |
 //!
 //! `LayoutKind::Custom` is deliberately absent: "custom" means *whatever the
@@ -105,13 +112,16 @@
 //!   Whether that seam is a live daemon, a recording mock, or a build with no
 //!   adapter compiled in is the app's choice, not this module's.
 //!
-//! One upstream limitation shapes the adapter and is stated where it lives
-//! (`banken::tear_session`): `MultiplexerControl` spawns a pane's program with
-//! **no argv** (`tear-core/src/inproc.rs:667` passes `&[]` to a
-//! `PtyHandle::spawn` that does take `args`), so the argv is *typed into* the
-//! pane rather than spawned. The adapter therefore **refuses to quote** —
-//! an argv word needing shell quoting has no path to a pane.
-//! `pending-banken: tear-argv-spawn`.
+//! The upstream limitation that used to shape this seam is **gone** (tear
+//! `5974375`, 2026-07-31): `MultiplexerControl::new_session_with_source_and_size`
+//! / `split_pane` / `new_window` now carry `args: &[String]` all the way to the
+//! `PtyHandle::spawn` that always accepted one. That is why pane creation takes
+//! a [`PaneProgram`] — a read pane's argv reaches `execvp` as a vector, with no
+//! shell in between and therefore nothing to quote. What remains, and is stated
+//! where it lives (`banken::tear_session`), is that the **witnessed** arm still
+//! types its argv at a prompt and still refuses to quote, because a mutating
+//! command must sit typed-and-unsubmitted until the operator's own Enter.
+//! `pending-banken: tear-argv-witnessed-arm`.
 
 use serde::{Deserialize, Serialize};
 use tatara_lisp::DeriveTataraDomain;
@@ -454,11 +464,12 @@ impl PlannedPane {
     }
 }
 
-/// A command that may be staged **without** a witness.
+/// A read-only command a pane may be **spawned as**, needing no witness.
 ///
 /// Fields private, and [`PlannedPane::as_observed`] the only constructor, so a
-/// mutating pane cannot produce one. This is what makes
-/// [`SessionEnv::stage_observed`] safe to call at all.
+/// mutating pane cannot produce one. That is what makes [`PaneProgram::Observe`]
+/// safe to exist at all: a spawned program runs *immediately*, so the only
+/// argv that may reach a spawn is one that reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservedCommand {
     argv: Vec<String>,
@@ -637,6 +648,42 @@ fn session_name(spec: &BancadaSpec, ctx: &BancadaContext) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneRef(pub u64);
 
+/// What a pane runs **from birth** — the argument every pane-creating method
+/// of [`SessionEnv`] takes.
+///
+/// # Why creation and program are ONE act
+///
+/// They always were, in the multiplexer. Splitting them into "make a pane
+/// running a shell" then "put a command into it" was a workaround for a tear
+/// limitation that no longer exists (`MultiplexerControl` could not carry an
+/// argv until tear `5974375`), and the workaround had a cost: the argv had to
+/// be *typed at a prompt*, which is precisely where shell quoting lives, so a
+/// word containing a space or a `{` had no safe path into a pane at all.
+///
+/// # The two arms are not symmetric, and that asymmetry is the safety property
+///
+/// [`Self::Observe`] carries an [`ObservedCommand`], which only an *observing*
+/// [`PlannedPane`] can produce — so a mutating argv has no way to reach a
+/// spawn. That matters more than it looks: a spawned program **runs
+/// immediately**, and running a live-effect command the moment the pane appears
+/// is exactly what [`SessionEnv::stage_witnessed`] exists to prevent. A
+/// mutating pane therefore gets [`Self::Shell`] and its command is typed in
+/// without a newline, waiting for the operator's own Enter.
+///
+/// So the enum is not "spawn or don't" — it is the type-level statement that
+/// **only a read can be auto-run**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneProgram<'a> {
+    /// The pane **is** this read-only command: `argv[0]` is the program and
+    /// the rest is its argument vector, handed to the multiplexer as a vector
+    /// and never through a shell.
+    Observe(&'a ObservedCommand),
+    /// The pane is the operator's own interactive shell. Used for a mutating
+    /// pane, whose command [`SessionEnv::stage_witnessed`] types in and
+    /// deliberately does not submit.
+    Shell,
+}
+
 /// Abstract IO for the terminal multiplexer a pre-warmed session is opened
 /// in — the mockable `Environment` seam of this triplet.
 ///
@@ -645,35 +692,42 @@ pub struct PaneRef(pub u64);
 /// mechanical. Nothing in this crate implements it against a live daemon;
 /// [`crate::testing::MockSessionEnv`] is what the tests drive.
 ///
-/// *** There is NO third staging method. `stage_observed` takes an
-///     [`ObservedCommand`] and `stage_witnessed` takes a
-///     [`MutatingCommand`] + a [`WitnessedAction`]; both newtypes are
-///     constructible only from a [`PlannedPane`] of the matching
-///     [`CommandEffect`]. Staging a mutating command unwitnessed is not a
-///     forbidden call — it is a call with no argument value that can reach
-///     it. ***
+/// *** There is exactly ONE staging method and it REQUIRES a witness.
+///     `stage_witnessed` takes a [`MutatingCommand`] + a [`WitnessedAction`],
+///     and [`MutatingCommand`] is constructible only from a [`PlannedPane`]
+///     that mutates. A read pane is never staged — it is spawned as its own
+///     command via [`PaneProgram::Observe`], whose [`ObservedCommand`] a
+///     mutating pane cannot produce. Staging a mutating command unwitnessed is
+///     not a forbidden call; there is no method to make it on. ***
 pub trait SessionEnv {
-    /// Create the session and its first pane.
+    /// Create the session and its first pane, running `program`.
     ///
     /// # Errors
     /// A `SpecError::Interp { phase: "open-session" }` on failure.
-    fn open_session(&self, name: &str, layout: SessionLayout) -> Result<PaneRef, SpecError>;
+    fn open_session(
+        &self,
+        name: &str,
+        layout: SessionLayout,
+        program: PaneProgram<'_>,
+    ) -> Result<PaneRef, SpecError>;
 
     /// Split `origin` in the direction `placement` names, returning the new
-    /// pane. `placement` is never [`PanePlacement::Root`] on this path — the
-    /// root is [`Self::open_session`]'s job.
+    /// pane running `program`. `placement` is never [`PanePlacement::Root`] on
+    /// this path — the root is [`Self::open_session`]'s job.
     ///
     /// # Errors
     /// A `SpecError::Interp { phase: "split-pane" }` on failure.
-    fn split(&self, origin: PaneRef, placement: PanePlacement) -> Result<PaneRef, SpecError>;
-
-    /// Stage a read-only command into a pane.
-    ///
-    /// # Errors
-    /// A `SpecError::Interp { phase: "stage-observed" }` on failure.
-    fn stage_observed(&self, pane: PaneRef, cmd: &ObservedCommand) -> Result<(), SpecError>;
+    fn split(
+        &self,
+        origin: PaneRef,
+        placement: PanePlacement,
+        program: PaneProgram<'_>,
+    ) -> Result<PaneRef, SpecError>;
 
     /// Stage a live-effect command into a pane, against a witness.
+    ///
+    /// The pane is a [`PaneProgram::Shell`] by construction — see that
+    /// variant's docs for why a mutating command is never spawned.
     ///
     /// # Errors
     /// A `SpecError::Interp { phase: "stage-witnessed" }` on failure.
@@ -694,10 +748,18 @@ pub trait SessionEnv {
 /// Open a planned session against a [`SessionEnv`].
 ///
 /// Walks the plan in order: the root pane opens the session, each subsequent
-/// pane splits from the one before it, and every pane's command is staged
-/// through the arm its [`CommandEffect`] admits. The operator lands on the
-/// **last** pane — the deepest one, which is where the recipe's author put
-/// the thing to act on.
+/// pane splits from the one before it, and each pane is created running the
+/// [`PaneProgram`] its [`CommandEffect`] admits — a read pane **is** its
+/// command, a mutating pane is a shell whose command is then staged against the
+/// witness. The operator lands on the **last** pane — the deepest one, which is
+/// where the recipe's author put the thing to act on.
+///
+/// # A read pane is spawned, not typed — and that is the whole shape
+///
+/// The `as_observed()` projection is computed **once**, before the pane exists,
+/// and both decisions read it: it is what fills [`PaneProgram::Observe`] and
+/// its absence is what selects the witnessed arm. There is no second place to
+/// classify the pane, so the two cannot disagree about what a pane is.
 ///
 /// # Errors
 ///
@@ -711,38 +773,41 @@ pub fn open<E: SessionEnv>(plan: &SessionPlan, env: &E) -> Result<Vec<PaneRef>, 
     let mut refs: Vec<PaneRef> = Vec::with_capacity(plan.panes.len());
 
     for pane in plan.panes() {
+        let observed = pane.as_observed();
+        let program = match observed.as_ref() {
+            Some(cmd) => PaneProgram::Observe(cmd),
+            None => PaneProgram::Shell,
+        };
+
         let handle = match pane.placement {
-            PanePlacement::Root => env.open_session(plan.session_name(), plan.layout())?,
+            PanePlacement::Root => env.open_session(plan.session_name(), plan.layout(), program)?,
             split => {
                 let origin = *refs.last().ok_or_else(|| SpecError::Interp {
                     phase: "split-pane".into(),
                     message: "a split pane has no origin — the plan's first pane was not root"
                         .into(),
                 })?;
-                env.split(origin, split)?
+                env.split(origin, split, program)?
             }
         };
 
-        match (pane.as_observed(), pane.as_mutating()) {
-            (Some(observed), _) => env.stage_observed(handle, &observed)?,
-            (None, Some(mutating)) => {
-                let w = witness
-                    .as_ref()
-                    .ok_or_else(|| SpecError::UnwitnessedBancada {
-                        bancada: plan.session_name().to_owned(),
-                        pane_role: pane.role.label(),
-                    })?;
-                env.stage_witnessed(handle, &mutating, w)?;
-            }
-            // Unreachable: the two projections partition CommandEffect.
-            (None, None) => {
-                return Err(SpecError::Interp {
-                    phase: "stage".into(),
-                    message: "a planned pane projected to neither an observed nor a \
-                              mutating command"
-                        .into(),
-                });
-            }
+        if observed.is_none() {
+            // Not observed ⇒ mutating: the two projections partition
+            // CommandEffect. The `ok_or_else` is the honest typed floor for a
+            // case `plan` cannot construct, never an `unwrap`.
+            let mutating = pane.as_mutating().ok_or_else(|| SpecError::Interp {
+                phase: "stage".into(),
+                message: "a planned pane projected to neither an observed nor a \
+                          mutating command"
+                    .into(),
+            })?;
+            let w = witness
+                .as_ref()
+                .ok_or_else(|| SpecError::UnwitnessedBancada {
+                    bancada: plan.session_name().to_owned(),
+                    pane_role: pane.role.label(),
+                })?;
+            env.stage_witnessed(handle, &mutating, w)?;
         }
         refs.push(handle);
     }
@@ -1036,7 +1101,7 @@ mod tests {
     // ── Opening against the mock seam ──────────────────────────────
 
     #[test]
-    fn opening_an_observe_recipe_stages_everything_unwitnessed() {
+    fn opening_an_observe_recipe_spawns_every_pane_and_witnesses_nothing() {
         let p = plan(&observe_recipe(), &ctx()).expect("plans");
         let env = MockSessionEnv::new();
         let refs = open(&p, &env).expect("opens");
@@ -1058,7 +1123,11 @@ mod tests {
             0,
             "an observe recipe witnesses nothing"
         );
-        assert_eq!(env.staged.borrow().len(), 2);
+        assert_eq!(env.spawned.borrow().len(), 2);
+        assert!(
+            env.shells.borrow().is_empty(),
+            "an observe recipe needs no shell — every pane IS its command",
+        );
         assert_eq!(env.focused.borrow().as_slice(), &[refs[1]]);
     }
 
@@ -1070,10 +1139,22 @@ mod tests {
         let env = MockSessionEnv::new();
         open(&p, &env).expect("opens");
 
+        let spawned = env.spawned.borrow();
         assert_eq!(
-            env.staged.borrow().len(),
+            spawned.len(),
             1,
-            "the logs pane staged unwitnessed"
+            "only the logs pane is spawned as its argv"
+        );
+        // *** THE SAFETY PROPERTY, checked rather than asserted in prose. ***
+        // The mutating pane got a SHELL, so its command was typed and left
+        // unsubmitted. Had it been spawned, `kubectl exec` would have run the
+        // instant the pane appeared — with the witness recorded but the
+        // operator's own Enter skipped.
+        let shells = env.shells.borrow();
+        assert_eq!(shells.len(), 1, "the mutating pane is a shell, not a spawn");
+        assert!(
+            !spawned.iter().any(|(pane, _)| *pane == shells[0]),
+            "a mutating pane must never appear in the spawn log",
         );
         let witnessed = env.witnessed.borrow();
         assert_eq!(witnessed.len(), 1);

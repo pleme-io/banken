@@ -12,10 +12,17 @@
 //! fails, so a red run does not leave a stray session behind.
 //!
 //! What it proves that the mock cannot: that
-//! `banken_spec::bancada::SessionEnv`'s five methods really do land on
-//! `tear_types::MultiplexerControl`, that the session/split/stage sequence is
-//! accepted by the daemon, and that the resulting session has the pane count
-//! the authored recipe declares.
+//! `banken_spec::bancada::SessionEnv`'s four methods really do land on
+//! `tear_types::MultiplexerControl`, that the session/split sequence is
+//! accepted by the daemon, that the resulting session has the pane count the
+//! authored recipe declares, and — since 2026-07-31 — that the read pane's
+//! **argv reached the daemon** rather than being dropped.
+//!
+//! **This test has NOT been re-run since the spawn conversion.** It needs a
+//! `tear-daemon` built from tear `5974375` or later; the daemon on this
+//! machine at the time of writing predates it and would silently ignore
+//! `args`, which is precisely what the `!root.args.is_empty()` assertion is
+//! there to catch. `pending-banken: tear-argv-spawn-live`.
 
 #![cfg(feature = "tear")]
 
@@ -44,9 +51,9 @@ fn ctx() -> BancadaContext {
 /// The whole bridge, live: an authored recipe + a selection become a real
 /// three-pane tear session on the daemon.
 ///
-/// The staged commands are `kubectl` invocations against a cluster that may
+/// The spawned commands are `kubectl` invocations against a cluster that may
 /// well not be reachable — that is fine and deliberate. What is under test is
-/// the HANDOFF (session created, panes split, keys delivered), not kubectl's
+/// the HANDOFF (session created, panes split, argv delivered), not kubectl's
 /// exit code. A `kubectl` that fails in the pane proves the pane exists.
 #[test]
 #[ignore = "opens a real session on the operator's tear daemon; run with --ignored"]
@@ -67,25 +74,6 @@ fn the_triage_recipe_opens_a_real_three_pane_tear_session() {
     let inspected = env
         .session_id()
         .map(|id| client.get_session(id).expect("the session exists"));
-
-    // Did the staged argv actually REACH THE SCREEN? "the daemon accepted
-    // send_keys" and "the operator sees a pre-warmed command" are different
-    // claims, and only the second one is the feature. Poll the pane's
-    // rendered grid — the shell needs a moment to echo, so retry rather than
-    // sleep-and-hope.
-    let echoed = result.as_ref().ok().and_then(|refs| {
-        let pane = tear_types::id::PaneId(refs[0].0);
-        for _ in 0..40 {
-            if let Ok(snap) = client.pane_snapshot(pane) {
-                let text = snap.to_text();
-                if text.contains("kubectl") {
-                    return Some(text);
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        None
-    });
 
     let cleanup = env.kill_opened_session();
 
@@ -109,20 +97,43 @@ fn the_triage_recipe_opens_a_real_three_pane_tear_session() {
         "banken-opened sessions are tagged so `tear list --source` can triage them",
     );
 
-    // **THE claim under test.** The pre-warmed command is on the operator's
-    // screen, carrying the cluster and the pod the selection named.
-    let text = echoed.expect(
-        "the staged argv must appear on the pane's rendered grid — without \
-         this the handoff only proves the daemon accepted bytes, not that the \
-         operator lands on a pre-warmed command",
+    // **THE claim under test, and it moved on 2026-07-31.** A read pane is now
+    // SPAWNED as its own argv rather than typed into a shell, so the evidence
+    // is the daemon's own registry record of what it spawned — `TearPane.shell`
+    // + `.args` — not a poll of the rendered grid. That is a strictly better
+    // witness: it is durable (the pane can have exited), it is the exact vector
+    // handed to `execvp`, and it cannot be satisfied by an echo.
+    //
+    // It is also the honest gate on a STALE DAEMON. tear ships no protocol
+    // version and does not negotiate, so a daemon older than tear `5974375`
+    // accepts the new frame and silently ignores `args` — spawning a bare
+    // `kubectl`. That failure is invisible on a screen poll and unmissable
+    // here: `args` comes back empty.
+    let root = session
+        .panes
+        .values()
+        .find(|pane| pane.id == tear_types::id::PaneId(refs[0].0))
+        .expect("the daemon holds the root pane this plan opened");
+    assert_eq!(
+        root.shell, "kubectl",
+        "the read pane IS the command — argv[0] is the program the daemon \
+         spawned, with no shell in between",
     );
     assert!(
-        text.contains("camelot-eks"),
-        "the pre-warmed line targets the cluster banken was reading",
+        !root.args.is_empty(),
+        "the daemon recorded NO spawn args. Either the argv was dropped, or \
+         this daemon predates tear 5974375 and is silently ignoring them — \
+         restart it (there is no protocol version to reject on)",
     );
     assert!(
-        text.contains("banken-bancada-selftest"),
-        "and the pod the selection named",
+        root.args.contains(&"camelot-eks".to_owned()),
+        "the spawned argv targets the cluster banken was reading: {:?}",
+        root.args,
+    );
+    assert!(
+        root.args.contains(&"banken-bancada-selftest".to_owned()),
+        "and the pod the selection named: {:?}",
+        root.args,
     );
 
     cleanup.expect("the self-test session is killed");

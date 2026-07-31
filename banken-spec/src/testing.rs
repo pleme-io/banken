@@ -15,9 +15,7 @@
 use std::cell::RefCell;
 
 use crate::{
-    bancada::{
-        MutatingCommand, ObservedCommand, PanePlacement, PaneRef, SessionEnv, SessionLayout,
-    },
+    bancada::{MutatingCommand, PanePlacement, PaneProgram, PaneRef, SessionEnv, SessionLayout},
     env::{
         ChangeRef, ClusterEnv, DeclareChange, DepTree, Event, GlassRecord, HealthReading,
         LogStream, ResourceRef, Row, WatchStream, WitnessedAction, Workload,
@@ -154,19 +152,27 @@ impl ClusterEnv for MockClusterEnv {
 /// A mock terminal-multiplexer env for the `(defbancada)` triplet — the
 /// [`SessionEnv`] analogue of [`MockClusterEnv`].
 ///
-/// It records every session opened, every split, and every staged command,
-/// **keeping the witnessed and unwitnessed staging paths in separate logs**
-/// so a test can assert that a mutating command went through the witnessed
-/// arm rather than merely that "something was staged". No tear daemon, no
-/// subprocess, no PTY — every call appends to a `RefCell` a test inspects.
+/// It records every session opened, every split, what program each pane was
+/// **born running**, and every witnessed staging — **keeping the spawn and the
+/// witnessed-staging paths in separate logs** so a test can assert that a
+/// mutating command went through the witnessed arm rather than merely that
+/// "something happened". No tear daemon, no subprocess, no PTY — every call
+/// appends to a `RefCell` a test inspects.
+///
+/// `spawned` and `shells` together are what make "a live-effect command was
+/// never auto-run" *checkable*: a mutating pane must appear in `shells` and
+/// must not appear in `spawned`.
 #[derive(Default)]
 pub struct MockSessionEnv {
     /// `(session name, layout)` per [`SessionEnv::open_session`] call.
     pub sessions: RefCell<Vec<(String, SessionLayout)>>,
     /// `(origin, placement)` per [`SessionEnv::split`] call.
     pub splits: RefCell<Vec<(PaneRef, PanePlacement)>>,
-    /// `(pane, argv)` per **unwitnessed** staging.
-    pub staged: RefCell<Vec<(PaneRef, Vec<String>)>>,
+    /// `(pane, argv)` per pane born as a read-only command
+    /// ([`PaneProgram::Observe`]) — spawned, never typed.
+    pub spawned: RefCell<Vec<(PaneRef, Vec<String>)>>,
+    /// Every pane born as a bare shell ([`PaneProgram::Shell`]), in order.
+    pub shells: RefCell<Vec<PaneRef>>,
     /// `(pane, argv, witness)` per **witnessed** staging.
     pub witnessed: RefCell<Vec<(PaneRef, Vec<String>, WitnessedAction)>>,
     /// Every pane focused, in order.
@@ -195,20 +201,41 @@ impl MockSessionEnv {
     }
 }
 
+impl MockSessionEnv {
+    /// Record what a freshly-minted pane was born running.
+    fn record_program(&self, pane: PaneRef, program: PaneProgram<'_>) {
+        match program {
+            PaneProgram::Observe(cmd) => {
+                self.spawned.borrow_mut().push((pane, cmd.argv().to_vec()));
+            }
+            PaneProgram::Shell => self.shells.borrow_mut().push(pane),
+        }
+    }
+}
+
 impl SessionEnv for MockSessionEnv {
-    fn open_session(&self, name: &str, layout: SessionLayout) -> Result<PaneRef, SpecError> {
+    fn open_session(
+        &self,
+        name: &str,
+        layout: SessionLayout,
+        program: PaneProgram<'_>,
+    ) -> Result<PaneRef, SpecError> {
         self.sessions.borrow_mut().push((name.to_owned(), layout));
-        Ok(self.mint())
+        let pane = self.mint();
+        self.record_program(pane, program);
+        Ok(pane)
     }
 
-    fn split(&self, origin: PaneRef, placement: PanePlacement) -> Result<PaneRef, SpecError> {
+    fn split(
+        &self,
+        origin: PaneRef,
+        placement: PanePlacement,
+        program: PaneProgram<'_>,
+    ) -> Result<PaneRef, SpecError> {
         self.splits.borrow_mut().push((origin, placement));
-        Ok(self.mint())
-    }
-
-    fn stage_observed(&self, pane: PaneRef, cmd: &ObservedCommand) -> Result<(), SpecError> {
-        self.staged.borrow_mut().push((pane, cmd.argv().to_vec()));
-        Ok(())
+        let pane = self.mint();
+        self.record_program(pane, program);
+        Ok(pane)
     }
 
     fn stage_witnessed(
@@ -228,6 +255,7 @@ impl SessionEnv for MockSessionEnv {
         Ok(())
     }
 
-    // *** No third staging method — an unwitnessed mutating stage has no
-    //     argument value that can reach a call. See `bancada`'s module docs. ***
+    // *** No second staging method. There is ONE, and it demands a witness.
+    //     A read pane is not staged at all — it is spawned as its own command
+    //     via `PaneProgram::Observe`. See `bancada`'s module docs. ***
 }

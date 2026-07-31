@@ -44,6 +44,29 @@ eval fails). banken carries no `Cargo.gen.lock` today — its `flake.nix` calls
 crate2nix on `Cargo.lock` directly — so the third step is `nix build` going
 green, not a file to regenerate; keep it in the same commit either way.
 
+**`pending-tear-bump: spawn-args`** — `banken/src/tear_session.rs` passes
+`args: &[String]` to `MultiplexerControl::new_session_with_source_and_size` and
+`split_pane`, which land in tear `5974375` and are **UNPUSHED**. banken pins
+tear `branch = "main"` but `Cargo.lock` holds `bdcbfe7`, one commit earlier, so
+**only `--features tear` is affected** — the default and `live` builds never
+compile the dep. Measured, not assumed:
+
+```
+error[E0061]: this method takes 4 arguments but 5 arguments were supplied
+   --> banken/src/tear_session.rs:345:14
+note: method defined here
+   --> ~/.cargo/git/checkouts/tear-…/bdcbfe7/tear-types/src/control.rs:149:8
+```
+
+Measured green against the local sibling by adding
+`--config 'patch."https://github.com/pleme-io/tear".tear-client.path="../tear/tear-client"'`
+and the matching `tear-types` line (200 tests, 2 ignored). Clearing it is one
+commit: **push tear → `cargo update -p tear-client -p tear-types` → `nix build`
+green in the SAME commit** (the same D2 delta-only rule).
+
+Both rows are independent — clearing one does not unblock the other — and
+neither is a design gap.
+
 One-sentence purpose: an **observe-first, GitOps-native cluster-navigator TUI** —
 keep k9s's fast keyboard navigation + health surfaces, structurally refuse its
 imperative-mutation console.
@@ -171,15 +194,21 @@ claims and only the second is evidence. The app adds **no legality of its
 own**: `open_bancada` calls `bancada::open`, so the mutating pane still has no
 `ObservedCommand` value with which to take the unwitnessed arm.
 
-**And the witness is structural at the seam.** `SessionEnv` has exactly two
-staging arms taking *different types*: `stage_observed(ObservedCommand)` and
-`stage_witnessed(MutatingCommand, &WitnessedAction)`. Both newtypes have
-private fields and come only from `PlannedPane::as_observed` /
-`as_mutating`, which are `Some` on their own `CommandEffect`. Staging a
-mutating command unwitnessed is not forbidden — it has **no argument value
-that can reach the call**. A *third* staging arm being added is CI-caught by
-`substrate_invariant.rs` (same only-mitigated→CI-caught tier as the
-`ClusterEnv` re-add case). Do not round either up.
+**And the witness is structural at the seam.** `SessionEnv` has exactly **one**
+staging arm — `stage_witnessed(MutatingCommand, &WitnessedAction)`. A read pane
+is not staged at all: it is *born* as its command through
+`PaneProgram::Observe(&ObservedCommand)`. Both newtypes have private fields and
+come only from `PlannedPane::as_observed` / `as_mutating`, which are `Some` on
+their own `CommandEffect`, so a mutating command has **no argument value that
+can reach either an unwitnessed stage or a spawn**. The second half matters as
+much as the first: a spawned program runs immediately, which is exactly the
+operator's-Enter step the witnessed arm exists to preserve. A *second* staging
+arm being added is CI-caught by `substrate_invariant.rs` (same
+only-mitigated→CI-caught tier as the `ClusterEnv` re-add case). Do not round
+either up.
+
+Tightened 2026-07-31: the seam used to carry an unwitnessed `stage_observed`
+and lean on its argument type. That arm is gone.
 
 **`(:context cluster)` is what makes "the RIGHT cluster" true.** A pane opened
 without an explicit `--context` lands on whatever the kubeconfig's current
@@ -257,17 +286,52 @@ process, which is consistent with a session that exists transiently. It remains
 true as written; it was never evidence of durability, and must not be read as
 such.
 
-- **`pending-banken: tear-argv-spawn`** — the upstream limitation the adapter
-  is shaped around. `MultiplexerControl` spawns a pane's program with **no
-  argv** (`tear-core/src/inproc.rs:667` passes `&[]` to a `PtyHandle::spawn`
-  that *does* take `args: &[String]`, `pty.rs:68`), so the argv is **typed
-  into** the pane instead of spawned. Consequence: `banken::tear_session`
-  **refuses to quote** — an argv word containing whitespace or a shell
-  metacharacter is a typed error naming the word, never escaped, because a
-  quoting function IS a shell-string builder. The load-bearing fix is to
-  thread `args` through `MultiplexerControl` upstream, after which the adapter
-  collapses to a direct spawn with no typing and no refusal. Not done here:
-  banken must not edit tear from this repo.
+- **`pending-banken: tear-argv-spawn` — CLOSED for READS (2026-07-31).** tear
+  `5974375` threaded `args: &[String]` through
+  `MultiplexerControl::new_session_with_source_and_size` / `split_pane` /
+  `new_window` to the `PtyHandle::spawn` that had accepted one all along. So
+  **pane creation and pane program are now one act**: `SessionEnv::open_session`
+  / `split` take a `PaneProgram`, and a read pane is *born* as its own argv,
+  reaching `execvp` as a vector with no shell in between.
+  - **The refusal-to-quote no longer applies to a read pane** — not relaxed,
+    *bypassed*: there is no shell in the path to quote for. Measured:
+    `-o=jsonpath={.status.phase}` is refused by `stageable` (positive control in
+    the same test) and reaches a spawned read pane byte-identical.
+  - **The seam got STRICTER, not just rearranged.** `stage_observed` is gone
+    from `SessionEnv` outright, so there is exactly **one** staging method and
+    it demands a witness. The `substrate_invariant.rs` allowlist and its
+    staging-arm count moved with it (`== [stage_witnessed]`, not "exactly two").
+- **`pending-banken: tear-argv-witnessed-arm`** — the half that **cannot**
+  convert, and this is a property rather than a limitation waiting on upstream.
+  A spawned program **runs immediately**; `stage_witnessed` deliberately types
+  its argv *without* a newline so the operator's own Enter is the final act. A
+  mutating pane therefore stays a `PaneProgram::Shell`, still types, and still
+  refuses to quote. Closing it needs a tear surface that can place text on a
+  pane's input line *without executing it as that pane's program* — the row
+  records the shape, not a promise.
+  - That a mutating command cannot be spawned is **compile-enforced**, not
+    reviewed: `PaneProgram::Observe` takes `&ObservedCommand`, which only an
+    observing `PlannedPane` produces. Fail-once measured by trying to write the
+    dangerous line — `PaneProgram::Observe(&pane.as_mutating()…)`:
+    `error[E0308]: mismatched types … expected `&ObservedCommand`, found
+    `&MutatingCommand``. Tier: truly-unrepresentable *within this authored
+    surface*, the same qualified tier as the other four seals.
+- **`pending-banken: tear-argv-spawn-live`** — the conversion is **mock-proven
+  and unit-proven, NOT re-run against a daemon.** `tests/tear_handoff.rs` was
+  rewritten to assert the daemon's own `TearPane.shell` + `.args` record
+  (durable, and the exact vector handed to `execvp`) instead of polling the
+  rendered grid for an echo — which the spawn model no longer produces. It is
+  still `#[ignore]`d and needs a `tear-daemon` built from `5974375` or later.
+  **tear ships no protocol version and does not negotiate**, so an older daemon
+  accepts the new frame and silently spawns a bare `kubectl`; the
+  `!root.args.is_empty()` assertion is exactly the gate on that.
+- **A read pane now EXITS when its command does** — the direct consequence of
+  spawning, stated rather than discovered. `kubectl describe` finishes and its
+  pane goes `PaneState::Exited` where it previously returned a shell prompt.
+  tear keeps a watched session's exited panes and their final grid
+  (remain-on-exit), so the output stays readable; the operator just cannot type
+  in that pane. Both shipped recipes hold a long-running pane (`logs --follow`,
+  `get events --watch`), so neither session can fully exit and be reaped.
 - **`pending-banken: bancada-tear-feature-nix-unverified`** — the `tear`
   feature's dep took banken's `Cargo.lock` from **zero** git sources to four
   (tear, shikumi, gen, plus a second `ishou-tokens` 0.1.4 from git alongside
