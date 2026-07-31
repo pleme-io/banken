@@ -10,62 +10,11 @@ skip-magma: pure-binary-no-cluster-runtime
 skip-continuous-convergence: pure-binary-no-cluster-runtime
 skip-platform-mediated: pure-binary-no-cluster-runtime
 
-<!-- ── IN-FLIGHT DEBT: source changes that outrun their published deps ──
-     Each row names the exact chain that clears it. Nothing here is a
-     design gap; each is one push away. -->
-
-**`pending-egaku-bump: TableView/TableRow`** — `banken-spec` and `banken` name
-`egaku::{TableRow, TableView, Column, SortKey, SortOrder, TableError}`, which
-land in egaku `e602369` and are **UNPUSHED**. The published `egaku 0.1.4` this
-repo's `Cargo.lock` names predates them, so **HEAD does not compile against the
-locked dep** — measured, not assumed:
-
-```
-error[E0405]: cannot find trait `TableRow` in crate `egaku`
-  --> banken-spec/src/env.rs:69:13
-   |
-69 | impl egaku::TableRow for Row {
-   |             ^^^^^^^^ not found in `egaku`
-```
-
-`Cargo.lock` is deliberately left naming the **registry** `egaku 0.1.4` — a lock
-naming an unpushed rev is worse than one naming a stale rev. Measured green
-against the local sibling with
-`cargo test --workspace --config 'patch.crates-io.egaku.path="../egaku"'`
-(194 default / 196 `--features live` / 196 `--features tear`). That same E0405
-is the run's **positive control**: the code cannot compile against published
-egaku, so a green run proves the patch was actually used rather than silently
-ignored.
-
-Clearing it is one commit: **push egaku → release `egaku 0.1.5` → bump the pin
-in `banken/Cargo.toml` + `banken-spec/Cargo.toml` → `cargo update -p egaku` →
-regenerate the crate2nix lock in the SAME commit** (D2 delta-only, or the nix
-eval fails). banken carries no `Cargo.gen.lock` today — its `flake.nix` calls
-crate2nix on `Cargo.lock` directly — so the third step is `nix build` going
-green, not a file to regenerate; keep it in the same commit either way.
-
-**`pending-tear-bump: spawn-args`** — `banken/src/tear_session.rs` passes
-`args: &[String]` to `MultiplexerControl::new_session_with_source_and_size` and
-`split_pane`, which land in tear `5974375` and are **UNPUSHED**. banken pins
-tear `branch = "main"` but `Cargo.lock` holds `bdcbfe7`, one commit earlier, so
-**only `--features tear` is affected** — the default and `live` builds never
-compile the dep. Measured, not assumed:
-
-```
-error[E0061]: this method takes 4 arguments but 5 arguments were supplied
-   --> banken/src/tear_session.rs:345:14
-note: method defined here
-   --> ~/.cargo/git/checkouts/tear-…/bdcbfe7/tear-types/src/control.rs:149:8
-```
-
-Measured green against the local sibling by adding
-`--config 'patch."https://github.com/pleme-io/tear".tear-client.path="../tear/tear-client"'`
-and the matching `tear-types` line (200 tests, 2 ignored). Clearing it is one
-commit: **push tear → `cargo update -p tear-client -p tear-types` → `nix build`
-green in the SAME commit** (the same D2 delta-only rule).
-
-Both rows are independent — clearing one does not unblock the other — and
-neither is a design gap.
+<!-- IN-FLIGHT DEBT: none. Both bump rows cleared 2026-07-31 — egaku
+     0.1.5 and tear 1c1007d are published and pinned. 194 tests green
+     by default, 200 under --features tear, against real pins with no
+     patch override. Kept out of the body deliberately: a cleared
+     waiver is deleted, not annotated. -->
 
 One-sentence purpose: an **observe-first, GitOps-native cluster-navigator TUI** —
 keep k9s's fast keyboard navigation + health surfaces, structurally refuse its
