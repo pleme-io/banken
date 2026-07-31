@@ -63,6 +63,17 @@ closed_catalog! {
         ToggleSort => "toggle-sort",
         /// Dismiss the action-result overlay.
         Dismiss => "dismiss",
+        /// Confirm the previewed action in the current overlay.
+        ///
+        /// Today the app has exactly one confirmable overlay — a
+        /// [`crate::bancada::SessionPlan`] awaiting the operator's go-ahead —
+        /// and everywhere else this is a no-op. It is authored as an
+        /// *intent* rather than as a `(defk8saction)` for the same reason
+        /// every other nav key is: confirming a preview mutates local UI
+        /// state, and the thing it then performs carries its own DERIVED
+        /// `postigo` class. Typing the confirm key itself as `Observe` would
+        /// misdescribe the BREAK-GLASS case.
+        Confirm => "confirm",
         /// Quit banken.
         Quit => "quit",
     }
@@ -115,7 +126,7 @@ mod tests {
 
     #[test]
     fn every_intent_has_a_label_and_a_wire_name_that_agree() {
-        assert_eq!(NavIntent::ALL.len(), 5);
+        assert_eq!(NavIntent::ALL.len(), 6);
         for i in NavIntent::ALL {
             let wire = serde_json::to_string(i).expect("serializes");
             let mut expected = String::from("\"");

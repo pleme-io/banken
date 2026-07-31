@@ -16,6 +16,7 @@ use banken::fixture::FixtureClusterEnv;
 use banken::render::draw_pod_table;
 use banken::table::PodTable;
 use banken_spec::env::ClusterEnv;
+use banken_spec::testing::MockSessionEnv;
 use banken_spec::types::{OperatorId, ResourceKind};
 use egaku_term::TestBackend;
 use egaku_term::crossterm::style::Color;
@@ -128,6 +129,7 @@ fn status_cells_are_pathology_colored() {
 fn app_frame_renders_title_table_and_status_line() {
     let app = BankenApp::try_new(
         FixtureClusterEnv::new(),
+        MockSessionEnv::new(),
         OperatorId("drzzln".into()),
         "source: fixture",
     )

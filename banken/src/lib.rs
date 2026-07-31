@@ -43,7 +43,10 @@
 //! - [`fixture`] — `FixtureClusterEnv`, the default OBSERVE source.
 //! - [`action`] — the postigo dispatch (consumes `banken_spec::apply`).
 //! - [`app`] — the `BankenApp` runtime (`egaku_term::AsyncApp`).
-//! - [`live`] — `KubeClusterEnv` (feature `live`). `pending-banken: live-read`.
+//! - [`live`] — `KubeClusterEnv` (feature `live`). `pending-banken: live-read`
+//!   CLOSED 2026-07-31.
+//! - [`session`] — the `SessionEnv` impls the app is generic over
+//!   (`UnwiredSessionEnv` / `LazyTearSessionEnv`).
 //! - [`tear_session`] — `TearSessionEnv` (feature `tear`): the LIVE
 //!   `(defbancada)` handoff over a running `tear-daemon`.
 //!
@@ -66,9 +69,13 @@
 //!   session whose first pane's rendered grid carries the pre-warmed
 //!   `kubectl --context <cluster> … <pod>` line. Fail-once measured: stubbing
 //!   `type_into` to send no bytes turns it red on exactly that assertion.
-//!   The app does **not** call it yet — pressing `g` previews the plan; wiring
-//!   the app's overlay to a confirm-then-open is `pending-banken:
-//!   bancada-app-open`.
+//!   The app reaches it through its `SessionEnv` type parameter: `g`
+//!   resolves and previews, `enter` confirms and opens. That wire is
+//!   mock-proven with a measured fail-once, and the real-daemon run
+//!   (2026-07-31) had every RPC return `Ok` — but `tear list` shows no
+//!   session afterwards, so "the operator lands in a pre-warmed session" is
+//!   NOT proven. `pending-banken: bancada-app-open-live`; see
+//!   [`tear_session`]'s module docs for the exact three-way split.
 
 pub mod action;
 pub mod app;
@@ -76,6 +83,7 @@ pub mod cli;
 pub mod fixture;
 pub mod keys;
 pub mod render;
+pub mod session;
 pub mod table;
 
 #[cfg(feature = "live")]

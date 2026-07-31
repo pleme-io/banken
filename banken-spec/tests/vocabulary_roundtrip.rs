@@ -203,7 +203,7 @@ fn authored_drills_compile_into_typed_values() {
 #[test]
 fn authored_nav_keys_compile_into_typed_values() {
     let ns = load_nav_keys().expect("the authored nav keys must compile");
-    assert_eq!(ns.len(), 7, "down/j + up/k + o + escape + q");
+    assert_eq!(ns.len(), 8, "down/j + up/k + o + escape + return + q");
 
     // The k9s/vi pair: two names, two chords, ONE intent.
     let next: Vec<&str> = ns
@@ -244,7 +244,7 @@ fn the_shipped_vocabulary_cross_resolves() {
     assert_eq!(c.pathologies().len(), 3);
     assert_eq!(c.wards().len(), 1);
     assert_eq!(c.drills().len(), 3);
-    assert_eq!(c.nav_keys().len(), 7);
+    assert_eq!(c.nav_keys().len(), 8);
 
     // The ward's pathologies resolve to values, totally.
     let rules = c.pathologies_for(&c.wards()[0]);

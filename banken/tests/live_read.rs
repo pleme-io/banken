@@ -44,6 +44,7 @@
 
 use banken::app::BankenApp;
 use banken::live::KubeClusterEnv;
+use banken::session::UnwiredSessionEnv;
 use banken::table::PodTable;
 use banken_spec::env::ClusterEnv;
 use banken_spec::types::{OperatorId, ResourceKind};
@@ -123,11 +124,16 @@ async fn a_named_context_renders_real_pod_rows() {
     );
 
     // ── the render ──
-    let app = BankenApp::try_new(env, OperatorId("drzzln".into()), {
-        let mut label = String::from("source: LIVE ");
-        label.push_str(&context);
-        label
-    })
+    let app = BankenApp::try_new(
+        env,
+        UnwiredSessionEnv::new(),
+        OperatorId("drzzln".into()),
+        {
+            let mut label = String::from("source: LIVE ");
+            label.push_str(&context);
+            label
+        },
+    )
     .expect("the app builds over the live env")
     .with_cluster(context.clone());
 

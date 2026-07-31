@@ -16,11 +16,13 @@
 use banken::action::{ActionResult, RowAction, current_selection, dispatch};
 use banken::app::{Action, BankenApp};
 use banken::fixture::FixtureClusterEnv;
+use banken_spec::testing::MockSessionEnv;
 use banken_spec::types::OperatorId;
 
-fn app() -> BankenApp<FixtureClusterEnv> {
+fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
     BankenApp::try_new(
         FixtureClusterEnv::new(),
+        MockSessionEnv::new(),
         OperatorId("drzzln".into()),
         "source: fixture",
     )

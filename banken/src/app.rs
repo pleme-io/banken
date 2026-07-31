@@ -10,7 +10,8 @@
 //!
 //! The render model is a small sum type (`Panel`) so an illegal screen
 //! state is unrepresentable (Quadro T4): the app is always showing exactly
-//! one of {the table, an action-result overlay}.
+//! one of {the table, an action-result overlay, a bancada awaiting
+//! confirmation}.
 //!
 //! # pending-banken: live-watch
 //!
@@ -35,9 +36,12 @@ use egaku_term::{
     AsyncApp, Buffer, Result as TermResult, Style,
 };
 
-use banken_spec::bancada::BancadaSpec;
+use banken_spec::bancada::{BancadaSpec, SessionEnv};
 
-use crate::action::{ActionResult, RowAction, dispatch, plan_bancada};
+use crate::action::{
+    ActionResult, PendingBancada, RowAction, dispatch, open_bancada, preview_bancada,
+    resolve_bancada,
+};
 use crate::render::{draw_pod_table, sort_label};
 use crate::table::PodTable;
 
@@ -68,6 +72,13 @@ pub enum Action {
     /// recipe list cannot disagree: [`keymap_from_catalog`] builds both from
     /// the same filtered iteration.
     OpenBancada(usize),
+    /// Confirm the previewed action (`enter`).
+    ///
+    /// The app has exactly one confirmable overlay — a resolved
+    /// [`PendingBancada`] — and everywhere else this is a deliberate no-op
+    /// rather than an error: pressing `enter` on the table is not a mistake
+    /// worth an error panel.
+    Confirm,
     /// Dismiss the action-result overlay (`esc`).
     Dismiss,
     /// Quit (`q`).
@@ -96,30 +107,58 @@ impl Action {
             Action::ObserveLogs
                 | Action::DeclareScale
                 | Action::BreakGlass
-                // A bancada resolves a whole recipe and (once the live seam
-                // lands) opens a tear session with N panes. A held key firing
-                // one session per repeat tick is the runaway shape at its
-                // most expensive.
+                // A bancada resolves a whole recipe against the cluster. A
+                // held key firing one per repeat tick is wasteful.
                 | Action::OpenBancada(_)
+                // And CONFIRM is the expensive one: it opens a real tear
+                // session with N panes and stages N commands. A held `enter`
+                // firing one session per OS repeat tick is the mado
+                // runaway-font shape pointed at the most costly action in
+                // the app.
+                | Action::Confirm
         )
     }
 }
 
 /// Which screen the app currently shows — a sum type so an illegal screen
 /// (e.g. "a table AND a modal AND nothing") is unrepresentable.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum Panel {
     /// The `:pods` table (the default landing).
     Table,
     /// An overlay showing the result of the last postigo action.
     ActionOverlay(ActionResult),
+    /// A resolved `(defbancada)` awaiting the operator's `enter`.
+    ///
+    /// It holds the **typed plan**, not its rendering, which is what makes
+    /// the confirm step real: [`Action::Confirm`] opens exactly the plan that
+    /// was previewed, not a re-resolution against a table the operator may
+    /// have scrolled since. A separate variant rather than a flag on
+    /// [`Panel::ActionOverlay`] so "confirmable" is a property of the screen
+    /// state rather than something the confirm handler has to infer.
+    BancadaPreview(PendingBancada),
 }
 
-/// The banken TUI app. Generic over the [`ClusterEnv`] source so the same
-/// runtime drives the fixture env (this session) or the live kube env
-/// (under the `live` feature) with no code change.
-pub struct BankenApp<E: ClusterEnv> {
+/// The banken TUI app.
+///
+/// Generic over **two** seams, for the same reason each time: the runtime is
+/// byte-identical against a mock, against a live backend, and against a build
+/// that has neither compiled in.
+///
+/// - `E: ClusterEnv` — where the rows come from
+///   ([`FixtureClusterEnv`](crate::fixture::FixtureClusterEnv) /
+///   `KubeClusterEnv` / `MockClusterEnv`).
+/// - `S: SessionEnv` — where a confirmed `(defbancada)` is opened
+///   ([`UnwiredSessionEnv`](crate::session::UnwiredSessionEnv) /
+///   `LazyTearSessionEnv` / `MockSessionEnv`).
+///
+/// The two are independent: banken reads a live cluster and opens sessions in
+/// a mock, or reads a fixture and opens real panes, without either seam
+/// knowing about the other.
+pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
     env: E,
+    /// Where a confirmed bancada is opened. See [`crate::session`].
+    session: S,
     operator: OperatorId,
     /// The cluster banken is reading, as the kubeconfig context name.
     ///
@@ -162,7 +201,7 @@ pub struct BankenApp<E: ClusterEnv> {
     legend_parts: Vec<String>,
 }
 
-impl<E: ClusterEnv> BankenApp<E> {
+impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     /// Build the app over a cluster env, loading the authored vocabulary and
     /// performing the initial OBSERVE read of the pod table.
     ///
@@ -180,11 +219,12 @@ impl<E: ClusterEnv> BankenApp<E> {
     ///   projection.
     pub fn try_new(
         env: E,
+        session: S,
         operator: OperatorId,
         source_label: impl Into<String>,
     ) -> Result<Self, SpecError> {
         let catalog = banken_spec::load_catalog()?;
-        Self::with_catalog(env, operator, source_label, &catalog)
+        Self::with_catalog(env, session, operator, source_label, &catalog)
     }
 
     /// [`Self::try_new`] over an explicit catalog — the seam a test or a
@@ -197,6 +237,7 @@ impl<E: ClusterEnv> BankenApp<E> {
     /// catalog does not declare.
     pub fn with_catalog(
         env: E,
+        session: S,
         operator: OperatorId,
         source_label: impl Into<String>,
         catalog: &Catalog,
@@ -211,6 +252,7 @@ impl<E: ClusterEnv> BankenApp<E> {
             .unwrap_or_default();
         Ok(Self {
             env,
+            session,
             operator,
             cluster: String::new(),
             bancadas: catalog
@@ -246,6 +288,16 @@ impl<E: ClusterEnv> BankenApp<E> {
         &self.bancadas
     }
 
+    /// The [`SessionEnv`] a confirmed bancada is opened through.
+    ///
+    /// Exposed so a test can assert against a recording mock — "the app
+    /// reported a session" and "the seam was actually called" are different
+    /// claims, and only the second one is evidence.
+    #[must_use]
+    pub fn session(&self) -> &S {
+        &self.session
+    }
+
     /// Re-read the pod table from the env (the poll refresh). Preserves the
     /// selection by name across the refresh.
     pub fn refresh(&mut self) {
@@ -258,6 +310,26 @@ impl<E: ClusterEnv> BankenApp<E> {
     #[must_use]
     pub fn table(&self) -> &PodTable {
         &self.table
+    }
+
+    /// The keymap derived from the authored catalog.
+    ///
+    /// Inherent rather than only on [`AsyncApp`], because that trait needs
+    /// both seams `Send + Sync` and a recording mock is neither (it is built
+    /// on `RefCell`, exactly like `MockClusterEnv`). Asking "which action does
+    /// this chord bind" has nothing to do with running a terminal, and tying
+    /// it to the terminal trait would have meant no mock-driven test could
+    /// ever ask it.
+    #[must_use]
+    pub fn keymap(&self) -> &KeyMap<Action> {
+        &self.keys
+    }
+
+    /// Whether the app has been asked to quit. Inherent for the same reason
+    /// as [`Self::keymap`].
+    #[must_use]
+    pub fn should_quit(&self) -> bool {
+        self.done
     }
 
     /// The dispatcher entry point: consult the repeat gate, then apply.
@@ -325,26 +397,63 @@ impl<E: ClusterEnv> BankenApp<E> {
                 // A bancada index out of range is not possible through the
                 // keymap (both come from the same filtered iteration), but
                 // reporting it beats an index panic in the operator's TUI.
-                let r = match self.bancadas.get(i) {
-                    Some(spec) => plan_bancada(&self.table, spec, &self.cluster),
-                    None => ActionResult::Error(
+                self.panel = match self.bancadas.get(i) {
+                    Some(spec) => match resolve_bancada(&self.table, spec, &self.cluster) {
+                        // Resolving touches nothing. The operator sees the
+                        // fully-resolved argv, the cluster it names and the
+                        // DERIVED class, and `enter` is what opens it.
+                        Ok(pending) => Panel::BancadaPreview(pending),
+                        Err(refusal) => Panel::ActionOverlay(refusal),
+                    },
+                    None => Panel::ActionOverlay(ActionResult::Error(
                         "no bancada is bound at that index — the keymap and the \
                          recipe list disagree"
                             .into(),
-                    ),
+                    )),
                 };
-                self.panel = Panel::ActionOverlay(r);
+            }
+            Action::Confirm => {
+                // The ONLY confirmable screen. Anywhere else `enter` is a
+                // deliberate no-op — pressing it on the table is not a
+                // mistake worth an error panel.
+                if let Panel::BancadaPreview(pending) = &self.panel {
+                    // `open_bancada` adds no legality of its own: it calls
+                    // `banken_spec::bancada::open`, which routes each pane
+                    // through the arm its `CommandEffect` admits. A mutating
+                    // pane has no `ObservedCommand` value to take the
+                    // unwitnessed arm with, and a plan with no witness fails
+                    // rather than staging anyway.
+                    let r = open_bancada(pending, &self.session);
+                    self.panel = Panel::ActionOverlay(r);
+                }
             }
             Action::Dismiss => self.panel = Panel::Table,
             Action::Quit => self.done = true,
         }
     }
 
-    /// The last action result overlay, if the overlay is showing (tests).
+    /// The `(defbancada)` plan currently awaiting confirmation, if any
+    /// (tests, and the renderer).
     #[must_use]
-    pub fn overlay(&self) -> Option<&ActionResult> {
+    pub fn pending_bancada(&self) -> Option<&PendingBancada> {
         match &self.panel {
-            Panel::ActionOverlay(r) => Some(r),
+            Panel::BancadaPreview(p) => Some(p),
+            Panel::Table | Panel::ActionOverlay(_) => None,
+        }
+    }
+
+    /// What the overlay currently shows, if one is showing.
+    ///
+    /// Returns an owned value rather than a borrow because a
+    /// [`Panel::BancadaPreview`] stores the typed *plan* and renders it on
+    /// demand — there is no stored [`ActionResult`] to lend. Keeping the two
+    /// screens behind one accessor is deliberate: a caller asking "what is
+    /// the operator looking at" should not have to know which of them it is.
+    #[must_use]
+    pub fn overlay(&self) -> Option<ActionResult> {
+        match &self.panel {
+            Panel::ActionOverlay(r) => Some(r.clone()),
+            Panel::BancadaPreview(p) => Some(preview_bancada(p)),
             Panel::Table => None,
         }
     }
@@ -371,8 +480,13 @@ impl<E: ClusterEnv> BankenApp<E> {
         self.draw_status_line(buf, width, height);
 
         // ── Action overlay (drawn last, on top) ──
-        if let Panel::ActionOverlay(result) = &self.panel {
-            draw_overlay(buf, width, height, result);
+        match &self.panel {
+            Panel::ActionOverlay(result) => draw_overlay(buf, width, height, result, false),
+            // The one screen with a confirm affordance — the footer says so.
+            Panel::BancadaPreview(pending) => {
+                draw_overlay(buf, width, height, &preview_bancada(pending), true);
+            }
+            Panel::Table => {}
         }
     }
 
@@ -415,7 +529,13 @@ fn pod_count_label(n: usize) -> String {
 
 /// Draw the action-result overlay as a bordered panel across the lower
 /// half of the screen. All writes are typed `Buffer` ops.
-fn draw_overlay(buf: &mut Buffer, width: u16, height: u16, result: &ActionResult) {
+fn draw_overlay(
+    buf: &mut Buffer,
+    width: u16,
+    height: u16,
+    result: &ActionResult,
+    confirmable: bool,
+) {
     if width < 10 || height < 8 {
         return;
     }
@@ -454,9 +574,14 @@ fn draw_overlay(buf: &mut Buffer, width: u16, height: u16, result: &ActionResult
         buf.set_stringn(2, ry, line, inner_w, body);
     }
 
-    // Footer hint.
+    // Footer hint. A confirmable screen ADVERTISES the confirm key — an
+    // affordance nothing tells the operator about is one nobody uses.
     if bottom > top + 1 {
-        let hint = " esc: dismiss ";
+        let hint = if confirmable {
+            " enter: open  ·  esc: dismiss "
+        } else {
+            " esc: dismiss "
+        };
         let hint_w = u16::try_from(hint.chars().count()).unwrap_or(0);
         if hint_w < width {
             buf.set_stringn(2, bottom, hint, hint_w, border);
@@ -517,7 +642,7 @@ fn overlay_content(result: &ActionResult) -> (String, Style, Vec<String>) {
             t.push_str(legality);
             t.push_str(" — ");
             t.push_str(recipe);
-            t.push_str(" (plan only, not opened) ");
+            t.push_str(" (not opened yet) ");
             let mut body = Vec::with_capacity(lines.len() + 2);
             let mut s = String::from("session:  ");
             s.push_str(session_name);
@@ -527,6 +652,44 @@ fn overlay_content(result: &ActionResult) -> (String, Style, Vec<String>) {
             // BREAK-GLASS is red, an observe plan is green — the same colour
             // vocabulary the postigo overlays already use, so the operator
             // reads the gate before the text.
+            let style = if legality == "OBSERVE" {
+                Style::default().fg(Color::Green).bold()
+            } else {
+                Style::default().fg(Color::Red).bold()
+            };
+            (t, style, body)
+        }
+        ActionResult::BancadaOpened {
+            recipe,
+            legality,
+            session_name,
+            pane_count,
+            witnessed,
+        } => {
+            let mut t = String::from(" BANCADA — ");
+            t.push_str(legality);
+            t.push_str(" — ");
+            t.push_str(recipe);
+            t.push_str(" (OPENED) ");
+            let mut body = Vec::new();
+            let mut s = String::from("session:  ");
+            s.push_str(session_name);
+            body.push(s);
+            let mut p = String::from("panes:    ");
+            p.push_str(&pane_count.to_string());
+            body.push(p);
+            if *witnessed {
+                body.push(String::new());
+                // The asymmetry `TearSessionEnv` builds in, restated where the
+                // operator can act on it: the live-effect command is typed and
+                // waiting, and their own Enter IN THE PANE is the final act.
+                body.push(String::from(
+                    "the live-effect command is TYPED but NOT submitted — your own",
+                ));
+                body.push(String::from(
+                    "Enter in that pane is the final act. banken recorded the witness.",
+                ));
+            }
             let style = if legality == "OBSERVE" {
                 Style::default().fg(Color::Green).bold()
             } else {
@@ -554,6 +717,7 @@ impl From<NavIntent> for Action {
             NavIntent::SelectNext => Action::SelectNext,
             NavIntent::SelectPrev => Action::SelectPrev,
             NavIntent::ToggleSort => Action::ToggleSort,
+            NavIntent::Confirm => Action::Confirm,
             NavIntent::Dismiss => Action::Dismiss,
             NavIntent::Quit => Action::Quit,
         }
@@ -797,12 +961,13 @@ pub fn unbound_action_names(catalog: &Catalog) -> Vec<String> {
 }
 
 // `AsyncApp::draw` takes `&self` and returns `impl Future + Send`, so the
-// `&BankenApp<E>` borrow must be `Send` — which requires `E: Sync`.
-impl<E: ClusterEnv + Send + Sync> AsyncApp for BankenApp<E> {
+// `&BankenApp<E, S>` borrow must be `Send` — which requires both seams `Sync`.
+impl<E: ClusterEnv + Send + Sync, S: SessionEnv + Send + Sync> AsyncApp for BankenApp<E, S> {
     type Action = Action;
 
     fn keymap(&self) -> &KeyMap<Action> {
-        &self.keys
+        // Delegates to the inherent accessor — one source, two callers.
+        BankenApp::keymap(self)
     }
 
     async fn handle(&mut self, action: &Action) -> TermResult<()> {
@@ -818,7 +983,7 @@ impl<E: ClusterEnv + Send + Sync> AsyncApp for BankenApp<E> {
     }
 
     fn should_quit(&self) -> bool {
-        self.done
+        BankenApp::should_quit(self)
     }
 }
 
@@ -830,10 +995,15 @@ mod tests {
 
     use super::*;
     use crate::fixture::FixtureClusterEnv;
+    use banken_spec::testing::MockSessionEnv;
 
-    fn app() -> BankenApp<FixtureClusterEnv> {
+    /// The app over the fixture cluster and a **recording** session env, so
+    /// every test can assert what a confirm did or did not open. No tear
+    /// daemon, no subprocess, no PTY.
+    fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
         BankenApp::try_new(
             FixtureClusterEnv::new(),
+            MockSessionEnv::new(),
             OperatorId("drzzln".into()),
             "source: fixture",
         )
@@ -842,7 +1012,7 @@ mod tests {
 
     /// The same app, told which cluster it is reading — what a bancada needs
     /// to pre-warm a session on the RIGHT one.
-    fn app_on(cluster: &str) -> BankenApp<FixtureClusterEnv> {
+    fn app_on(cluster: &str) -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
         app().with_cluster(cluster)
     }
 
@@ -1090,6 +1260,197 @@ mod tests {
             }
             other => panic!("expected a named refusal, got {other:?}"),
         }
+    }
+
+    /// **THE GATE for `pending-banken: bancada-app-open`.** Resolving a
+    /// recipe and CONFIRMING it opens a real session through the
+    /// [`SessionEnv`] seam — asserted on what the env RECORDED, not on what
+    /// the overlay says. "banken reported a session" and "the seam was
+    /// called" are different claims and only the second one is evidence.
+    ///
+    /// Fail-once measured (2026-07-31): replacing the `Action::Confirm` arm's
+    /// `open_bancada(pending, &self.session)` with the old
+    /// preview-only behaviour turns this test red with
+    ///
+    /// ```text
+    /// assertion `left == right` failed: confirming must OPEN the session
+    ///           through the seam, not merely re-render the plan
+    ///   left: 0
+    ///  right: 1
+    /// ```
+    ///
+    /// so it is checking the wire, not a shape nothing can violate.
+    #[test]
+    fn confirming_a_bancada_opens_it_through_the_session_seam() {
+        let mut a = app_on("camelot-eks");
+
+        // Resolving alone touches NOTHING. This half is what makes the
+        // confirm step meaningful rather than decorative.
+        a.apply_action(Action::OpenBancada(0));
+        assert!(
+            a.pending_bancada().is_some(),
+            "the chord resolves a plan and awaits confirmation"
+        );
+        assert_eq!(
+            a.session().sessions.borrow().len(),
+            0,
+            "resolving a bancada must not open anything",
+        );
+
+        // The name the operator was SHOWN, captured before confirming, so the
+        // next assertion compares the opened session against the previewed
+        // one rather than against a literal that could drift from both.
+        let previewed = a
+            .pending_bancada()
+            .expect("just resolved")
+            .plan
+            .session_name()
+            .to_owned();
+        assert!(
+            previewed.starts_with("triage-camelot-eks-"),
+            "the session name carries the cluster banken reads: {previewed}",
+        );
+
+        // Confirming opens it.
+        a.apply_action(Action::Confirm);
+
+        let sessions = a.session().sessions.borrow().clone();
+        assert_eq!(
+            sessions.len(),
+            1,
+            "confirming must OPEN the session through the seam, not merely \
+             re-render the plan",
+        );
+        assert_eq!(
+            sessions[0].0, previewed,
+            "and it opens the session the PREVIEW named",
+        );
+        // Three panes: one root + two splits, each staged.
+        assert_eq!(a.session().splits.borrow().len(), 2);
+        assert_eq!(a.session().staged.borrow().len(), 3);
+        assert_eq!(
+            a.session().witnessed_count(),
+            0,
+            "a pure-observe recipe witnesses nothing",
+        );
+        // The staged argv is the pre-warmed one, on the cluster banken reads.
+        let staged = a.session().staged.borrow();
+        assert!(
+            staged[0].1.contains(&"camelot-eks".to_string()),
+            "the first pane targets the cluster banken is reading: {:?}",
+            staged[0].1,
+        );
+
+        // And the overlay flips from preview to opened.
+        match a.overlay() {
+            Some(ActionResult::BancadaOpened {
+                recipe,
+                pane_count,
+                witnessed,
+                ..
+            }) => {
+                assert_eq!(recipe, "pod-triage");
+                assert_eq!(pane_count, 3, "the env's ACTUAL pane count");
+                assert!(!witnessed);
+            }
+            other => panic!("expected a BancadaOpened overlay, got {other:?}"),
+        }
+        assert!(
+            a.pending_bancada().is_none(),
+            "a confirmed plan is no longer pending — a second enter must not \
+             open it twice",
+        );
+    }
+
+    /// **THE GATE.** The BREAK-GLASS recipe's mutating pane goes through the
+    /// WITNESSED arm, carrying the authored witness + runbook. The app adds
+    /// no legality of its own — this is `bancada::open`'s discipline reaching
+    /// the keystroke intact.
+    #[test]
+    fn confirming_a_break_glass_bancada_stages_through_the_witnessed_arm() {
+        let mut a = app_on("camelot-eks");
+        a.apply_action(Action::OpenBancada(1));
+
+        // M0 has no container picker, so a recipe naming `(:context
+        // container)` refuses by name — an honest outcome that must not be
+        // read as "it opened".
+        let Some(pending) = a.pending_bancada() else {
+            match a.overlay() {
+                Some(ActionResult::Error(msg)) => {
+                    assert!(msg.contains("container"), "named refusal: {msg}");
+                    return;
+                }
+                other => panic!("expected a plan or a named refusal, got {other:?}"),
+            }
+        };
+        assert_eq!(pending.legality_label(), "BREAK-GLASS");
+
+        a.apply_action(Action::Confirm);
+
+        let witnessed = a.session().witnessed.borrow().clone();
+        assert_eq!(
+            witnessed.len(),
+            1,
+            "the exec pane MUST take the witnessed arm — it has no \
+             ObservedCommand value to take the other one with",
+        );
+        let (_, argv, action) = &witnessed[0];
+        assert!(argv.contains(&"exec".to_string()), "got {argv:?}");
+        assert_eq!(action.witness.0, "drzzln");
+        assert!(action.runbook.0.contains("RUNBOOK"));
+
+        match a.overlay() {
+            Some(ActionResult::BancadaOpened {
+                legality,
+                witnessed: w,
+                ..
+            }) => {
+                assert_eq!(legality, "BREAK-GLASS");
+                assert!(w, "the overlay states that a live-effect was staged");
+            }
+            other => panic!("expected a BancadaOpened overlay, got {other:?}"),
+        }
+    }
+
+    /// `enter` anywhere but a bancada preview is a deliberate no-op — it must
+    /// not open anything, and it must not raise an error panel either.
+    #[test]
+    fn confirm_outside_a_preview_opens_nothing() {
+        let mut a = app_on("camelot-eks");
+        a.apply_action(Action::Confirm);
+        assert_eq!(a.session().sessions.borrow().len(), 0);
+        assert!(a.overlay().is_none(), "and it raises no panel");
+
+        // Nor on a postigo result overlay.
+        a.apply_action(Action::DeclareScale);
+        a.apply_action(Action::Confirm);
+        assert_eq!(a.session().sessions.borrow().len(), 0);
+    }
+
+    /// Dismissing a preview must not open it. The escape hatch has to be a
+    /// real escape hatch.
+    #[test]
+    fn dismissing_a_preview_opens_nothing() {
+        let mut a = app_on("camelot-eks");
+        a.apply_action(Action::OpenBancada(0));
+        a.apply_action(Action::Dismiss);
+        assert!(a.pending_bancada().is_none());
+        assert_eq!(a.session().sessions.borrow().len(), 0);
+        // And a confirm after the dismissal has nothing to act on.
+        a.apply_action(Action::Confirm);
+        assert_eq!(a.session().sessions.borrow().len(), 0);
+    }
+
+    /// The authored `return` chord reaches the runtime as `enter` — the ONE
+    /// measured awase→egaku-term translation this binding depends on. Without
+    /// it the confirm key would be authored and unreachable.
+    #[test]
+    fn the_authored_confirm_chord_binds_to_enter() {
+        let a = app();
+        assert_eq!(
+            a.keymap().lookup(&KeyCombo::key("enter")),
+            Some(&Action::Confirm),
+        );
     }
 
     /// A bancada opens a whole session — the most expensive thing a held key

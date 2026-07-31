@@ -13,6 +13,7 @@ use banken::app::{Action, BankenApp, key_legend, keymap_from_catalog, unbound_ac
 use banken::fixture::FixtureClusterEnv;
 use banken::table::{IDENTITY_FIELD, PodTable, pod_columns};
 use banken_spec::env::ClusterEnv;
+use banken_spec::testing::MockSessionEnv;
 use banken_spec::types::{OperatorId, ResourceKind};
 use banken_spec::{Catalog, SpecError, load_catalog};
 use egaku_term::__re::KeyCombo;
@@ -311,6 +312,7 @@ fn a_non_resource_view_cannot_build_a_resource_table() {
 fn the_app_builds_from_the_shipped_vocabulary() {
     let app = BankenApp::try_new(
         FixtureClusterEnv::new(),
+        MockSessionEnv::new(),
         OperatorId("drzzln".into()),
         "source: fixture",
     )

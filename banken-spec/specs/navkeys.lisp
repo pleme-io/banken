@@ -29,5 +29,15 @@
 ;; Dismiss the postigo action-result overlay.
 (defnavkey :name "dismiss-overlay"   :keys "escape" :intent dismiss)
 
+;; Confirm the previewed action. Today that is exactly one thing: opening the
+;; `(defbancada)` session the `g` / `shift+g` overlay is previewing. A
+;; bancada is NEVER opened by the chord that resolves it — the operator sees
+;; the fully-resolved argv, the cluster it names, and the DERIVED postigo
+;; class first, and then decides. That gap is the whole point for a
+;; BREAK-GLASS recipe. Note awase spells this `return`; egaku-term delivers
+;; it as `enter`, and `banken::keys::chord_to_combo` carries that one
+;; MEASURED translation.
+(defnavkey :name "confirm-preview"   :keys "return" :intent confirm)
+
 ;; Quit.
 (defnavkey :name "quit"              :keys "q"      :intent quit)

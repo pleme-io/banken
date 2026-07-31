@@ -99,8 +99,11 @@
 //!   `banken::tear_session` (feature `tear`) and was **run against a live
 //!   `tear-daemon` on 2026-07-30**: a real three-pane session, with the
 //!   pre-warmed `kubectl` line asserted on the first pane's rendered grid.
-//! - banken's `g` chord **previews** the plan; it does not open one.
-//!   `pending-banken: bancada-app-open`.
+//! - banken's `g` chord resolves and **previews** the plan; the operator's
+//!   `enter` confirms it and the app calls [`open`] through its `SessionEnv`
+//!   type parameter (`pending-banken: bancada-app-open`, CLOSED 2026-07-31).
+//!   Whether that seam is a live daemon, a recording mock, or a build with no
+//!   adapter compiled in is the app's choice, not this module's.
 //!
 //! One upstream limitation shapes the adapter and is stated where it lives
 //! (`banken::tear_session`): `MultiplexerControl` spawns a pane's program with

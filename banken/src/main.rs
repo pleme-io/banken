@@ -103,6 +103,24 @@ fn missing_context_hint() -> String {
     String::new()
 }
 
+/// The [`SessionEnv`](banken_spec::bancada::SessionEnv) a confirmed
+/// `(defbancada)` opens through.
+///
+/// With the `tear` feature this is the live adapter, connecting to the daemon
+/// **on first use** — so a missing `tear-daemon` costs one overlay saying so
+/// at the moment the operator asks for a session, rather than refusing to
+/// start banken at all. Without the feature it is the typed refusal, which
+/// still prints the fully-resolved plan and says why it cannot open it.
+#[cfg(feature = "tear")]
+fn session_env() -> banken::session::LazyTearSessionEnv {
+    banken::session::LazyTearSessionEnv::new()
+}
+
+#[cfg(not(feature = "tear"))]
+fn session_env() -> banken::session::UnwiredSessionEnv {
+    banken::session::UnwiredSessionEnv::new()
+}
+
 /// Run the navigator over the fixture source (the proven path).
 async fn run_fixture(operator: OperatorId) -> Result<(), String> {
     // Fallible: the keymap and the table columns come from the authored
@@ -110,6 +128,7 @@ async fn run_fixture(operator: OperatorId) -> Result<(), String> {
     // hardcoded chords the legend does not describe.
     let mut app = BankenApp::try_new(
         FixtureClusterEnv::new(),
+        session_env(),
         operator,
         "source: fixture (no cluster read)",
     )
@@ -153,7 +172,7 @@ async fn run_live(operator: OperatorId, context: &str) -> Result<(), String> {
     let cluster = env.context_name().unwrap_or_default();
     let mut label = String::from("source: LIVE ");
     label.push_str(&cluster);
-    let mut app = BankenApp::try_new(env, operator, label)
+    let mut app = BankenApp::try_new(env, session_env(), operator, label)
         .map_err(|e| e.to_string())?
         .with_cluster(cluster);
     egaku_term::run_async(&mut app)
@@ -247,9 +266,11 @@ fn print_usage() {
                         note,
                     );
                 }
-                println!("  The plan is PREVIEWED, not opened: handing it to a live tear-daemon");
-                println!("  is the SessionEnv seam's job and banken ships no implementation of it");
-                println!("  yet (pending-banken: bancada-live-handoff).");
+                println!("  The chord RESOLVES and previews the plan; `enter` confirms it and");
+                println!("  opens it through the SessionEnv seam. The gap is deliberate: you see");
+                println!("  the resolved argv and the cluster it names before anything opens.");
+                println!("  Opening for real needs `--features tear` and a running tear-daemon;");
+                println!("  without them `enter` says so rather than reporting a session.");
             }
         }
         // Honest: if the vocabulary does not load, say so rather than print a

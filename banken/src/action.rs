@@ -13,9 +13,13 @@
 //!   `env.break_glass`, producing a witnessed [`GlassRecord`] preview.
 //!
 //! - `g` / `shift+g` → a **bancada**: a `(defbancada)` resolved against the
-//!   selected row into a pre-warmed tear session plan ([`plan_bancada`]). Its
-//!   postigo class is DERIVED from the recipe's panes, so the overlay states
-//!   the gate the session would cross rather than taking the author's word.
+//!   selected row into a pre-warmed tear session plan ([`resolve_bancada`]).
+//!   Its postigo class is DERIVED from the recipe's panes, so the overlay
+//!   states the gate the session would cross rather than taking the author's
+//!   word. The chord **resolves and previews**; `enter` confirms and
+//!   [`open_bancada`] performs it. The gap between those two is deliberate:
+//!   a BREAK-GLASS recipe stages a live-effect command, and the operator sees
+//!   the fully-resolved argv and the cluster it names before anything opens.
 //!
 //! Every path goes through [`banken_spec::interp::apply`] over a
 //! [`banken_spec::env::ClusterEnv`]. There is **no live-mutate path** —
@@ -24,7 +28,7 @@
 //! This module adds zero new legality — it consumes the shipped gate.
 
 use awase::Key;
-use banken_spec::bancada::{BancadaContext, BancadaSpec, PlannedPane};
+use banken_spec::bancada::{BancadaContext, BancadaSpec, PlannedPane, SessionEnv, SessionPlan};
 use banken_spec::chord::ActionChord;
 use banken_spec::env::ClusterEnv;
 use banken_spec::interp::{Outcome, Selection, apply};
@@ -122,9 +126,8 @@ pub enum ActionResult {
     /// staged with, plus the recipe's DERIVED postigo class.
     ///
     /// A **preview**, exactly like [`Self::DeclarePreview`]: producing the
-    /// plan touches nothing. Handing it to a live `tear-daemon` is the
-    /// [`banken_spec::bancada::SessionEnv`] seam's job, and banken ships no
-    /// implementation of that seam yet — `pending-banken: bancada-live-handoff`.
+    /// plan touches nothing. The operator's `enter` confirms it and
+    /// [`open_bancada`] hands it to the [`banken_spec::bancada::SessionEnv`].
     BancadaPlan {
         /// The recipe's name.
         recipe: String,
@@ -136,6 +139,29 @@ pub enum ActionResult {
         session_name: String,
         /// One rendered line per pane.
         lines: Vec<String>,
+    },
+    /// A confirmed `(defbancada)` that was **actually opened** through the
+    /// [`banken_spec::bancada::SessionEnv`] seam.
+    ///
+    /// Distinct from [`Self::BancadaPlan`] on purpose: the two are the
+    /// before and after of the one irreversible-ish step in this app, and
+    /// collapsing them into one variant would let the UI say "opened" over a
+    /// plan nothing had accepted. `pane_count` is the number of pane handles
+    /// the env actually returned, not the number the recipe declared — so a
+    /// partial open cannot render as a whole one.
+    BancadaOpened {
+        /// The recipe's name.
+        recipe: String,
+        /// Its derived legality class label, uppercased.
+        legality: String,
+        /// The opened tear session's name.
+        session_name: String,
+        /// How many panes the env actually created.
+        pane_count: usize,
+        /// Whether the recipe staged a witnessed (live-effect) command — so
+        /// the overlay can repeat that the operator's own Enter, in the pane,
+        /// is still the final act.
+        witnessed: bool,
     },
     /// The action could not run — a typed error surfaced (e.g. no owning
     /// `release.yaml` for a DECLARE, the §IX coverage gap).
@@ -217,21 +243,60 @@ pub fn dispatch<E: ClusterEnv>(
     }
 }
 
+/// A `(defbancada)` resolved against a selected row and **awaiting the
+/// operator's confirmation**.
+///
+/// The app holds one of these between the chord that resolves a recipe and
+/// the `enter` that opens it, which is what makes the confirm step real
+/// rather than cosmetic: the plan that is opened is *the same value* that was
+/// previewed, not a re-resolution against a table the operator may have
+/// scrolled in the meantime.
+///
+/// It carries the recipe name alongside the plan because
+/// [`SessionPlan`] deliberately does not — a plan knows its generated
+/// *session* name, which is not the same string.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingBancada {
+    /// The authored recipe's name.
+    pub recipe: String,
+    /// The resolved plan. Its fields are private and
+    /// [`banken_spec::bancada::plan`] is its only constructor, so its
+    /// `legality` cannot disagree with its panes.
+    pub plan: SessionPlan,
+}
+
+impl PendingBancada {
+    /// The derived `postigo` class label, uppercased.
+    #[must_use]
+    pub fn legality_label(&self) -> String {
+        self.plan.legality().class().label().to_uppercase()
+    }
+}
+
 /// Resolve a `(defbancada)` against the selected row into a session plan.
 ///
 /// This is the banken → tear/mado bridge at the keystroke: the selected row
 /// plus the cluster banken is reading become a [`BancadaContext`], and
 /// [`banken_spec::bancada::plan`] turns the authored recipe into concrete
-/// panes with concrete argv.
+/// panes with concrete argv. **It touches nothing** — producing a plan is
+/// pure.
 ///
 /// Every failure is surfaced as [`ActionResult::Error`] carrying the typed
 /// message — in particular the **unknown-cluster refusal**, which is the one
 /// an operator must see rather than have papered over: a pre-warmed session
 /// on the wrong cluster is worse than no pre-warmed session.
-#[must_use]
-pub fn plan_bancada(table: &PodTable, spec: &BancadaSpec, cluster: &str) -> ActionResult {
+///
+/// # Errors
+///
+/// An [`ActionResult::Error`] carrying the typed refusal, so the caller can
+/// put it straight in the overlay.
+pub fn resolve_bancada(
+    table: &PodTable,
+    spec: &BancadaSpec,
+    cluster: &str,
+) -> Result<PendingBancada, ActionResult> {
     let Some(selection) = current_selection(table) else {
-        return ActionResult::Error("no row selected".into());
+        return Err(ActionResult::Error("no row selected".into()));
     };
     let ctx = BancadaContext {
         cluster: cluster.to_owned(),
@@ -242,11 +307,46 @@ pub fn plan_bancada(table: &PodTable, spec: &BancadaSpec, cluster: &str) -> Acti
         container: None,
     };
     match banken_spec::bancada::plan(spec, &ctx) {
-        Ok(p) => ActionResult::BancadaPlan {
+        Ok(plan) => Ok(PendingBancada {
             recipe: spec.name.clone(),
-            legality: p.legality().class().label().to_uppercase(),
-            session_name: p.session_name().to_owned(),
-            lines: p.panes().iter().map(render_pane).collect(),
+            plan,
+        }),
+        Err(e) => Err(ActionResult::Error(e.to_string())),
+    }
+}
+
+/// Render a pending plan as the preview overlay the operator confirms.
+#[must_use]
+pub fn preview_bancada(pending: &PendingBancada) -> ActionResult {
+    ActionResult::BancadaPlan {
+        recipe: pending.recipe.clone(),
+        legality: pending.legality_label(),
+        session_name: pending.plan.session_name().to_owned(),
+        lines: pending.plan.panes().iter().map(render_pane).collect(),
+    }
+}
+
+/// **Open** a confirmed plan through the [`SessionEnv`] seam.
+///
+/// This is the one place in the app that performs the bancada rather than
+/// describing it, and it deliberately adds **no legality of its own**: it
+/// calls [`banken_spec::bancada::open`], which walks the plan and routes each
+/// pane through the arm its `CommandEffect` admits. A mutating pane has no
+/// `ObservedCommand` value, so it *cannot* take the unwitnessed arm, and a
+/// plan with no witness fails with `UnwitnessedBancada` rather than staging
+/// the command anyway. The derived-legality discipline is enforced by the
+/// seam, not re-implemented here — which is the point of having a seam.
+#[must_use]
+pub fn open_bancada<S: SessionEnv>(pending: &PendingBancada, session: &S) -> ActionResult {
+    match banken_spec::bancada::open(&pending.plan, session) {
+        Ok(refs) => ActionResult::BancadaOpened {
+            recipe: pending.recipe.clone(),
+            legality: pending.legality_label(),
+            session_name: pending.plan.session_name().to_owned(),
+            // The env's actual pane count, NOT the recipe's declared one — a
+            // partial open must not render as a whole one.
+            pane_count: refs.len(),
+            witnessed: pending.plan.witnessed_action().is_some(),
         },
         Err(e) => ActionResult::Error(e.to_string()),
     }

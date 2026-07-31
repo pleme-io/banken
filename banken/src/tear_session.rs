@@ -67,10 +67,25 @@
 //! [`TearSessionEnv::type_into`] to send zero bytes turns it red on exactly
 //! that assertion, so it is not checking a shape nothing can violate.
 //!
-//! What is NOT yet true: the **app** does not call this. Pressing `g` in
-//! banken previews the plan; a confirm-then-open path from the overlay is
-//! `pending-banken: bancada-app-open`. Do not read "the handoff works" as
-//! "the keystroke opens a session".
+//! The **app** now reaches this: `banken::app::BankenApp` carries a
+//! `SessionEnv` type parameter, `g` resolves and previews the plan, and
+//! `enter` confirms it (`pending-banken: bancada-app-open`, CLOSED
+//! 2026-07-31 — mock-proven with a measured fail-once).
+//!
+//! # What the real-daemon run proved, and what it did NOT (2026-07-31)
+//!
+//! `banken --features tear` in a real PTY, `g` then `enter`, rendered
+//! `BANCADA — OBSERVE — pod-triage (OPENED) / panes: 3`. Every RPC returned
+//! `Ok` (an `Err` would have rendered an ERROR overlay instead), so the daemon
+//! accepted the whole walk and held the session while banken walked it.
+//!
+//! **But `tear list` on the same socket reports no sessions immediately
+//! afterwards** (`session_count: 0`), so the session is not one the operator
+//! can attach to. The same disappearance shows up for sessions created through
+//! mado's `tear_new_session` MCP tool, which points at a tear-side lifecycle
+//! behaviour rather than at this adapter. banken must not edit tear from this
+//! repo. `pending-banken: bancada-app-open-live` — open on the durability
+//! claim ONLY; the call path itself is proven.
 
 use std::cell::RefCell;
 

@@ -30,6 +30,34 @@ mutation is `E0599` within the authored surface (the re-add case is CI-caught,
 per `substrate_invariant.rs`, graded only-mitigated → CI-caught, never rounded up
 to truly-unrepresentable).
 
+## The two app seams — `BankenApp<E: ClusterEnv, S: SessionEnv>`
+
+The app is generic over **two** mockable traits, for the same reason each time:
+the runtime is byte-identical against a mock, a live backend, or a build with
+no adapter compiled in. Rows come from `E`; a confirmed `(defbancada)` opens
+through `S`.
+
+| seam | mock | live | absent |
+|---|---|---|---|
+| `ClusterEnv` | `MockClusterEnv` / `FixtureClusterEnv` | `KubeClusterEnv` (feat `live`) | `--live` is a typed CLI error |
+| `SessionEnv` | `MockSessionEnv` | `LazyTearSessionEnv` (feat `tear`) | `UnwiredSessionEnv` — a typed refusal |
+
+`UnwiredSessionEnv` **refuses** rather than returning `Ok(())`: a stub would
+make the app report a session it never opened, and the operator would go
+looking for panes that do not exist.
+
+`LazyTearSessionEnv` is a `Mutex` wrapper, and that is load-bearing rather than
+tidy: `AsyncApp::draw` returns an `impl Future + Send`, so `S: Sync`, and
+`TearSessionEnv` holds a `RefCell` and is **not** `Sync`. The wrapper is what
+makes the live adapter reachable from the app at all. It connects on first
+`open_session` so a missing daemon costs one overlay at the moment the operator
+asks, instead of refusing to start banken for a dependency only `g` uses.
+
+Two accessors (`keymap`, `should_quit`) are **inherent** as well as on
+`AsyncApp`, because that trait needs both seams `Send + Sync` and a recording
+mock is neither. Asking "which action does this chord bind" has nothing to do
+with owning a terminal.
+
 ## The authored vocabulary — SEVEN domains, one resolved catalog
 
 banken's behaviour is **data**, both the configuration half and the
@@ -44,7 +72,7 @@ nothing across domains.
 | `(defpathology)` | a symptom→cause rule: evidence, severity, remedy rail | 3 |
 | `(defward)` | the health landing: Pulses lanes, linter set, headline | 1 |
 | `(defdrill)` | a typed drill path (`→logs`, `→diagnose`, `→xray`) | 3 |
-| `(defnavkey)` | a navigation chord + its local-UI intent | 7 |
+| `(defnavkey)` | a navigation chord + its local-UI intent | 8 |
 | `(defbancada)` | a pre-warmed tear/mado troubleshooting session | 2 |
 
 plus `(defbanken)` in `banken-config` (the deployment face). Every domain has
@@ -72,6 +100,17 @@ namespace + pod banken is looking at — so the operator is fixing the problem
 rather than setting up to fix it. `g` → `pod-triage` (3 read panes),
 `shift+g` → `pod-break-glass` (logs + `kubectl exec`).
 
+**The chord RESOLVES; `enter` OPENS.** The two are separate keystrokes on
+purpose, and it is not ceremony: the preview shows the fully-resolved argv and
+the cluster it names *before* anything happens, which for a BREAK-GLASS recipe
+is the whole difference between staging a live-effect command and being asked
+first. `confirm` is an authored `(defnavkey :keys "return" :intent confirm)`,
+so the confirm key is data like every other chord; `NavIntent`'s app
+projection is exhaustive, so adding the variant was a compile error until it
+was handled. `Action::Confirm` is **repeat-gated** — it is the most expensive
+action in the app, and a held `enter` would be one session per OS repeat tick.
+A confirmed plan is cleared, so a second `enter` cannot open it twice.
+
 **The load-bearing invariant: there is NO `:legality` kwarg.** A recipe's
 `postigo` class is *derived* from its panes — any pane whose `:effect` is
 `mutates` makes the whole recipe BREAK-GLASS — so a mutating recipe has no
@@ -80,6 +119,23 @@ field in which to claim it observes. A BREAK-GLASS recipe must carry
 (`UnneededWitness`). Fail-once measured: deleting `:witness "drzzln"` from
 `specs/bancadas.lisp` turns three tests red with
 `UnwitnessedBancada { bancada: "pod-break-glass", pane_role: "shell" }`.
+
+**Second fail-once, measured 2026-07-31 for the app-open wire.** Reverting
+`Action::Confirm`'s arm from `open_bancada(pending, &self.session)` back to the
+old preview-only `preview_bancada(pending)` turns exactly one test red:
+
+```text
+assertion `left == right` failed: confirming must OPEN the session through
+the seam, not merely re-render the plan
+  left: 0
+ right: 1
+```
+
+The assertion is on **what `MockSessionEnv` recorded**, not on what the overlay
+says — "banken reported a session" and "the seam was called" are different
+claims and only the second is evidence. The app adds **no legality of its
+own**: `open_bancada` calls `bancada::open`, so the mutating pane still has no
+`ObservedCommand` value with which to take the unwitnessed arm.
 
 **And the witness is structural at the seam.** `SessionEnv` has exactly two
 staging arms taking *different types*: `stage_observed(ObservedCommand)` and
@@ -97,6 +153,23 @@ context happens to be, which is not necessarily what banken is reading. An
 unknown cluster is a typed **refusal** (`UnresolvedContextField`), never an
 emitted `--context ""`. Same for `namespace` / `container`.
 
+**And the same hazard existed ONE LAYER UP, unguarded, until 2026-07-31.**
+`banken --live` rode `Client::try_default()` — i.e. the kubeconfig's
+`current-context` — so banken could render a real pod table from an entirely
+different estate than the operator meant, and nothing would look wrong: the
+read succeeds, the rows are real, only the cluster is wrong. Measured on cid
+that day: current-context was `us-east-2-staging-eks` (akeyless) while the
+cluster under inspection was `camelot-eks`. `--context <name>` is now
+**REQUIRED** for `--live` (`banken::cli`, `Invocation::Live` carries a
+non-optional `String`, so an unnamed live run has no representation past the
+parser — **parse-time-rejected**, not truly-unrepresentable: the library's
+`KubeClusterEnv::connect()` still exists as the honest in-cluster
+constructor). The refusal prints the current-context it would have used and
+every available context name, so it costs one keystroke, not a detour.
+`connect_with_context` carries the connected name straight into
+`context_name`, so the string that selected the apiserver and the string a
+`(defbancada)` resolves against **cannot drift**.
+
 **A staged command is a typed argv, never a shell string** — `:program` plus
 `(:literal …)` / `(:context …)` args. `CommandArg` has no join arm on
 purpose; the first recipe needing `--field-selector k=v` is the third-use
@@ -108,7 +181,47 @@ signal to add a typed `(:joined …)`, not to interpolate.
 |---|---|
 | forms compile, legality derives, plan resolves, plan walks a `SessionEnv` | **SHIPPED, mock-green** (`MockSessionEnv`, zero side effects) |
 | the LIVE handoff to a running `tear-daemon` | **SHIPPED + PROVEN LIVE 2026-07-30** — `banken/tests/tear_handoff.rs` (feature `tear`, `#[ignore]`d) opened a real 3-pane session and asserted the pre-warmed `kubectl` line **on the first pane's rendered grid**. Fail-once: stubbing `type_into` to send zero bytes turns it red there. |
-| pressing `g` in banken OPENS a session | **NOT DONE** — it *previews* the plan (like the DECLARE overlay previews a manifest). `pending-banken: bancada-app-open`. |
+| pressing `g` then `enter` in banken OPENS a session | **SHIPPED, mock-proven 2026-07-31** — `pending-banken: bancada-app-open` CLOSED. `BankenApp<E: ClusterEnv, S: SessionEnv>` carries the seam as a second type parameter; `g` resolves + previews, `enter` confirms and calls `bancada::open`. Fail-once measured (below). |
+| pressing `enter` opens a session on a REAL `tear-daemon` | **PARTIAL — RUN, and it exposed a tear-side gap. Do not round this up.** See below. `pending-banken: bancada-app-open-live`. |
+
+**The `enter`-against-a-real-daemon run, measured 2026-07-31 — and what it
+actually proved.** `banken --features tear` in a real 110×26 PTY, `g` then
+`enter` on the fixture's `catch-api-7d9f`, rendered:
+
+```text
+┌─ BANCADA — OBSERVE — pod-triage (OPENED) ──────────────────────────┐
+│ session:  triage-fixture-catch-catch-api-7d9f                      │
+│ panes:    3                                                        │
+```
+
+Every RPC returned `Ok` — `connect_default`, `new_session_with_source_and_size`,
+`get_session`, `apply_layout`, 2× `split_pane`, 3× `send_keys`, `select_pane` —
+and any `Err` would have rendered an ERROR overlay instead, so the daemon really
+did accept the whole walk and really did hold that session at that moment.
+
+**And yet `tear list` on the very same socket
+(`~/.local/share/tear/tear.sock`, the only one `default_socket_path()` resolves
+to on macOS, bound by exactly one daemon pid) reports
+`(no sessions …)` immediately afterwards, with `session_count: 0` and
+`total_bytes_consumed: 0`.** So the session banken opened is **not one the
+operator can attach to**. The same disappearance was observed independently
+with sessions created through mado's `tear_new_session` MCP tool: snapshot once,
+gone by the next call. That points at a tear-side lifecycle/reaping behaviour,
+**not** at banken — and banken must not edit tear from this repo.
+
+Honest tier, three separate claims: *the app→tear call path executes end to end*
+— **PROVEN**. *A session exists at the moment banken walks the plan* —
+**PROVEN** (`get_session` + three `send_keys` succeeded against it). *The
+operator lands in a pre-warmed session they can attach to* — **NOT PROVEN**.
+The overlay saying `OPENED` is reporting the seam's own truthful return value;
+it is not a claim about durability. `pending-banken: bancada-app-open-live`
+stays open on that third claim alone.
+
+Note this also **qualifies** the 2026-07-30 `tear_handoff.rs` row above: that
+test asserted a real rendered grid and then killed the session, all inside one
+process, which is consistent with a session that exists transiently. It remains
+true as written; it was never evidence of durability, and must not be read as
+such.
 
 - **`pending-banken: tear-argv-spawn`** — the upstream limitation the adapter
   is shaped around. `MultiplexerControl` spawns a pane's program with **no
@@ -202,10 +315,10 @@ proven-live ✗ until a cluster is reachable / known ✓).
   selection + sort, alt-screen enter/Drop-restore via `egaku_term::AsyncApp` +
   `run_async`, and the **postigo dispatch wired through the UI** (`l`→OBSERVE logs,
   `s`→DECLARE full-manifest preview, `S`→BREAK-GLASS witnessed record — every path
-  through `banken_spec::apply`, no live-mutate path). Proof: **181 workspace tests**
-  green (`cargo test`; 105 banken-spec + 60 banken + 16 banken-config) incl. a `TestBackend` golden-frame test (asserts via
+  through `banken_spec::apply`, no live-mutate path). Proof: **195 workspace tests**
+  green (`cargo test`; 105 banken-spec + 74 banken + 16 banken-config) incl. a `TestBackend` golden-frame test (asserts via
   `to_lines()`/`cell()`, never `.contains()`) + a postigo-dispatch integration
-  test; `cargo fmt --check` clean. **60 tests green** in the binary crate
+  test; `cargo fmt --check` clean. **74 tests green** in the binary crate
   (`cargo test -p banken`).
   - **`pending-banken: promote-tableview-to-egaku`** — the `TableView`/`draw::table`
     are built **in banken for now** (egaku 0.1.4 has only `ListView`, egaku-term
@@ -340,15 +453,37 @@ proven-live ✗ until a cluster is reachable / known ✓).
     free label where `DrillSpec.from` is a resolved reference; a renderer
     computing its own bare `Verdict::Green` bypasses the `WardVerdict` seal
     (**only-mitigated**).
-- **DESIGN / UNTESTED-LIVE:** the live-cluster read (`live::KubeClusterEnv`, feature
-  `live`) — a real typed `kube`/`k8s-openapi` apiserver client (NO `kubectl`
-  subprocess), wired behind the same `ClusterEnv` seam, **compiles + its pure
-  `pod_to_row` projection is tested** (`cargo test -p banken --features live`), but
-  its network read is **never exercised** this session (no cluster reachable —
-  rio/camelot VPN-gated, local k3s down). `pending-banken: live-read`. Default the
-  binary to the fixture; `--live` selects it (and errors clearly without the feature,
-  never a silent fixture fallback). "renders from fixtures" is PROVEN; "live cluster
-  read" is DESIGN — never conflate.
+- **SHIPPED + PROVEN LIVE (2026-07-31):** the live-cluster **pod read**
+  (`live::KubeClusterEnv`, feature `live`) — a real typed `kube`/`k8s-openapi`
+  apiserver client (NO `kubectl` subprocess) behind the same `ClusterEnv` seam.
+  **`pending-banken: live-read` CLOSED.** `camelot-eks` (EKS v1.33, AWS SSO
+  exec-credential auth) returned **109 pods**, matching `kubectl get pods -A` at
+  the same moment, rendered through the whole pipeline. Two runs:
+  `banken/tests/live_read.rs` (`#[ignore]`d; refuses to guess a context —
+  `BANKEN_LIVE_CONTEXT`, no default) and the **binary in a real 120×28 PTY**.
+  Default the binary to the fixture; `--live --context <name>` selects the live
+  read (and errors clearly without the feature, never a silent fixture fallback).
+  - **★ The measurement immediately paid for its own tier (read this before
+    ever writing "compiles, therefore works").** `--features live` had compiled
+    clean for weeks; the first real read **aborted the process** —
+    `Could not automatically determine the process-level CryptoProvider from
+    Rustls crate features` (`rustls-0.23.42/src/crypto/mod.rs:249`). kube 0.99's
+    `rustls-tls` pulls rustls with `log,logging,std,tls12` and selects
+    **neither** `ring` nor `aws-lc-rs`, so there is no process default and the
+    first TLS handshake panics rather than erroring. The DESIGN tier on this row
+    was *exactly right* and rounding it up would have shipped a panic. Fixed at
+    the cause: `rustls` is a named `live` dep with the `ring` provider (`ring`
+    over `aws-lc-rs` — the latter is FFI to a C library), plus an explicit
+    `ensure_crypto_provider()` at both connect paths so a future crate enabling
+    the other provider is a no-op rather than a fresh panic.
+  - **Scope of the live claim, do not widen it: `list_resources` for pods, and
+    nothing else.** `get_resource`, `logs`, `events`, `topology`,
+    `health_signals`, `declare`, `break_glass` all still return typed
+    "not yet wired" errors on the live backend. AGE renders `-` on every row
+    (the `creation_timestamp` derivation needs a clock; `-` beats a wrong
+    value). The watch informer is still a poll —
+    **`pending-banken: live-watch`**, and `BankenApp::refresh()` still has no
+    caller, so a live table does not update until a keystroke.
 - **DESIGN / next arc (M1→M4):** the watch informer (poll→true watch), the health
   ward's **RENDER** (its `(defward)` vocabulary + the `WardVerdict` evaluator are
   SHIPPED mock-green; no ward panel is drawn yet — do not read the vocabulary as
