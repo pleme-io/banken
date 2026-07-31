@@ -1,7 +1,7 @@
-//! The `(defguarita)` bridge, proven end-to-end against the **shipped**
-//! `specs/guaritas.lisp` — not against hand-built fixtures.
+//! The `(defbancada)` bridge, proven end-to-end against the **shipped**
+//! `specs/bancadas.lisp` — not against hand-built fixtures.
 //!
-//! Unit tests in `src/guarita.rs` prove the algebra over constructed values;
+//! Unit tests in `src/bancada.rs` prove the algebra over constructed values;
 //! this file proves that the recipes banken actually ships compile from Lisp,
 //! resolve into the catalog, produce the right session/pane/argv plan for a
 //! concrete cluster + selection, and walk through the [`SessionEnv`] seam with
@@ -15,16 +15,16 @@
 //! machine.
 
 use banken_spec::{
-    guarita::{CommandEffect, GuaritaContext, PanePlacement, PaneRole, SessionLayout, open, plan},
+    bancada::{CommandEffect, BancadaContext, PanePlacement, PaneRole, SessionLayout, open, plan},
     interp::Selection,
-    load_catalog, load_guaritas,
+    load_catalog, load_bancadas,
     testing::MockSessionEnv,
     types::{ActionLegality, LegalityClass, ResourceKind},
 };
 
 /// A concrete broken-pod context: camelot-eks, namespace `catch`, one pod.
-fn ctx() -> GuaritaContext {
-    GuaritaContext {
+fn ctx() -> BancadaContext {
+    BancadaContext {
         cluster: "camelot-eks".into(),
         selection: Selection {
             kind: ResourceKind::Pod,
@@ -38,8 +38,8 @@ fn ctx() -> GuaritaContext {
 
 /// (a) The authored forms compile from Lisp into typed values.
 #[test]
-fn the_authored_guaritas_compile_into_typed_values() {
-    let gs = load_guaritas().expect("specs/guaritas.lisp must compile");
+fn the_authored_bancadas_compile_into_typed_values() {
+    let gs = load_bancadas().expect("specs/bancadas.lisp must compile");
     assert_eq!(gs.len(), 2, "two recipes ship");
 
     let triage = gs
@@ -67,10 +67,10 @@ fn the_authored_guaritas_compile_into_typed_values() {
 
 /// (c) THE GATE. A recipe staging a mutating command is BREAK-GLASS; an
 /// observe-only one is not. Neither can say otherwise — there is no
-/// `:legality` kwarg on `(defguarita)`.
+/// `:legality` kwarg on `(defbancada)`.
 #[test]
 fn a_mutating_recipe_is_break_glass_and_an_observing_one_is_not() {
-    let gs = load_guaritas().expect("compiles");
+    let gs = load_bancadas().expect("compiles");
 
     let triage = gs.iter().find(|g| g.name == "pod-triage").expect("triage");
     assert!(!triage.mutates());
@@ -114,7 +114,7 @@ fn a_mutating_recipe_is_break_glass_and_an_observing_one_is_not() {
 /// namespace, the right pod, already resolved onto every pane's command line.
 #[test]
 fn the_authored_triage_recipe_plans_the_right_session() {
-    let gs = load_guaritas().expect("compiles");
+    let gs = load_bancadas().expect("compiles");
     let triage = gs.iter().find(|g| g.name == "pod-triage").expect("triage");
     let p = plan(triage, &ctx()).expect("plans");
 
@@ -156,7 +156,7 @@ fn the_authored_triage_recipe_plans_the_right_session() {
 /// `--context ""` that silently opens on a different cluster.
 #[test]
 fn planning_without_a_known_cluster_is_refused_not_guessed() {
-    let gs = load_guaritas().expect("compiles");
+    let gs = load_bancadas().expect("compiles");
     let triage = gs.iter().find(|g| g.name == "pod-triage").expect("triage");
     let mut c = ctx();
     c.cluster = String::new();
@@ -173,7 +173,7 @@ fn planning_without_a_known_cluster_is_refused_not_guessed() {
 /// the UNWITNESSED arm, and lands the operator on the last pane.
 #[test]
 fn opening_the_triage_recipe_builds_the_split_session_with_no_witness() {
-    let gs = load_guaritas().expect("compiles");
+    let gs = load_bancadas().expect("compiles");
     let triage = gs.iter().find(|g| g.name == "pod-triage").expect("triage");
     let p = plan(triage, &ctx()).expect("plans");
 
@@ -206,7 +206,7 @@ fn opening_the_triage_recipe_builds_the_split_session_with_no_witness() {
 /// naming the session that was opened.
 #[test]
 fn opening_the_break_glass_recipe_routes_the_exec_through_the_witnessed_arm() {
-    let gs = load_guaritas().expect("compiles");
+    let gs = load_bancadas().expect("compiles");
     let glass = gs
         .iter()
         .find(|g| g.name == "pod-break-glass")
@@ -236,18 +236,18 @@ fn opening_the_break_glass_recipe_routes_the_exec_through_the_witnessed_arm() {
 /// The recipes join the ONE resolved catalog: reachable from a declared view,
 /// on chords nothing else claims.
 #[test]
-fn the_shipped_guaritas_join_the_resolved_catalog() {
+fn the_shipped_bancadas_join_the_resolved_catalog() {
     let c = load_catalog().expect("the shipped vocabulary must cross-resolve");
-    assert_eq!(c.guaritas().len(), 2);
+    assert_eq!(c.bancadas().len(), 2);
 
-    let from_pods = c.guaritas_from("pods");
+    let from_pods = c.bancadas_from("pods");
     assert_eq!(
         from_pods.len(),
         2,
         "both recipes launch from the :pods view"
     );
     assert!(
-        c.guaritas_from("nosuchview").is_empty(),
+        c.bancadas_from("nosuchview").is_empty(),
         "and none from a surface that does not exist",
     );
 
@@ -256,13 +256,13 @@ fn the_shipped_guaritas_join_the_resolved_catalog() {
     let mut chords: Vec<String> = Vec::new();
     chords.extend(c.actions().iter().map(|a| a.keys.canonical()));
     chords.extend(c.nav_keys().iter().map(|n| n.keys.canonical()));
-    chords.extend(c.guaritas().iter().map(|g| g.keys.canonical()));
+    chords.extend(c.bancadas().iter().map(|g| g.keys.canonical()));
     let total = chords.len();
     chords.sort();
     chords.dedup();
     assert_eq!(
         chords.len(),
         total,
-        "actions, nav keys and guaritas share ONE chord namespace",
+        "actions, nav keys and bancadas share ONE chord namespace",
     );
 }

@@ -19,7 +19,7 @@ use banken::app::BankenApp;
 use banken::fixture::FixtureClusterEnv;
 use banken_spec::types::OperatorId;
 
-/// The cluster id the fixture source reports. A `(defguarita)` resolving
+/// The cluster id the fixture source reports. A `(defbancada)` resolving
 /// `(:context cluster)` needs *a* name; naming the fixture is honest, and an
 /// empty value would make every recipe refuse.
 const FIXTURE_CLUSTER: &str = "fixture";
@@ -71,7 +71,7 @@ async fn run_fixture(operator: OperatorId) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?
     // The fixture IS the cluster in this mode, and naming it honestly is what
-    // lets a `(defguarita)` resolve `(:context cluster)`. It is not a claim
+    // lets a `(defbancada)` resolve `(:context cluster)`. It is not a claim
     // that a cluster named "fixture" exists — the status line says
     // "source: fixture" right beside it.
     .with_cluster(FIXTURE_CLUSTER);
@@ -91,7 +91,7 @@ async fn run_live(operator: OperatorId) -> Result<(), String> {
         .await
         .map_err(|e| format!("live connect failed (VPN/kubeconfig?): {e}"))?;
     // The kubeconfig's `current-context`, when it can be read. An empty value
-    // is NOT defaulted away: a `(defguarita)` then refuses to pre-warm a
+    // is NOT defaulted away: a `(defbancada)` then refuses to pre-warm a
     // session rather than opening one on whatever context the operator's
     // shell happens to be on.
     let cluster = env.context_name().unwrap_or_default();
@@ -156,14 +156,14 @@ fn print_usage() {
                     note,
                 );
             }
-            // The guaritas — pre-warmed tear sessions. The class printed is
+            // The bancadas — pre-warmed tear sessions. The class printed is
             // the DERIVED one (from the recipe's panes), so a recipe staging a
             // live effect cannot be advertised here as a convenience.
-            if !catalog.guaritas().is_empty() {
+            if !catalog.bancadas().is_empty() {
                 println!();
-                println!("GUARITAS (pre-warmed tear/mado troubleshooting sessions):");
-                let unbound = banken::app::unbound_guarita_names(&catalog);
-                for g in catalog.guaritas() {
+                println!("BANCADAS (pre-warmed tear/mado troubleshooting sessions):");
+                let unbound = banken::app::unbound_bancada_names(&catalog);
+                for g in catalog.bancadas() {
                     let class = g
                         .legality()
                         .map(|l| l.class().label().to_uppercase())
@@ -185,7 +185,7 @@ fn print_usage() {
                 }
                 println!("  The plan is PREVIEWED, not opened: handing it to a live tear-daemon");
                 println!("  is the SessionEnv seam's job and banken ships no implementation of it");
-                println!("  yet (pending-banken: guarita-live-handoff).");
+                println!("  yet (pending-banken: bancada-live-handoff).");
             }
         }
         // Honest: if the vocabulary does not load, say so rather than print a

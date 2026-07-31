@@ -35,14 +35,14 @@ use egaku_term::{
     AsyncApp, Buffer, Result as TermResult, Style,
 };
 
-use banken_spec::guarita::GuaritaSpec;
+use banken_spec::bancada::BancadaSpec;
 
-use crate::action::{ActionResult, RowAction, dispatch, plan_guarita};
+use crate::action::{ActionResult, RowAction, dispatch, plan_bancada};
 use crate::render::{draw_pod_table, sort_label};
 use crate::table::PodTable;
 
 /// The one view M0 ships. Named once so the keymap, the table columns and the
-/// guarita filter cannot drift onto three different spellings of it.
+/// bancada filter cannot drift onto three different spellings of it.
 pub const VIEW_NAME: &str = "pods";
 
 /// The one action the app keymap resolves a key to.
@@ -60,14 +60,14 @@ pub enum Action {
     DeclareScale,
     /// BREAK-GLASS shell into the selected pod (`shift+s`).
     BreakGlass,
-    /// Open the guarita at this index of the app's recipe list (`g`,
+    /// Open the bancada at this index of the app's recipe list (`g`,
     /// `shift+g`) — a pre-warmed tear session plan for the selected row.
     ///
-    /// The index is into [`BankenApp::guaritas`], which is
-    /// `catalog.guaritas_from(VIEW_NAME)` in order, so the keymap and the
+    /// The index is into [`BankenApp::bancadas`], which is
+    /// `catalog.bancadas_from(VIEW_NAME)` in order, so the keymap and the
     /// recipe list cannot disagree: [`keymap_from_catalog`] builds both from
     /// the same filtered iteration.
-    OpenGuarita(usize),
+    OpenBancada(usize),
     /// Dismiss the action-result overlay (`esc`).
     Dismiss,
     /// Quit (`q`).
@@ -96,11 +96,11 @@ impl Action {
             Action::ObserveLogs
                 | Action::DeclareScale
                 | Action::BreakGlass
-                // A guarita resolves a whole recipe and (once the live seam
+                // A bancada resolves a whole recipe and (once the live seam
                 // lands) opens a tear session with N panes. A held key firing
                 // one session per repeat tick is the runaway shape at its
                 // most expensive.
-                | Action::OpenGuarita(_)
+                | Action::OpenBancada(_)
         )
     }
 }
@@ -124,15 +124,15 @@ pub struct BankenApp<E: ClusterEnv> {
     /// The cluster banken is reading, as the kubeconfig context name.
     ///
     /// **Empty means UNKNOWN, not "the current one".** It is what a
-    /// `(defguarita)` resolves `(:context cluster)` against, and an empty
+    /// `(defbancada)` resolves `(:context cluster)` against, and an empty
     /// value makes the planner REFUSE rather than emit `--context ""` — which
     /// would pre-warm a session on whatever cluster the operator's kubeconfig
-    /// happens to point at. See [`banken_spec::guarita`].
+    /// happens to point at. See [`banken_spec::bancada`].
     cluster: String,
     /// The pre-warmed session recipes reachable from this view, in the SAME
     /// order [`keymap_from_catalog`] bound them — which is what makes
-    /// [`Action::OpenGuarita`]'s index total.
-    guaritas: Vec<GuaritaSpec>,
+    /// [`Action::OpenBancada`]'s index total.
+    bancadas: Vec<BancadaSpec>,
     table: PodTable,
     panel: Panel,
     keys: KeyMap<Action>,
@@ -155,7 +155,7 @@ pub struct BankenApp<E: ClusterEnv> {
     ///
     /// Held as PARTS rather than one string because the whole legend does not
     /// always fit: the previous code rendered it only `if legend_w < width`,
-    /// so adding the two guarita chords made the entire legend **silently
+    /// so adding the two bancada chords made the entire legend **silently
     /// vanish** at 80 columns. [`fit_legend`] now drops whole trailing entries
     /// and marks the elision, so a narrow terminal costs the *least* important
     /// hints rather than all of them.
@@ -213,8 +213,8 @@ impl<E: ClusterEnv> BankenApp<E> {
             env,
             operator,
             cluster: String::new(),
-            guaritas: catalog
-                .guaritas_from(VIEW_NAME)
+            bancadas: catalog
+                .bancadas_from(VIEW_NAME)
                 .into_iter()
                 .cloned()
                 .collect(),
@@ -242,8 +242,8 @@ impl<E: ClusterEnv> BankenApp<E> {
 
     /// The pre-warmed session recipes this view exposes.
     #[must_use]
-    pub fn guaritas(&self) -> &[GuaritaSpec] {
-        &self.guaritas
+    pub fn bancadas(&self) -> &[BancadaSpec] {
+        &self.bancadas
     }
 
     /// Re-read the pod table from the env (the poll refresh). Preserves the
@@ -321,14 +321,14 @@ impl<E: ClusterEnv> BankenApp<E> {
                 );
                 self.panel = Panel::ActionOverlay(r);
             }
-            Action::OpenGuarita(i) => {
-                // A guarita index out of range is not possible through the
+            Action::OpenBancada(i) => {
+                // A bancada index out of range is not possible through the
                 // keymap (both come from the same filtered iteration), but
                 // reporting it beats an index panic in the operator's TUI.
-                let r = match self.guaritas.get(i) {
-                    Some(spec) => plan_guarita(&self.table, spec, &self.cluster),
+                let r = match self.bancadas.get(i) {
+                    Some(spec) => plan_bancada(&self.table, spec, &self.cluster),
                     None => ActionResult::Error(
-                        "no guarita is bound at that index — the keymap and the \
+                        "no bancada is bound at that index — the keymap and the \
                          recipe list disagree"
                             .into(),
                     ),
@@ -505,7 +505,7 @@ fn overlay_content(result: &ActionResult) -> (String, Style, Vec<String>) {
             lines.push(rec);
             (t, Style::default().fg(Color::Red).bold(), lines)
         }
-        ActionResult::GuaritaPlan {
+        ActionResult::BancadaPlan {
             recipe,
             legality,
             session_name,
@@ -513,7 +513,7 @@ fn overlay_content(result: &ActionResult) -> (String, Style, Vec<String>) {
         } => {
             // The title states the DERIVED gate first — a BREAK-GLASS recipe
             // must not read like a convenience.
-            let mut t = String::from(" GUARITA — ");
+            let mut t = String::from(" BANCADA — ");
             t.push_str(legality);
             t.push_str(" — ");
             t.push_str(recipe);
@@ -628,16 +628,16 @@ pub fn keymap_from_catalog(catalog: &Catalog) -> Result<KeyMap<Action>, SpecErro
         km.bind(combo, *action);
     }
 
-    // guaritas — the pre-warmed tear sessions reachable from THIS view.
+    // bancadas — the pre-warmed tear sessions reachable from THIS view.
     // Bound by position in the same filtered iteration `BankenApp` stores,
-    // so `Action::OpenGuarita(i)` cannot index a different recipe than the
+    // so `Action::OpenBancada(i)` cannot index a different recipe than the
     // chord names. A recipe launched from another surface is deliberately
-    // NOT bound here — `unbound_guarita_names` reports it rather than
+    // NOT bound here — `unbound_bancada_names` reports it rather than
     // giving the operator a chord that opens something from a screen they
     // are not on.
-    for (i, g) in catalog.guaritas_from(VIEW_NAME).into_iter().enumerate() {
+    for (i, g) in catalog.bancadas_from(VIEW_NAME).into_iter().enumerate() {
         let combo = project(g.keys, &g.name)?;
-        km.bind(combo, Action::OpenGuarita(i));
+        km.bind(combo, Action::OpenBancada(i));
     }
 
     Ok(km)
@@ -666,7 +666,7 @@ fn project(chord: ActionChord, owner: &str) -> Result<KeyCombo, SpecError> {
 /// it. The elision marker is what keeps a narrow terminal honest — the
 /// operator can see there are more chords than shown, instead of the legend
 /// quietly disappearing (which is what the previous `if legend_w < width`
-/// did the moment the guarita chords landed).
+/// did the moment the bancada chords landed).
 #[must_use]
 pub fn fit_legend(parts: &[String], available: usize) -> String {
     const SEP: &str = "  ";
@@ -721,7 +721,7 @@ pub fn key_legend(catalog: &Catalog) -> String {
 }
 
 /// The legend's entries, **most important first** — the postigo chords, then
-/// the guarita chords (both of which state a *gate*), then the two navigation
+/// the bancada chords (both of which state a *gate*), then the two navigation
 /// hints. The order is the drop order when the status line is too narrow, so
 /// it is deliberately "what an operator must not misread" first.
 #[must_use]
@@ -737,11 +737,11 @@ pub fn key_legend_parts(catalog: &Catalog) -> Vec<String> {
         }
     }
 
-    // A guarita's class is its DERIVED one, so the legend states the gate the
+    // A bancada's class is its DERIVED one, so the legend states the gate the
     // pre-warmed session would actually cross. A malformed recipe never
     // reaches here (`Catalog::resolve` validates every one), so the fallback
     // label is unreachable in a resolved catalog rather than a quiet default.
-    for g in catalog.guaritas_from(VIEW_NAME) {
+    for g in catalog.bancadas_from(VIEW_NAME) {
         let mut p = g.keys.canonical();
         p.push(':');
         p.push_str(
@@ -764,16 +764,16 @@ pub fn key_legend_parts(catalog: &Catalog) -> Vec<String> {
     parts
 }
 
-/// The guarita recipes the catalog declares but this view cannot launch —
-/// the guaritas analogue of [`unbound_action_names`].
+/// The bancada recipes the catalog declares but this view cannot launch —
+/// the bancadas analogue of [`unbound_action_names`].
 ///
 /// Surfaced as data rather than silence: a recipe whose `:from` names another
 /// surface is authored, valid and unreachable from here, and the operator
 /// should learn that from `--help` rather than from a chord doing nothing.
 #[must_use]
-pub fn unbound_guarita_names(catalog: &Catalog) -> Vec<String> {
+pub fn unbound_bancada_names(catalog: &Catalog) -> Vec<String> {
     catalog
-        .guaritas()
+        .bancadas()
         .iter()
         .filter(|g| g.from != VIEW_NAME)
         .map(|g| g.name.clone())
@@ -840,7 +840,7 @@ mod tests {
         .expect("the shipped vocabulary must build an app")
     }
 
-    /// The same app, told which cluster it is reading — what a guarita needs
+    /// The same app, told which cluster it is reading — what a bancada needs
     /// to pre-warm a session on the RIGHT one.
     fn app_on(cluster: &str) -> BankenApp<FixtureClusterEnv> {
         app().with_cluster(cluster)
@@ -992,35 +992,35 @@ mod tests {
         );
     }
 
-    // ── guarita: the banken → tear/mado bridge at the keystroke ──────
+    // ── bancada: the banken → tear/mado bridge at the keystroke ──────
 
     #[test]
-    fn keymap_binds_the_authored_guarita_chords() {
+    fn keymap_binds_the_authored_bancada_chords() {
         let a = app();
-        assert_eq!(a.guaritas().len(), 2, "both recipes launch from :pods");
+        assert_eq!(a.bancadas().len(), 2, "both recipes launch from :pods");
         assert_eq!(
             a.keymap().lookup(&KeyCombo::key("g")),
-            Some(&Action::OpenGuarita(0)),
+            Some(&Action::OpenBancada(0)),
         );
         assert_eq!(
             a.keymap().lookup(&KeyCombo::new("g", vec!["shift".into()])),
-            Some(&Action::OpenGuarita(1)),
+            Some(&Action::OpenBancada(1)),
         );
         // The index and the recipe agree — the whole reason both come from
         // one filtered iteration.
-        assert_eq!(a.guaritas()[0].name, "pod-triage");
-        assert_eq!(a.guaritas()[1].name, "pod-break-glass");
+        assert_eq!(a.bancadas()[0].name, "pod-triage");
+        assert_eq!(a.bancadas()[1].name, "pod-break-glass");
     }
 
     /// **THE GATE.** The pre-warmed session plan carries the cluster banken
     /// is reading, the selected pod's namespace, and the selected pod — the
     /// whole point of the bridge.
     #[test]
-    fn the_guarita_chord_plans_a_prewarmed_session_on_the_right_cluster() {
+    fn the_bancada_chord_plans_a_prewarmed_session_on_the_right_cluster() {
         let mut a = app_on("camelot-eks");
-        a.apply_action(Action::OpenGuarita(0));
+        a.apply_action(Action::OpenBancada(0));
         match a.overlay() {
-            Some(ActionResult::GuaritaPlan {
+            Some(ActionResult::BancadaPlan {
                 recipe,
                 legality,
                 session_name,
@@ -1041,7 +1041,7 @@ mod tests {
                 assert!(lines[0].contains("[root]"), "got: {}", lines[0]);
                 assert!(lines[1].contains("[right]"), "got: {}", lines[1]);
             }
-            other => panic!("expected a GuaritaPlan overlay, got {other:?}"),
+            other => panic!("expected a BancadaPlan overlay, got {other:?}"),
         }
     }
 
@@ -1049,11 +1049,11 @@ mod tests {
     /// class is derived from the `kubectl exec` pane, so a recipe cannot
     /// present a live-effect session as a convenience.
     #[test]
-    fn the_break_glass_guarita_overlay_states_the_gate_it_crosses() {
+    fn the_break_glass_bancada_overlay_states_the_gate_it_crosses() {
         let mut a = app_on("camelot-eks");
-        a.apply_action(Action::OpenGuarita(1));
+        a.apply_action(Action::OpenBancada(1));
         match a.overlay() {
-            Some(ActionResult::GuaritaPlan {
+            Some(ActionResult::BancadaPlan {
                 recipe, legality, ..
             }) => {
                 assert_eq!(recipe, "pod-break-glass");
@@ -1065,7 +1065,7 @@ mod tests {
                 msg.contains("container"),
                 "the only acceptable refusal names the unresolved field: {msg}"
             ),
-            other => panic!("expected a GuaritaPlan or a named refusal, got {other:?}"),
+            other => panic!("expected a BancadaPlan or a named refusal, got {other:?}"),
         }
     }
 
@@ -1074,9 +1074,9 @@ mod tests {
     /// kubeconfig currently points at. A wrong-cluster session is worse than
     /// no session.
     #[test]
-    fn without_a_known_cluster_the_guarita_refuses_by_name() {
+    fn without_a_known_cluster_the_bancada_refuses_by_name() {
         let mut a = app(); // no `with_cluster`
-        a.apply_action(Action::OpenGuarita(0));
+        a.apply_action(Action::OpenBancada(0));
         match a.overlay() {
             Some(ActionResult::Error(msg)) => {
                 assert!(
@@ -1092,16 +1092,16 @@ mod tests {
         }
     }
 
-    /// A guarita opens a whole session — the most expensive thing a held key
+    /// A bancada opens a whole session — the most expensive thing a held key
     /// could repeat.
     #[test]
-    fn opening_a_guarita_is_repeat_gated() {
-        assert!(Action::OpenGuarita(0).is_repeat_gated());
+    fn opening_a_bancada_is_repeat_gated() {
+        assert!(Action::OpenBancada(0).is_repeat_gated());
         let mut a = app_on("camelot-eks");
         let t0 = Instant::now();
-        assert!(a.dispatch_action_at(Action::OpenGuarita(0), t0));
+        assert!(a.dispatch_action_at(Action::OpenBancada(0), t0));
         assert!(
-            !a.dispatch_action_at(Action::OpenGuarita(0), t0 + Duration::from_millis(35)),
+            !a.dispatch_action_at(Action::OpenBancada(0), t0 + Duration::from_millis(35)),
             "a repeat tick must not plan a second session"
         );
     }
@@ -1109,7 +1109,7 @@ mod tests {
     // ── the legend must not vanish when it does not fit ──────────────
 
     /// **THE GATE, and it is a REGRESSION gate.** The status line used to draw
-    /// the legend only `if legend_w < width`, so adding the two guarita chords
+    /// the legend only `if legend_w < width`, so adding the two bancada chords
     /// made the WHOLE legend silently disappear at 80 columns — the one
     /// surface that says which gate a keystroke crosses. Now the least
     /// important entries drop and the elision is marked.

@@ -1,4 +1,4 @@
-//! The LIVE `(defguarita)` handoff, against a running `tear-daemon`.
+//! The LIVE `(defbancada)` handoff, against a running `tear-daemon`.
 //!
 //! **`#[ignore]` by default, on purpose.** This test opens a real session on
 //! the operator's tear daemon and types into real PTYs; a plain `cargo test`
@@ -12,28 +12,28 @@
 //! fails, so a red run does not leave a stray session behind.
 //!
 //! What it proves that the mock cannot: that
-//! `banken_spec::guarita::SessionEnv`'s five methods really do land on
+//! `banken_spec::bancada::SessionEnv`'s five methods really do land on
 //! `tear_types::MultiplexerControl`, that the session/split/stage sequence is
 //! accepted by the daemon, and that the resulting session has the pane count
 //! the authored recipe declares.
 
 #![cfg(feature = "tear")]
 
-use banken::tear_session::{GUARITA_SOURCE, TearSessionEnv};
+use banken::tear_session::{BANCADA_SOURCE, TearSessionEnv};
 use banken_spec::{
-    guarita::{GuaritaContext, open, plan},
+    bancada::{BancadaContext, open, plan},
     interp::Selection,
-    load_guaritas,
+    load_bancadas,
     types::ResourceKind,
 };
 use tear_types::control::MultiplexerControl;
 
-fn ctx() -> GuaritaContext {
-    GuaritaContext {
+fn ctx() -> BancadaContext {
+    BancadaContext {
         cluster: "camelot-eks".into(),
         selection: Selection {
             kind: ResourceKind::Pod,
-            name: "banken-guarita-selftest".into(),
+            name: "banken-bancada-selftest".into(),
             namespace: Some("catch".into()),
             current: Vec::new(),
         },
@@ -51,7 +51,7 @@ fn ctx() -> GuaritaContext {
 #[test]
 #[ignore = "opens a real session on the operator's tear daemon; run with --ignored"]
 fn the_triage_recipe_opens_a_real_three_pane_tear_session() {
-    let gs = load_guaritas().expect("specs/guaritas.lisp compiles");
+    let gs = load_bancadas().expect("specs/bancadas.lisp compiles");
     let triage = gs.iter().find(|g| g.name == "pod-triage").expect("triage");
     let p = plan(triage, &ctx()).expect("plans");
     assert_eq!(p.panes().len(), 3);
@@ -105,7 +105,7 @@ fn the_triage_recipe_opens_a_real_three_pane_tear_session() {
     );
     assert_eq!(
         session.source,
-        tear_types::session::SessionSource::Named(GUARITA_SOURCE.to_owned()),
+        tear_types::session::SessionSource::Named(BANCADA_SOURCE.to_owned()),
         "banken-opened sessions are tagged so `tear list --source` can triage them",
     );
 
@@ -121,7 +121,7 @@ fn the_triage_recipe_opens_a_real_three_pane_tear_session() {
         "the pre-warmed line targets the cluster banken was reading",
     );
     assert!(
-        text.contains("banken-guarita-selftest"),
+        text.contains("banken-bancada-selftest"),
         "and the pod the selection named",
     );
 

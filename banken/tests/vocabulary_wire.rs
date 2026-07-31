@@ -85,7 +85,7 @@ fn respelling_an_authored_chord_moves_the_runtime_binding() {
         banken_spec::load_wards().unwrap(),
         banken_spec::load_drills().unwrap(),
         nav,
-        banken_spec::load_guaritas().unwrap(),
+        banken_spec::load_bancadas().unwrap(),
     )
     .expect("resolves");
 
@@ -119,7 +119,7 @@ fn an_unprojectable_authored_chord_is_refused_by_name() {
         banken_spec::load_wards().unwrap(),
         banken_spec::load_drills().unwrap(),
         nav,
-        banken_spec::load_guaritas().unwrap(),
+        banken_spec::load_bancadas().unwrap(),
     )
     .expect("and it cross-resolves — the divergence is a RENDER concern");
 
@@ -162,7 +162,7 @@ fn the_legend_states_the_authored_chords_and_their_legality_classes() {
         "l:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  \
          g:OBSERVE  shift+g:BREAK-GLASS  o:sort  q:quit",
         "the legend is derived from the authored chords + typed legality \
-         classes — INCLUDING the guarita chords, whose class is derived from \
+         classes — INCLUDING the bancada chords, whose class is derived from \
          their panes rather than authored"
     );
     // The specific lie the old literal told: `S` is NOT the chord.
@@ -183,7 +183,7 @@ fn the_legend_states_the_authored_chords_and_their_legality_classes() {
         banken_spec::load_wards().unwrap(),
         banken_spec::load_drills().unwrap(),
         banken_spec::load_nav_keys().unwrap(),
-        banken_spec::load_guaritas().unwrap(),
+        banken_spec::load_bancadas().unwrap(),
     )
     .expect("resolves");
     let moved_legend = key_legend(&moved);
@@ -274,7 +274,7 @@ fn a_default_sort_naming_an_undeclared_column_is_refused() {
         banken_spec::load_wards().unwrap(),
         banken_spec::load_drills().unwrap(),
         banken_spec::load_nav_keys().unwrap(),
-        banken_spec::load_guaritas().unwrap(),
+        banken_spec::load_bancadas().unwrap(),
     )
     .expect("cross-resolution is unaffected");
     let err = PodTable::from_view(&c, "pods", fixture_rows())

@@ -47,10 +47,10 @@ pub struct KubeClusterEnv {
     ///
     /// `kube::Client` does not surface which context it resolved, so this is
     /// read separately from the kubeconfig. `None` means UNKNOWN, and a
-    /// `(defguarita)` then REFUSES to pre-warm a session rather than emitting
+    /// `(defbancada)` then REFUSES to pre-warm a session rather than emitting
     /// `--context ""` — which would open the operator's troubleshooting panes
     /// on whatever cluster their shell happens to point at. See
-    /// [`banken_spec::guarita`].
+    /// [`banken_spec::bancada`].
     context_name: Option<String>,
 }
 

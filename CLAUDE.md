@@ -45,7 +45,7 @@ nothing across domains.
 | `(defward)` | the health landing: Pulses lanes, linter set, headline | 1 |
 | `(defdrill)` | a typed drill path (`→logs`, `→diagnose`, `→xray`) | 3 |
 | `(defnavkey)` | a navigation chord + its local-UI intent | 7 |
-| `(defguarita)` | a pre-warmed tear/mado troubleshooting session | 2 |
+| `(defbancada)` | a pre-warmed tear/mado troubleshooting session | 2 |
 
 plus `(defbanken)` in `banken-config` (the deployment face). Every domain has
 a lisp-roundtrip test and a `catalog.rs` axis on the `REQUIRED_AXES` roster
@@ -56,9 +56,16 @@ class, because typing "move the cursor" as `Observe` would make the class stop
 meaning "this performed a cluster read". The two domains share exactly one
 thing, the chord namespace, and `Catalog::resolve` checks it.
 
-## guarita — the banken → tear/mado bridge (`(defguarita)`)
+## bancada — the banken → tear/mado bridge (`(defbancada)`)
 
-**guarita** (pt-BR: the sentry box at a gate). From a selected row, one
+**bancada** (pt-BR: a workbench — tools already laid out, work starts the
+instant you sit down). Renamed from `guarita` 2026-07-31: that word was
+already double-claimed (`theory/NAMING.md:88`), and on Law 2 it belongs to
+the per-request credential check in `akeyless-vpn`'s SHAAR design, whose
+"gatehouse sentry checking papers per visit" gloss teaches that job exactly.
+This domain took the *container* half of the metaphor and dropped the
+*checking-papers* half — and the checking here is `postigo`'s, not its own.
+From a selected row, one
 authored chord resolves a recipe into a **pre-warmed tear session**: the
 panes, their splits, and the fully-resolved `kubectl` argv for the cluster +
 namespace + pod banken is looking at — so the operator is fixing the problem
@@ -69,10 +76,10 @@ rather than setting up to fix it. `g` → `pod-triage` (3 read panes),
 `postigo` class is *derived* from its panes — any pane whose `:effect` is
 `mutates` makes the whole recipe BREAK-GLASS — so a mutating recipe has no
 field in which to claim it observes. A BREAK-GLASS recipe must carry
-`:witness`/`:runbook` (`UnwitnessedGuarita`); a pure-observe one must not
+`:witness`/`:runbook` (`UnwitnessedBancada`); a pure-observe one must not
 (`UnneededWitness`). Fail-once measured: deleting `:witness "drzzln"` from
-`specs/guaritas.lisp` turns three tests red with
-`UnwitnessedGuarita { guarita: "pod-break-glass", pane_role: "shell" }`.
+`specs/bancadas.lisp` turns three tests red with
+`UnwitnessedBancada { bancada: "pod-break-glass", pane_role: "shell" }`.
 
 **And the witness is structural at the seam.** `SessionEnv` has exactly two
 staging arms taking *different types*: `stage_observed(ObservedCommand)` and
@@ -101,7 +108,7 @@ signal to add a typed `(:joined …)`, not to interpolate.
 |---|---|
 | forms compile, legality derives, plan resolves, plan walks a `SessionEnv` | **SHIPPED, mock-green** (`MockSessionEnv`, zero side effects) |
 | the LIVE handoff to a running `tear-daemon` | **SHIPPED + PROVEN LIVE 2026-07-30** — `banken/tests/tear_handoff.rs` (feature `tear`, `#[ignore]`d) opened a real 3-pane session and asserted the pre-warmed `kubectl` line **on the first pane's rendered grid**. Fail-once: stubbing `type_into` to send zero bytes turns it red there. |
-| pressing `g` in banken OPENS a session | **NOT DONE** — it *previews* the plan (like the DECLARE overlay previews a manifest). `pending-banken: guarita-app-open`. |
+| pressing `g` in banken OPENS a session | **NOT DONE** — it *previews* the plan (like the DECLARE overlay previews a manifest). `pending-banken: bancada-app-open`. |
 
 - **`pending-banken: tear-argv-spawn`** — the upstream limitation the adapter
   is shaped around. `MultiplexerControl` spawns a pane's program with **no
@@ -114,7 +121,7 @@ signal to add a typed `(:joined …)`, not to interpolate.
   thread `args` through `MultiplexerControl` upstream, after which the adapter
   collapses to a direct spawn with no typing and no refusal. Not done here:
   banken must not edit tear from this repo.
-- **`pending-banken: guarita-tear-feature-nix-unverified`** — the `tear`
+- **`pending-banken: bancada-tear-feature-nix-unverified`** — the `tear`
   feature's dep took banken's `Cargo.lock` from **zero** git sources to four
   (tear, shikumi, gen, plus a second `ishou-tokens` 0.1.4 from git alongside
   the registry one banken-config keeps — measured, so banken-config's
@@ -124,7 +131,7 @@ signal to add a typed `(:joined …)`, not to interpolate.
   crate2nix-vs-`fetchgit` base32-vs-SRI drift class. `cargo test`/`fmt` are
   green on default, `live` and `tear`; **`nix build` is UNVERIFIED** — run it,
   and reach for `nix run .#hashfix -- loop` if the cascade fires.
-- **`pending-banken: guarita-container-selection`** — M0 has no container
+- **`pending-banken: bancada-container-selection`** — M0 has no container
   picker, so a recipe referencing `(:context container)` refuses by name.
 - The `stage_witnessed` arm sends the argv **without a newline**: the
   live-effect command sits typed and ready, and the operator's own Enter is
@@ -148,7 +155,7 @@ signal to add a typed `(:joined …)`, not to interpolate.
 3. **`Catalog`** — fields private, `resolve`/`load_catalog` the only
    constructors, so an **unresolved** bundle cannot be held. The seven domains
    reference each other by name and every such join was a silent-failure class.
-4. **`SessionPlan`** — fields private, `guarita::plan` the only constructor,
+4. **`SessionPlan`** — fields private, `bancada::plan` the only constructor,
    so a plan's `legality` cannot disagree with its `panes` (it is *derived
    from* them). Same shape, same qualified tier as the three above.
 

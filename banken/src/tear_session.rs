@@ -1,14 +1,14 @@
-//! `TearSessionEnv` — the LIVE `(defguarita)` handoff over a running
+//! `TearSessionEnv` — the LIVE `(defbancada)` handoff over a running
 //! `tear-daemon` (feature `tear`).
 //!
-//! This is the far end of the bridge: [`banken_spec::guarita::plan`] turns an
+//! This is the far end of the bridge: [`banken_spec::bancada::plan`] turns an
 //! authored recipe plus the selected row into a [`SessionPlan`], and this
 //! module hands that plan to tear so the operator lands in a split session
 //! already pointed at the broken thing.
 //!
 //! # It CONSUMES tear's surface; it does not invent one
 //!
-//! [`banken_spec::guarita::SessionEnv`] was deliberately shaped as a
+//! [`banken_spec::bancada::SessionEnv`] was deliberately shaped as a
 //! projection of `tear_types::MultiplexerControl`, so every method here is
 //! close to a rename:
 //!
@@ -19,7 +19,7 @@
 //! | `stage_observed` / `stage_witnessed` | `send_keys` |
 //! | `focus` | `select_pane` |
 //!
-//! Sessions are tagged `SessionSource::Named("banken-guarita")`, so
+//! Sessions are tagged `SessionSource::Named("banken-bancada")`, so
 //! `tear list --source` shows at a glance which sessions banken opened.
 //!
 //! # THE UPSTREAM LIMITATION, stated rather than worked around
@@ -39,7 +39,7 @@
 //! containing whitespace or a shell metacharacter, with a typed error naming
 //! the word. It does not escape it, does not wrap it in quotes, and does not
 //! "handle" it — because a quoting function IS a shell-string builder, and the
-//! whole claim of [`banken_spec::guarita`] is that a staged command is a typed
+//! whole claim of [`banken_spec::bancada`] is that a staged command is a typed
 //! argv. An argv that cannot be typed safely has no path to a pane.
 //!
 //! The load-bearing fix is upstream: thread `args: &[String]` through
@@ -69,14 +69,14 @@
 //!
 //! What is NOT yet true: the **app** does not call this. Pressing `g` in
 //! banken previews the plan; a confirm-then-open path from the overlay is
-//! `pending-banken: guarita-app-open`. Do not read "the handoff works" as
+//! `pending-banken: bancada-app-open`. Do not read "the handoff works" as
 //! "the keystroke opens a session".
 
 use std::cell::RefCell;
 
 use banken_spec::env::WitnessedAction;
 use banken_spec::error::SpecError;
-use banken_spec::guarita::{
+use banken_spec::bancada::{
     MutatingCommand, ObservedCommand, PanePlacement, PaneRef, SessionEnv, SessionLayout,
 };
 use tear_types::control::MultiplexerControl;
@@ -87,7 +87,7 @@ use tear_types::session::SessionSource;
 
 /// The provenance tag banken stamps on every session it opens, so
 /// `tear list --source` can tell them apart from an operator's own.
-pub const GUARITA_SOURCE: &str = "banken-guarita";
+pub const BANCADA_SOURCE: &str = "banken-bancada";
 
 /// The default pane geometry for a pre-warmed session. tear's own default is
 /// 80×24; a troubleshooting session is worth more room, and the child's first
@@ -126,7 +126,7 @@ pub fn stageable(argv: &[String]) -> Result<String, SpecError> {
                  Fix upstream (pending-banken: tear-argv-spawn: thread \
                  `args: &[String]` through MultiplexerControl to the \
                  PtyHandle::spawn that already takes it), or author the \
-                 (defguarita) argument without the offending character.",
+                 (defbancada) argument without the offending character.",
             );
             return Err(SpecError::Interp {
                 phase: "stage".into(),
@@ -137,7 +137,7 @@ pub fn stageable(argv: &[String]) -> Result<String, SpecError> {
     Ok(argv.join(" "))
 }
 
-/// Project a `(defguarita)` placement onto tear's split direction.
+/// Project a `(defbancada)` placement onto tear's split direction.
 ///
 /// [`PanePlacement::Root`] has no direction — it is the session itself — so
 /// this returns `None` for it rather than defaulting to a split.
@@ -151,7 +151,7 @@ fn direction_of(placement: PanePlacement) -> Option<Direction> {
     }
 }
 
-/// Project a `(defguarita)` layout onto tear's. Total by construction:
+/// Project a `(defbancada)` layout onto tear's. Total by construction:
 /// [`SessionLayout`] is exactly `LayoutKind` minus `Custom`.
 fn layout_of(layout: SessionLayout) -> LayoutKind {
     match layout {
@@ -263,7 +263,7 @@ impl SessionEnv for TearSessionEnv {
             .new_session_with_source_and_size(
                 name,
                 &self.shell,
-                SessionSource::Named(GUARITA_SOURCE.to_owned()),
+                SessionSource::Named(BANCADA_SOURCE.to_owned()),
                 DEFAULT_SIZE_CELLS,
             )
             .map_err(|e| SpecError::Interp {

@@ -30,9 +30,9 @@
 //! | a ward's `:view` exists and is `HealthWard` | [`SpecError::WardViewMissing`] / [`SpecError::WardViewKindMismatch`] |
 //! | ward lanes ↔ view columns correspond | [`SpecError::WardLaneColumnMismatch`] |
 //! | a ward's `:pathologies` resolve | [`SpecError::UnknownPathology`] |
-//! | each guarita's shape + WITNESS OBLIGATION | [`SpecError::EmptyGuarita`] / [`SpecError::GuaritaPlacement`] / [`SpecError::UnwitnessedGuarita`] / [`SpecError::UnneededWitness`] |
-//! | a guarita's `:from` resolves | [`SpecError::UnknownDrillSource`] |
-//! | no two chords collide, across actions AND nav keys AND guaritas | [`SpecError::ChordConflict`] |
+//! | each bancada's shape + WITNESS OBLIGATION | [`SpecError::EmptyBancada`] / [`SpecError::BancadaPlacement`] / [`SpecError::UnwitnessedBancada`] / [`SpecError::UnneededWitness`] |
+//! | a bancada's `:from` resolves | [`SpecError::UnknownDrillSource`] |
+//! | no two chords collide, across actions AND nav keys AND bancadas | [`SpecError::ChordConflict`] |
 //!
 //! An **unreferenced** drill is deliberately NOT an error: a drill is also
 //! reachable from the `:` command bar (BANKEN.md §V makes the command bar a
@@ -45,7 +45,7 @@ use crate::{
     bindings::build_binding_map,
     drill::DrillSpec,
     error::SpecError,
-    guarita::GuaritaSpec,
+    bancada::BancadaSpec,
     nav::NavKeySpec,
     pathology::PathologySpec,
     types::{K8sActionSpec, K8sViewSpec, ViewKind},
@@ -65,7 +65,7 @@ pub struct Catalog {
     wards: Vec<WardSpec>,
     drills: Vec<DrillSpec>,
     nav_keys: Vec<NavKeySpec>,
-    guaritas: Vec<GuaritaSpec>,
+    bancadas: Vec<BancadaSpec>,
 }
 
 impl Catalog {
@@ -85,7 +85,7 @@ impl Catalog {
         wards: Vec<WardSpec>,
         drills: Vec<DrillSpec>,
         nav_keys: Vec<NavKeySpec>,
-        guaritas: Vec<GuaritaSpec>,
+        bancadas: Vec<BancadaSpec>,
     ) -> Result<Self, SpecError> {
         // ── 1. Names are join keys; duplicates silently shadow ──
         unique_names("view", views.iter().map(|v| v.name.as_str()))?;
@@ -94,18 +94,18 @@ impl Catalog {
         unique_names("ward", wards.iter().map(|w| w.name.as_str()))?;
         unique_names("drill", drills.iter().map(|d| d.name.as_str()))?;
         unique_names("nav-key", nav_keys.iter().map(|n| n.name.as_str()))?;
-        unique_names("guarita", guaritas.iter().map(|g| g.name.as_str()))?;
+        unique_names("bancada", bancadas.iter().map(|g| g.name.as_str()))?;
 
-        // ── 2. Each drill's / guarita's own shape ──
+        // ── 2. Each drill's / bancada's own shape ──
         for d in &drills {
             d.validate()?;
         }
-        // A guarita's `validate` also enforces the WITNESS OBLIGATION: a
+        // A bancada's `validate` also enforces the WITNESS OBLIGATION: a
         // recipe staging a mutating command must carry `:witness`/`:runbook`,
         // because its legality is derived from its panes rather than authored.
         // Running it here is what makes the shipped catalog's compliance a
         // build-time fact rather than a claim.
-        for g in &guaritas {
+        for g in &bancadas {
             g.validate()?;
         }
 
@@ -155,10 +155,10 @@ impl Catalog {
             check_ward_view_correspondence(w, &views)?;
         }
 
-        // A guarita is reachable from a declared view or ward, exactly like a
+        // A bancada is reachable from a declared view or ward, exactly like a
         // drill's `:from` — the same silent-failure class (a chord bound to a
         // recipe whose launch surface was renamed away).
-        for g in &guaritas {
+        for g in &bancadas {
             if !view_names.contains(g.from.as_str()) && !ward_names.contains(g.from.as_str()) {
                 return Err(SpecError::UnknownDrillSource {
                     drill: g.name.clone(),
@@ -169,15 +169,15 @@ impl Catalog {
 
         // ── 4. One chord namespace across ALL THREE keyed domains ──
         //
-        // A nav key, a postigo action and a guarita share the operator's
+        // A nav key, a postigo action and a bancada share the operator's
         // keyboard, so checking them separately would let `j` (nav) and `j`
         // (a future OBSERVE action) coexist with last-write-wins in the app's
         // keymap. Both non-action domains are projected onto the action shape
         // purely to reuse the one conflict checker — a nav key never gains a
-        // legality class that way, and a guarita's is its own derived one.
+        // legality class that way, and a bancada's is its own derived one.
         let mut keyed = actions.clone();
         keyed.extend(nav_keys.iter().map(NavKeySpec::as_chord_claim));
-        keyed.extend(guaritas.iter().map(GuaritaSpec::as_chord_claim));
+        keyed.extend(bancadas.iter().map(BancadaSpec::as_chord_claim));
         build_binding_map(&keyed)?;
 
         Ok(Self {
@@ -187,7 +187,7 @@ impl Catalog {
             wards,
             drills,
             nav_keys,
-            guaritas,
+            bancadas,
         })
     }
 
@@ -229,17 +229,17 @@ impl Catalog {
 
     /// The declared pre-warmed troubleshooting sessions.
     #[must_use]
-    pub fn guaritas(&self) -> &[GuaritaSpec] {
-        &self.guaritas
+    pub fn bancadas(&self) -> &[BancadaSpec] {
+        &self.bancadas
     }
 
-    /// The guaritas reachable from one surface (a view or ward name).
+    /// The bancadas reachable from one surface (a view or ward name).
     ///
     /// Total by construction: [`Self::resolve`] already proved every `:from`
     /// names a declared surface, so a recipe cannot be silently unreachable.
     #[must_use]
-    pub fn guaritas_from(&self, surface: &str) -> Vec<&GuaritaSpec> {
-        self.guaritas.iter().filter(|g| g.from == surface).collect()
+    pub fn bancadas_from(&self, surface: &str) -> Vec<&BancadaSpec> {
+        self.bancadas.iter().filter(|g| g.from == surface).collect()
     }
 
     /// The pathology rules one ward runs, resolved to values.
@@ -394,18 +394,18 @@ mod tests {
         }
     }
 
-    fn guarita(name: &str, keys: &str, from: &str) -> crate::guarita::GuaritaSpec {
-        use crate::guarita::{
-            CommandArg, CommandEffect, GuaritaPane, GuaritaSpec, PanePlacement, PaneRole,
+    fn bancada(name: &str, keys: &str, from: &str) -> crate::bancada::BancadaSpec {
+        use crate::bancada::{
+            CommandArg, CommandEffect, BancadaPane, BancadaSpec, PanePlacement, PaneRole,
             SessionLayout, StagedCommand,
         };
-        GuaritaSpec {
+        BancadaSpec {
             name: name.into(),
             keys: crate::chord::ActionChord::parse(keys).expect("test chord"),
             from: from.into(),
             layout: SessionLayout::Tiled,
             session_prefix: name.into(),
-            panes: vec![GuaritaPane {
+            panes: vec![BancadaPane {
                 role: PaneRole::Logs,
                 placement: PanePlacement::Root,
                 command: StagedCommand {
@@ -649,12 +649,12 @@ mod tests {
         }
     }
 
-    /// **THE GATE.** The guarita chord joins the SAME namespace. A recipe
+    /// **THE GATE.** The bancada chord joins the SAME namespace. A recipe
     /// bound to a chord a `(defnavkey)` already claims would otherwise
     /// resolve by bind order — in the tool whose whole point is that the
     /// operator knows which gate a keystroke crosses.
     #[test]
-    fn a_guarita_colliding_with_a_nav_chord_is_rejected() {
+    fn a_bancada_colliding_with_a_nav_chord_is_rejected() {
         let err = Catalog::resolve(
             vec![health_view(&["WORKLOAD", "MEM"])],
             Vec::new(),
@@ -662,20 +662,20 @@ mod tests {
             vec![ward("ward", &["MEM"])],
             Vec::new(),
             vec![nav("sort", "o", NavIntent::ToggleSort)],
-            vec![guarita("triage", "o", "ward")],
+            vec![bancada("triage", "o", "ward")],
         )
-        .expect_err("a guarita on a nav chord must be rejected");
+        .expect_err("a bancada on a nav chord must be rejected");
         match err {
             SpecError::ChordConflict { chord, .. } => assert_eq!(chord, "o"),
             other => panic!("expected ChordConflict, got {other:?}"),
         }
     }
 
-    /// A guarita whose `:from` names no declared surface is rejected — the
+    /// A bancada whose `:from` names no declared surface is rejected — the
     /// same class as a dangling drill source (a chord bound to a recipe that
     /// can never be reached).
     #[test]
-    fn a_guarita_from_an_unknown_surface_is_rejected() {
+    fn a_bancada_from_an_unknown_surface_is_rejected() {
         let err = Catalog::resolve(
             vec![health_view(&["WORKLOAD", "MEM"])],
             Vec::new(),
@@ -683,9 +683,9 @@ mod tests {
             vec![ward("ward", &["MEM"])],
             Vec::new(),
             Vec::new(),
-            vec![guarita("triage", "g", "nosuchview")],
+            vec![bancada("triage", "g", "nosuchview")],
         )
-        .expect_err("an unreachable guarita must be rejected");
+        .expect_err("an unreachable bancada must be rejected");
         assert!(
             matches!(&err, SpecError::UnknownDrillSource { from, .. } if from == "nosuchview"),
             "got: {err}"
@@ -696,9 +696,9 @@ mod tests {
     /// which is what makes the SHIPPED catalog's compliance a build-time fact
     /// rather than a claim in a comment.
     #[test]
-    fn an_unwitnessed_mutating_guarita_fails_the_whole_catalog() {
-        let mut g = guarita("triage", "g", "ward");
-        g.panes[0].command.effect = crate::guarita::CommandEffect::Mutates;
+    fn an_unwitnessed_mutating_bancada_fails_the_whole_catalog() {
+        let mut g = bancada("triage", "g", "ward");
+        g.panes[0].command.effect = crate::bancada::CommandEffect::Mutates;
         let err = Catalog::resolve(
             vec![health_view(&["WORKLOAD", "MEM"])],
             Vec::new(),
@@ -710,7 +710,7 @@ mod tests {
         )
         .expect_err("an unwitnessed mutating recipe must fail the catalog");
         assert!(
-            matches!(&err, SpecError::UnwitnessedGuarita { guarita, .. } if guarita == "triage"),
+            matches!(&err, SpecError::UnwitnessedBancada { bancada, .. } if bancada == "triage"),
             "got: {err}"
         );
     }

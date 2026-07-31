@@ -1,7 +1,8 @@
-//! `(defguarita)` — the pre-warmed troubleshooting-session domain.
+//! `(defbancada)` — the pre-warmed troubleshooting-session domain.
 //!
-//! **guarita** (pt-BR: the sentry box at a gate — the small structure you
-//! step into to watch and act). It is the bridge between banken (which knows
+//! **bancada** (pt-BR: a workbench — the surface with your tools already laid
+//! out, so work starts the instant you sit down). It is the bridge between
+//! banken (which knows
 //! *what is broken and where*) and tear/mado (which own *the panes you fix it
 //! in*): from a selected row, one authored chord produces a whole tear session
 //! — the right panes, already in the right cluster/namespace/resource context,
@@ -25,12 +26,12 @@
 //!    a pane the operator is dropped into IS the live-effect path, whatever it
 //!    is called. See the legality section below.
 //! 3. **A recipe that only exists in muscle memory.** A recipe is a
-//!    `(defguarita …)` form — a new one is a declaration, not a code change.
+//!    `(defbancada …)` form — a new one is a declaration, not a code change.
 //!
 //! # The legality is DERIVED, never authored (the load-bearing invariant)
 //!
-//! [`GuaritaSpec`] has **no `:legality` kwarg**. Its
-//! [`legality`](GuaritaSpec::legality) is computed from its panes: any pane
+//! [`BancadaSpec`] has **no `:legality` kwarg**. Its
+//! [`legality`](BancadaSpec::legality) is computed from its panes: any pane
 //! whose [`StagedCommand::effect`] is [`CommandEffect::Mutates`] makes the
 //! whole recipe [`ActionLegality::BreakGlass`]; a recipe of pure observers is
 //! [`ActionLegality::Observe`]. There is therefore **no field in which a
@@ -39,7 +40,7 @@
 //!
 //! A BREAK-GLASS recipe must carry `:witness` + `:runbook`, exactly as
 //! [`crate::types::ActionLegality::BreakGlass`] demands; omitting them is
-//! [`SpecError::UnwitnessedGuarita`], reported by name.
+//! [`SpecError::UnwitnessedBancada`], reported by name.
 //!
 //! # And the witness is structural at the seam too
 //!
@@ -99,7 +100,7 @@
 //!   `tear-daemon` on 2026-07-30**: a real three-pane session, with the
 //!   pre-warmed `kubectl` line asserted on the first pane's rendered grid.
 //! - banken's `g` chord **previews** the plan; it does not open one.
-//!   `pending-banken: guarita-app-open`.
+//!   `pending-banken: bancada-app-open`.
 //!
 //! One upstream limitation shapes the adapter and is stated where it lives
 //! (`banken::tear_session`): `MultiplexerControl` spawns a pane's program with
@@ -156,7 +157,7 @@ closed_catalog! {
     #[serde(rename_all = "kebab-case")]
     pub enum PanePlacement {
         /// The session's first pane. Exactly one pane carries this, and it is
-        /// the first — [`GuaritaSpec::validate`] refuses anything else.
+        /// the first — [`BancadaSpec::validate`] refuses anything else.
         Root => "root",
         /// Split to the right of the previous pane (`Direction::Right`).
         Right => "right",
@@ -190,7 +191,7 @@ closed_catalog! {
 closed_catalog! {
     /// Whether a staged command reads or has a live effect.
     ///
-    /// This is the ONE axis the `postigo` gate reads out of a guarita, and it
+    /// This is the ONE axis the `postigo` gate reads out of a bancada, and it
     /// is authored per command rather than per recipe — because a recipe is
     /// mixed in practice (three log tails and one `exec`), and the honest
     /// legality of that recipe is the legality of its worst pane.
@@ -206,7 +207,7 @@ closed_catalog! {
 
 closed_catalog! {
     /// A typed reference into the troubleshooting context, resolved by
-    /// [`plan`] against a [`GuaritaContext`].
+    /// [`plan`] against a [`BancadaContext`].
     ///
     /// Closed on purpose: a free-form `${...}` template would let a recipe
     /// name a field the planner has never heard of and get an empty string
@@ -239,7 +240,7 @@ closed_catalog! {
 pub enum CommandArg {
     /// A fixed argument (`"logs"`, `"--follow"`, `"-n"`).
     Literal(String),
-    /// A reference resolved from the [`GuaritaContext`].
+    /// A reference resolved from the [`BancadaContext`].
     Context(ContextField),
 }
 
@@ -258,7 +259,7 @@ pub struct StagedCommand {
 
 /// One pane of a pre-warmed session.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct GuaritaPane {
+pub struct BancadaPane {
     /// What the pane is for.
     pub role: PaneRole,
     /// Where it sits relative to the previous pane.
@@ -269,8 +270,8 @@ pub struct GuaritaPane {
 
 /// One authored pre-warmed troubleshooting session.
 #[derive(DeriveTataraDomain, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[tatara(keyword = "defguarita")]
-pub struct GuaritaSpec {
+#[tatara(keyword = "defbancada")]
+pub struct BancadaSpec {
     /// The recipe's name — a join key, so it must be unique.
     pub name: String,
     /// The chord that opens it. Shares ONE namespace with
@@ -287,7 +288,7 @@ pub struct GuaritaSpec {
     pub session_prefix: String,
     /// The panes, in creation order. The first must be
     /// [`PanePlacement::Root`] and no other may be.
-    pub panes: Vec<GuaritaPane>,
+    pub panes: Vec<BancadaPane>,
     /// The BREAK-GLASS witness. **Required iff** any pane mutates; a recipe
     /// of pure observers must not carry one (a witness on an observe recipe
     /// reads as "somebody signed off on a live effect" when none exists).
@@ -299,7 +300,7 @@ pub struct GuaritaSpec {
     pub runbook: Option<RunbookRef>,
 }
 
-impl GuaritaSpec {
+impl BancadaSpec {
     /// `true` when any pane stages a mutating command.
     #[must_use]
     pub fn mutates(&self) -> bool {
@@ -317,7 +318,7 @@ impl GuaritaSpec {
     ///
     /// # Errors
     ///
-    /// [`SpecError::UnwitnessedGuarita`] when the recipe mutates but omits
+    /// [`SpecError::UnwitnessedBancada`] when the recipe mutates but omits
     /// `:witness` / `:runbook`, and [`SpecError::UnneededWitness`] when a
     /// pure-observe recipe carries one anyway.
     pub fn legality(&self) -> Result<ActionLegality, SpecError> {
@@ -326,8 +327,8 @@ impl GuaritaSpec {
                 witness: witness.clone(),
                 runbook: runbook.clone(),
             }),
-            (true, _, _) => Err(SpecError::UnwitnessedGuarita {
-                guarita: self.name.clone(),
+            (true, _, _) => Err(SpecError::UnwitnessedBancada {
+                bancada: self.name.clone(),
                 pane_role: self
                     .panes
                     .iter()
@@ -343,18 +344,18 @@ impl GuaritaSpec {
     ///
     /// # Errors
     ///
-    /// - [`SpecError::EmptyGuarita`] — a recipe with no panes is a chord that
+    /// - [`SpecError::EmptyBancada`] — a recipe with no panes is a chord that
     ///   looks authored and opens nothing.
-    /// - [`SpecError::GuaritaPlacement`] — the first pane is not
+    /// - [`SpecError::BancadaPlacement`] — the first pane is not
     ///   [`PanePlacement::Root`], or a later pane is.
     /// - whatever [`Self::legality`] rejects.
     pub fn validate(&self) -> Result<(), SpecError> {
         let Some(first) = self.panes.first() else {
-            return Err(SpecError::EmptyGuarita(self.name.clone()));
+            return Err(SpecError::EmptyBancada(self.name.clone()));
         };
         if first.placement != PanePlacement::Root {
-            return Err(SpecError::GuaritaPlacement {
-                guarita: self.name.clone(),
+            return Err(SpecError::BancadaPlacement {
+                bancada: self.name.clone(),
                 detail: "the first pane must be placed `root` — a session cannot \
                          begin with a split, there is nothing to split from",
             });
@@ -365,8 +366,8 @@ impl GuaritaSpec {
             .skip(1)
             .any(|p| p.placement == PanePlacement::Root)
         {
-            return Err(SpecError::GuaritaPlacement {
-                guarita: self.name.clone(),
+            return Err(SpecError::BancadaPlacement {
+                bancada: self.name.clone(),
                 detail: "only the FIRST pane may be placed `root` — a second root \
                          would be a second session, not a split",
             });
@@ -400,7 +401,7 @@ impl GuaritaSpec {
 /// What a recipe is resolved against: which cluster banken is reading, which
 /// row is selected, and (optionally) which container inside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GuaritaContext {
+pub struct BancadaContext {
     /// The kubeconfig context banken is reading. **Empty means unknown**, and
     /// a recipe referencing [`ContextField::Cluster`] is then refused rather
     /// than resolved to a `--context ""` that silently means something else.
@@ -549,13 +550,13 @@ impl SessionPlan {
 ///
 /// # Errors
 ///
-/// - whatever [`GuaritaSpec::validate`] rejects (shape, placement, witness);
+/// - whatever [`BancadaSpec::validate`] rejects (shape, placement, witness);
 /// - [`SpecError::UnresolvedContextField`] when an authored
 ///   [`ContextField`] has no value in `ctx`. **Never** substituted with an
 ///   empty string: `kubectl --context "" …` and `kubectl -c "" …` are both
 ///   silently *wrong* rather than failing, which is the exact class this
 ///   crate refuses.
-pub fn plan(spec: &GuaritaSpec, ctx: &GuaritaContext) -> Result<SessionPlan, SpecError> {
+pub fn plan(spec: &BancadaSpec, ctx: &BancadaContext) -> Result<SessionPlan, SpecError> {
     spec.validate()?;
     let legality = spec.legality()?;
 
@@ -587,8 +588,8 @@ pub fn plan(spec: &GuaritaSpec, ctx: &GuaritaContext) -> Result<SessionPlan, Spe
 
 /// Resolve one context field, or refuse by name.
 fn resolve_field(
-    spec: &GuaritaSpec,
-    ctx: &GuaritaContext,
+    spec: &BancadaSpec,
+    ctx: &BancadaContext,
     field: ContextField,
 ) -> Result<String, SpecError> {
     let value: Option<String> = match field {
@@ -601,7 +602,7 @@ fn resolve_field(
         ContextField::Container => ctx.container.clone().filter(|c| !c.is_empty()),
     };
     value.ok_or_else(|| SpecError::UnresolvedContextField {
-        guarita: spec.name.clone(),
+        bancada: spec.name.clone(),
         field: field.label(),
     })
 }
@@ -611,7 +612,7 @@ fn resolve_field(
 ///
 /// Typed emission: assembled by concatenation from typed pieces, never a
 /// `format!()` of a template.
-fn session_name(spec: &GuaritaSpec, ctx: &GuaritaContext) -> String {
+fn session_name(spec: &BancadaSpec, ctx: &BancadaContext) -> String {
     let mut s = String::from(&spec.session_prefix);
     for part in [
         Some(ctx.cluster.as_str()).filter(|c| !c.is_empty()),
@@ -698,7 +699,7 @@ pub trait SessionEnv {
 /// # Errors
 ///
 /// - [`SpecError::Interp`] propagated from the env;
-/// - [`SpecError::UnwitnessedGuarita`] if a mutating pane is reached on a plan
+/// - [`SpecError::UnwitnessedBancada`] if a mutating pane is reached on a plan
 ///   with no witness. Unreachable through [`plan`] (the legality is derived
 ///   from the same panes) — it is the honest typed floor rather than an
 ///   `unwrap`, per this crate's no-silent-`Ok` rule.
@@ -724,8 +725,8 @@ pub fn open<E: SessionEnv>(plan: &SessionPlan, env: &E) -> Result<Vec<PaneRef>, 
             (None, Some(mutating)) => {
                 let w = witness
                     .as_ref()
-                    .ok_or_else(|| SpecError::UnwitnessedGuarita {
-                        guarita: plan.session_name().to_owned(),
+                    .ok_or_else(|| SpecError::UnwitnessedBancada {
+                        bancada: plan.session_name().to_owned(),
                         pane_role: pane.role.label(),
                     })?;
                 env.stage_witnessed(handle, &mutating, w)?;
@@ -763,16 +764,16 @@ mod tests {
         }
     }
 
-    fn ctx() -> GuaritaContext {
-        GuaritaContext {
+    fn ctx() -> BancadaContext {
+        BancadaContext {
             cluster: "camelot-eks".into(),
             selection: selection(),
             container: Some("catch".into()),
         }
     }
 
-    fn logs_pane(placement: PanePlacement) -> GuaritaPane {
-        GuaritaPane {
+    fn logs_pane(placement: PanePlacement) -> BancadaPane {
+        BancadaPane {
             role: PaneRole::Logs,
             placement,
             command: StagedCommand {
@@ -791,8 +792,8 @@ mod tests {
         }
     }
 
-    fn exec_pane(placement: PanePlacement) -> GuaritaPane {
-        GuaritaPane {
+    fn exec_pane(placement: PanePlacement) -> BancadaPane {
+        BancadaPane {
             role: PaneRole::Shell,
             placement,
             command: StagedCommand {
@@ -807,8 +808,8 @@ mod tests {
         }
     }
 
-    fn observe_recipe() -> GuaritaSpec {
-        GuaritaSpec {
+    fn observe_recipe() -> BancadaSpec {
+        BancadaSpec {
             name: "pod-triage".into(),
             keys: ActionChord::parse("g").expect("chord"),
             from: "pods".into(),
@@ -823,8 +824,8 @@ mod tests {
         }
     }
 
-    fn glass_recipe() -> GuaritaSpec {
-        GuaritaSpec {
+    fn glass_recipe() -> BancadaSpec {
+        BancadaSpec {
             name: "pod-break-glass".into(),
             keys: ActionChord::parse("shift+g").expect("chord"),
             from: "pods".into(),
@@ -878,11 +879,11 @@ mod tests {
             .validate()
             .expect_err("an unwitnessed break-glass must be rejected");
         match err {
-            SpecError::UnwitnessedGuarita { guarita, pane_role } => {
-                assert_eq!(guarita, "pod-break-glass");
+            SpecError::UnwitnessedBancada { bancada, pane_role } => {
+                assert_eq!(bancada, "pod-break-glass");
                 assert_eq!(pane_role, "shell", "the error names the offending pane");
             }
-            other => panic!("expected UnwitnessedGuarita, got {other:?}"),
+            other => panic!("expected UnwitnessedBancada, got {other:?}"),
         }
     }
 
@@ -903,7 +904,7 @@ mod tests {
     fn a_recipe_with_no_panes_is_rejected() {
         let mut r = observe_recipe();
         r.panes.clear();
-        assert!(matches!(r.validate(), Err(SpecError::EmptyGuarita(n)) if n == "pod-triage"));
+        assert!(matches!(r.validate(), Err(SpecError::EmptyBancada(n)) if n == "pod-triage"));
     }
 
     #[test]
@@ -912,7 +913,7 @@ mod tests {
         r.panes[0].placement = PanePlacement::Right;
         let err = r.validate().expect_err("a leading split must be rejected");
         assert!(
-            matches!(&err, SpecError::GuaritaPlacement { detail, .. } if detail.contains("root")),
+            matches!(&err, SpecError::BancadaPlacement { detail, .. } if detail.contains("root")),
             "got: {err}"
         );
     }
@@ -923,7 +924,7 @@ mod tests {
         r.panes[1].placement = PanePlacement::Root;
         assert!(matches!(
             r.validate(),
-            Err(SpecError::GuaritaPlacement { .. })
+            Err(SpecError::BancadaPlacement { .. })
         ));
     }
 
@@ -963,8 +964,8 @@ mod tests {
         c.cluster = String::new();
         let err = plan(&observe_recipe(), &c).expect_err("an unknown cluster must be refused");
         match err {
-            SpecError::UnresolvedContextField { guarita, field } => {
-                assert_eq!(guarita, "pod-triage");
+            SpecError::UnresolvedContextField { bancada, field } => {
+                assert_eq!(bancada, "pod-triage");
                 assert_eq!(field, "cluster");
             }
             other => panic!("expected UnresolvedContextField, got {other:?}"),

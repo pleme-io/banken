@@ -33,9 +33,9 @@ kube = { version = "0.99", default-features = false, features = ["client", "rust
 k8s-openapi = { version = "0.24", features = ["latest"], optional = true }
 anyhow = { version = "1", optional = true }
 
-# ── The live tear handoff for `(defguarita)` (the guarita bridge). ──
+# ── The live tear handoff for `(defbancada)` (the bancada bridge). ──
 # `tear-client::Client` implements `tear_types::MultiplexerControl`, which is
-# the surface `banken_spec::guarita::SessionEnv` was shaped as a projection of
+# the surface `banken_spec::bancada::SessionEnv` was shaped as a projection of
 # — so the adapter is a rename, not a translation layer. Gated behind the
 # `tear` feature: it drags tear-config → shikumi's figment/notify tree into the
 # binary, which the default (fixture) build has no use for.
@@ -49,7 +49,7 @@ anyhow = { version = "1", optional = true }
 # default build never compiles them, which is the documented
 # crate2nix-vs-fetchgit base32-vs-SRI drift class (`nix run .#hashfix -- loop`).
 # `cargo test`/`fmt` are green on default, `live` and `tear`; `nix build` is
-# UNVERIFIED here. `pending-banken: guarita-tear-feature-nix-unverified`.
+# UNVERIFIED here. `pending-banken: bancada-tear-feature-nix-unverified`.
 tear-client = { git = "https://github.com/pleme-io/tear", branch = "main", optional = true, version = "0.1" }
 tear-types = { git = "https://github.com/pleme-io/tear", branch = "main", optional = true, version = "0.1" }
 
@@ -58,7 +58,7 @@ default = []
 # Compile the KubeClusterEnv live-read backend. Heavy dep tree (kube +
 # k8s-openapi + rustls) — off by default so the fixture path is fast.
 live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow"]
-# Compile the TearSessionEnv adapter — the live `(defguarita)` handoff over a
+# Compile the TearSessionEnv adapter — the live `(defbancada)` handoff over a
 # running `tear-daemon`. Off by default: the plan is produced and previewed
 # without it, and the dep tree is heavy.
 tear = ["dep:tear-client", "dep:tear-types"]

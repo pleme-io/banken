@@ -37,12 +37,12 @@
 //! - [`app`] — the `BankenApp` runtime (`egaku_term::AsyncApp`).
 //! - [`live`] — `KubeClusterEnv` (feature `live`). `pending-banken: live-read`.
 //! - [`tear_session`] — `TearSessionEnv` (feature `tear`): the LIVE
-//!   `(defguarita)` handoff over a running `tear-daemon`.
+//!   `(defbancada)` handoff over a running `tear-daemon`.
 //!
-//! ## The guarita bridge (banken → tear/mado)
+//! ## The bancada bridge (banken → tear/mado)
 //!
 //! `g` / `shift+g` on a selected row resolves an authored
-//! `(defguarita)` into a pre-warmed troubleshooting session: the panes, their
+//! `(defbancada)` into a pre-warmed troubleshooting session: the panes, their
 //! splits, and the fully-resolved `kubectl` argv for the cluster + namespace +
 //! pod banken is looking at. Its `postigo` class is **derived from the
 //! recipe's panes**, so a session staging a live effect is BREAK-GLASS and
@@ -60,7 +60,7 @@
 //!   `type_into` to send no bytes turns it red on exactly that assertion.
 //!   The app does **not** call it yet — pressing `g` previews the plan; wiring
 //!   the app's overlay to a confirm-then-open is `pending-banken:
-//!   guarita-app-open`.
+//!   bancada-app-open`.
 
 pub mod action;
 pub mod app;

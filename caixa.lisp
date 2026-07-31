@@ -33,7 +33,7 @@
     "postigo"
     "egaku"
     "tear"
-    "guarita"
+    "bancada"
     "naturalize"
     "caixa-binario")
 
@@ -48,8 +48,8 @@
   ;;
   ;; banken-spec — the postigo action-legality border + the SEVEN authored
   ;; domains ((defk8sview) (defk8saction) (defpathology) (defward) (defdrill)
-  ;; (defnavkey) (defguarita)) + the apply<E: ClusterEnv> interpreter + the
-  ;; guarita plan<->SessionEnv triplet (the banken → tear/mado pre-warmed
+  ;; (defnavkey) (defbancada)) + the apply<E: ClusterEnv> interpreter + the
+  ;; bancada plan<->SessionEnv triplet (the banken → tear/mado pre-warmed
   ;; troubleshooting-session bridge) + the WardVerdict health evaluator + the
   ;; cross-resolving Catalog + the awase ActionChord/BindingMap layer. A
   ;; consumer that wants the legality gate or the pathology taxonomy without

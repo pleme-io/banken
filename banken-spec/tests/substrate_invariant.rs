@@ -46,7 +46,7 @@ const FORBIDDEN_SUBSTRINGS: &[&str] = &[
     "replace", "remove", "restart", "drain", "cordon",
 ];
 
-/// The whole allowlist of `SessionEnv` method names (the `(defguarita)`
+/// The whole allowlist of `SessionEnv` method names (the `(defbancada)`
 /// seam). Two of the five are the staging arms, and they are deliberately
 /// asymmetric: `stage_observed` takes an `ObservedCommand`,
 /// `stage_witnessed` takes a `MutatingCommand` **plus** a `WitnessedAction`.
@@ -168,7 +168,7 @@ fn cluster_env_has_no_mutating_verb_method() {
     }
 }
 
-/// The same CI-caught floor at the `(defguarita)` seam.
+/// The same CI-caught floor at the `(defbancada)` seam.
 ///
 /// `SessionEnv`'s two staging arms take DIFFERENT argument types
 /// (`ObservedCommand` vs `MutatingCommand` + `WitnessedAction`), and those
@@ -180,7 +180,7 @@ fn cluster_env_has_no_mutating_verb_method() {
 /// **only-mitigated → CI-caught.**
 #[test]
 fn session_env_exposes_only_allowlisted_methods() {
-    let src = read_source("src/guarita.rs");
+    let src = read_source("src/bancada.rs");
     let methods = trait_methods(&src, "SessionEnv");
     assert!(
         !methods.is_empty(),

@@ -12,8 +12,8 @@
 //! - `S` → **BREAK-GLASS**: `banken_spec::apply` routes to
 //!   `env.break_glass`, producing a witnessed [`GlassRecord`] preview.
 //!
-//! - `g` / `shift+g` → a **guarita**: a `(defguarita)` resolved against the
-//!   selected row into a pre-warmed tear session plan ([`plan_guarita`]). Its
+//! - `g` / `shift+g` → a **bancada**: a `(defbancada)` resolved against the
+//!   selected row into a pre-warmed tear session plan ([`plan_bancada`]). Its
 //!   postigo class is DERIVED from the recipe's panes, so the overlay states
 //!   the gate the session would cross rather than taking the author's word.
 //!
@@ -26,7 +26,7 @@
 use awase::Key;
 use banken_spec::chord::ActionChord;
 use banken_spec::env::ClusterEnv;
-use banken_spec::guarita::{GuaritaContext, GuaritaSpec, PlannedPane};
+use banken_spec::bancada::{BancadaContext, BancadaSpec, PlannedPane};
 use banken_spec::interp::{Outcome, Selection, apply};
 use banken_spec::types::{
     ActionLegality, DeclareTarget, K8sActionSpec, ManifestScope, OperatorId, RunbookRef,
@@ -117,15 +117,15 @@ pub enum ActionResult {
         selector: String,
         record_id: String,
     },
-    /// A `(defguarita)` resolved into a pre-warmed tear session PLAN — the
+    /// A `(defbancada)` resolved into a pre-warmed tear session PLAN — the
     /// panes, their placement, and the fully-resolved argv each would be
     /// staged with, plus the recipe's DERIVED postigo class.
     ///
     /// A **preview**, exactly like [`Self::DeclarePreview`]: producing the
     /// plan touches nothing. Handing it to a live `tear-daemon` is the
-    /// [`banken_spec::guarita::SessionEnv`] seam's job, and banken ships no
-    /// implementation of that seam yet — `pending-banken: guarita-live-handoff`.
-    GuaritaPlan {
+    /// [`banken_spec::bancada::SessionEnv`] seam's job, and banken ships no
+    /// implementation of that seam yet — `pending-banken: bancada-live-handoff`.
+    BancadaPlan {
         /// The recipe's name.
         recipe: String,
         /// Its derived legality class label, uppercased ("OBSERVE" /
@@ -217,11 +217,11 @@ pub fn dispatch<E: ClusterEnv>(
     }
 }
 
-/// Resolve a `(defguarita)` against the selected row into a session plan.
+/// Resolve a `(defbancada)` against the selected row into a session plan.
 ///
 /// This is the banken → tear/mado bridge at the keystroke: the selected row
-/// plus the cluster banken is reading become a [`GuaritaContext`], and
-/// [`banken_spec::guarita::plan`] turns the authored recipe into concrete
+/// plus the cluster banken is reading become a [`BancadaContext`], and
+/// [`banken_spec::bancada::plan`] turns the authored recipe into concrete
 /// panes with concrete argv.
 ///
 /// Every failure is surfaced as [`ActionResult::Error`] carrying the typed
@@ -229,20 +229,20 @@ pub fn dispatch<E: ClusterEnv>(
 /// an operator must see rather than have papered over: a pre-warmed session
 /// on the wrong cluster is worse than no pre-warmed session.
 #[must_use]
-pub fn plan_guarita(table: &PodTable, spec: &GuaritaSpec, cluster: &str) -> ActionResult {
+pub fn plan_bancada(table: &PodTable, spec: &BancadaSpec, cluster: &str) -> ActionResult {
     let Some(selection) = current_selection(table) else {
         return ActionResult::Error("no row selected".into());
     };
-    let ctx = GuaritaContext {
+    let ctx = BancadaContext {
         cluster: cluster.to_owned(),
         selection,
         // M0 has no container picker; a recipe referencing `(:context
         // container)` therefore refuses BY NAME rather than guessing the
-        // first container. `pending-banken: guarita-container-selection`.
+        // first container. `pending-banken: bancada-container-selection`.
         container: None,
     };
-    match banken_spec::guarita::plan(spec, &ctx) {
-        Ok(p) => ActionResult::GuaritaPlan {
+    match banken_spec::bancada::plan(spec, &ctx) {
+        Ok(p) => ActionResult::BancadaPlan {
             recipe: spec.name.clone(),
             legality: p.legality().class().label().to_uppercase(),
             session_name: p.session_name().to_owned(),

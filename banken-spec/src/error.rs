@@ -95,23 +95,23 @@ pub enum SpecError {
         to_level: &'static str,
     },
 
-    // ── (defguarita) ──────────────────────────────────────────────────
-    /// A `(defguarita)` declared no `:panes` — a chord that looks authored
+    // ── (defbancada) ──────────────────────────────────────────────────
+    /// A `(defbancada)` declared no `:panes` — a chord that looks authored
     /// and opens nothing.
-    #[error("guarita `{0}` has no panes — it would open an empty session")]
-    EmptyGuarita(String),
+    #[error("bancada `{0}` has no panes — it would open an empty session")]
+    EmptyBancada(String),
 
-    /// A `(defguarita)`'s panes are not a valid session shape: the first pane
+    /// A `(defbancada)`'s panes are not a valid session shape: the first pane
     /// is not `root`, or a later pane claims to be.
-    #[error("guarita `{guarita}` has an invalid pane layout: {detail}")]
-    GuaritaPlacement {
+    #[error("bancada `{bancada}` has an invalid pane layout: {detail}")]
+    BancadaPlacement {
         /// The offending recipe.
-        guarita: String,
+        bancada: String,
         /// What specifically is wrong, and why it cannot be a session.
         detail: &'static str,
     },
 
-    /// A `(defguarita)` stages a MUTATING command but declares no
+    /// A `(defbancada)` stages a MUTATING command but declares no
     /// `:witness` / `:runbook`.
     ///
     /// Staging `kubectl exec` into a pane the operator is dropped into is the
@@ -120,44 +120,44 @@ pub enum SpecError {
     /// legality is *derived* from its panes, so this is the only way the
     /// obligation can go unmet — it cannot be dodged by mislabelling.
     #[error(
-        "guarita `{guarita}` stages a MUTATING command in its `{pane_role}` pane, \
+        "bancada `{bancada}` stages a MUTATING command in its `{pane_role}` pane, \
          which makes the whole recipe BREAK-GLASS — declare `:witness` and \
          `:runbook`, or make every pane observe-only"
     )]
-    UnwitnessedGuarita {
+    UnwitnessedBancada {
         /// The offending recipe.
-        guarita: String,
+        bancada: String,
         /// The role of the first mutating pane.
         pane_role: &'static str,
     },
 
-    /// A `(defguarita)` of pure observers carries a `:witness` / `:runbook`
+    /// A `(defbancada)` of pure observers carries a `:witness` / `:runbook`
     /// anyway.
     ///
     /// Rejected in this direction too: a stray witness reads as "somebody
     /// signed off on a live effect" when there is none, which is an over-claim
     /// pointing the way reviewers do not check.
     #[error(
-        "guarita `{0}` declares a `:witness`/`:runbook` but stages no mutating \
+        "bancada `{0}` declares a `:witness`/`:runbook` but stages no mutating \
          command — a witness on a pure-observe recipe claims a sign-off that \
          nothing needed"
     )]
     UnneededWitness(String),
 
-    /// A `(defguarita)` references a context field the planner cannot resolve.
+    /// A `(defbancada)` references a context field the planner cannot resolve.
     ///
     /// **Never** substituted with an empty string: `kubectl --context ""` and
     /// `kubectl -c ""` are silently *wrong* rather than failing, which would
     /// open the pre-warmed session on the wrong cluster or the wrong
     /// container — the exact class the domain exists to close.
     #[error(
-        "guarita `{guarita}` references `{field}`, which the current selection \
+        "bancada `{bancada}` references `{field}`, which the current selection \
          does not carry — refusing to substitute an empty value, which would \
          silently resolve to a different target"
     )]
     UnresolvedContextField {
         /// The offending recipe.
-        guarita: String,
+        bancada: String,
         /// The unresolvable field's label.
         field: &'static str,
     },

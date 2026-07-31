@@ -25,7 +25,7 @@
 
 use crate::{
     drill::DrillLevel,
-    guarita::{CommandEffect, ContextField, PanePlacement, PaneRole, SessionLayout},
+    bancada::{CommandEffect, ContextField, PanePlacement, PaneRole, SessionLayout},
     nav::NavIntent,
     pathology::{EvidenceKind, RemedyKind, Severity, Verdict},
     types::{DeclareTargetKind, LegalityClass, ResourceKind, ViewKind},
@@ -123,7 +123,7 @@ pub fn catalog() -> Vec<CatalogRow> {
     push_axis(&mut rows, "drill-level", DrillLevel::ALL, DrillLevel::label);
     // (defnavkey)
     push_axis(&mut rows, "nav-intent", NavIntent::ALL, NavIntent::label);
-    // (defguarita)
+    // (defbancada)
     push_axis(&mut rows, "pane-role", PaneRole::ALL, PaneRole::label);
     push_axis(
         &mut rows,
@@ -179,7 +179,7 @@ pub const REQUIRED_AXES: &[&str] = &[
     "drill-level",
     // (defnavkey)
     "nav-intent",
-    // (defguarita)
+    // (defbancada)
     "pane-role",
     "pane-placement",
     "session-layout",

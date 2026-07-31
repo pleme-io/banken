@@ -271,7 +271,7 @@ fn a_broken_drill_reference_fails_the_whole_catalog() {
         load_wards().unwrap(),
         load_drills().unwrap(),
         load_nav_keys().unwrap(),
-        banken_spec::load_guaritas().unwrap(),
+        banken_spec::load_bancadas().unwrap(),
     )
     .expect_err("a dangling drill target must fail resolution");
     match err {
@@ -304,7 +304,7 @@ fn dropping_an_authored_lane_fails_resolution_against_the_view() {
         wards,
         load_drills().unwrap(),
         load_nav_keys().unwrap(),
-        banken_spec::load_guaritas().unwrap(),
+        banken_spec::load_bancadas().unwrap(),
     )
     .expect_err("a lane/column disagreement must fail resolution");
     match err {
@@ -339,7 +339,7 @@ fn a_nav_key_on_a_postigo_chord_fails_the_whole_catalog() {
         load_wards().unwrap(),
         load_drills().unwrap(),
         nav,
-        banken_spec::load_guaritas().unwrap(),
+        banken_spec::load_bancadas().unwrap(),
     )
     .expect_err("a nav key on a postigo chord must fail resolution");
     match err {

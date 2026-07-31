@@ -20,7 +20,7 @@ use crate::{
         LogStream, ResourceRef, Row, WatchStream, WitnessedAction, Workload,
     },
     error::SpecError,
-    guarita::{
+    bancada::{
         MutatingCommand, ObservedCommand, PanePlacement, PaneRef, SessionEnv, SessionLayout,
     },
     types::ResourceKind,
@@ -151,7 +151,7 @@ impl ClusterEnv for MockClusterEnv {
     // *** No mutate method to implement — because ClusterEnv has none. ***
 }
 
-/// A mock terminal-multiplexer env for the `(defguarita)` triplet — the
+/// A mock terminal-multiplexer env for the `(defbancada)` triplet — the
 /// [`SessionEnv`] analogue of [`MockClusterEnv`].
 ///
 /// It records every session opened, every split, and every staged command,
@@ -229,5 +229,5 @@ impl SessionEnv for MockSessionEnv {
     }
 
     // *** No third staging method — an unwitnessed mutating stage has no
-    //     argument value that can reach a call. See `guarita`'s module docs. ***
+    //     argument value that can reach a call. See `bancada`'s module docs. ***
 }

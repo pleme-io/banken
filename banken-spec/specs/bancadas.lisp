@@ -1,6 +1,6 @@
-;; banken pre-warmed troubleshooting sessions — the (defguarita) authoring
-;; surface. A "guarita" (pt-BR) is the sentry box at a gate: the small
-;; structure you step into to watch and act.
+;; banken pre-warmed troubleshooting sessions — the (defbancada) authoring
+;; surface. A "bancada" (pt-BR) is a workbench: the surface with your tools
+;; already laid out, so work starts the instant you sit down.
 ;;
 ;; This is the banken → tear/mado bridge. From a selected row, one authored
 ;; chord produces a whole tear session — the right panes, already on the right
@@ -10,10 +10,10 @@
 ;; ─── Three things about this file that are load-bearing ───────────────────
 ;;
 ;; 1. THERE IS NO `:legality` KWARG, and that is the point. A recipe's postigo
-;;    class is DERIVED from its panes (`GuaritaSpec::legality`): any pane whose
+;;    class is DERIVED from its panes (`BancadaSpec::legality`): any pane whose
 ;;    `:effect` is `mutates` makes the whole recipe BREAK-GLASS. So a mutating
 ;;    recipe has no field in which to claim it observes. A BREAK-GLASS recipe
-;;    MUST carry `:witness` + `:runbook` (SpecError::UnwitnessedGuarita), and a
+;;    MUST carry `:witness` + `:runbook` (SpecError::UnwitnessedBancada), and a
 ;;    pure-observe recipe must NOT (SpecError::UnneededWitness).
 ;;
 ;; 2. A COMMAND IS A TYPED ARGV, NEVER A SHELL STRING. `:program` plus an
@@ -40,7 +40,7 @@
 ;; Three read panes on the selected pod: a live log tail (the big one), its
 ;; events, and its full manifest. Nothing here mutates, so the recipe is
 ;; OBSERVE and carries no witness.
-(defguarita
+(defbancada
   :name "pod-triage"
   :keys "g"
   :from "pods"
@@ -89,7 +89,7 @@
 ;; container. That exec is a LIVE EFFECT, so `:effect mutates` — and because
 ;; the legality is derived, the whole recipe becomes BREAK-GLASS and the
 ;; `:witness` + `:runbook` below stop being optional. Removing either one
-;; fails the catalog by name (SpecError::UnwitnessedGuarita), and the
+;; fails the catalog by name (SpecError::UnwitnessedBancada), and the
 ;; witnessed staging arm is the ONLY path an argv with `mutates` can reach
 ;; (`MutatingCommand` is unconstructible from an observing pane).
 ;;
@@ -97,7 +97,7 @@
 ;; and "g" are the SAME typed chord and authoring "G" here would collide with
 ;; `pod-triage` above — silently, before `Catalog::resolve` learned to check
 ;; all three keyed domains against one namespace. See banken_spec::chord.
-(defguarita
+(defbancada
   :name "pod-break-glass"
   :keys "shift+g"
   :from "pods"
