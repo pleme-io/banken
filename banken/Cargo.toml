@@ -32,6 +32,19 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 kube = { version = "0.99", default-features = false, features = ["client", "rustls-tls"], optional = true }
 k8s-openapi = { version = "0.24", features = ["latest"], optional = true }
 anyhow = { version = "1", optional = true }
+# *** NOT redundant with kube's `rustls-tls`. Measured 2026-07-31. ***
+# kube 0.99's `rustls-tls` pulls rustls 0.23 with features
+# `log,logging,std,tls12` and selects NO crypto provider — neither `ring` nor
+# `aws-lc-rs`. rustls then has no process default, and the FIRST TLS handshake
+# panics at `rustls/src/crypto/mod.rs:249` ("Could not automatically determine
+# the process-level CryptoProvider"). That is a RUNTIME panic behind a clean
+# compile, which is exactly why "the live backend compiles" was never evidence
+# that it reads. Naming the provider here is the load-bearing fix; `live.rs`
+# also installs it explicitly so a future crate enabling `aws-lc-rs` turns the
+# ambiguity into a no-op rather than back into a panic.
+# `ring` over `aws-lc-rs`: aws-lc-rs is an FFI binding to the AWS-LC C library,
+# and the fleet's Rust standard is pure-Rust deps without FFI.
+rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
 
 # ── The live tear handoff for `(defbancada)` (the bancada bridge). ──
 # `tear-client::Client` implements `tear_types::MultiplexerControl`, which is
@@ -57,7 +70,7 @@ tear-types = { git = "https://github.com/pleme-io/tear", branch = "main", option
 default = []
 # Compile the KubeClusterEnv live-read backend. Heavy dep tree (kube +
 # k8s-openapi + rustls) — off by default so the fixture path is fast.
-live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow"]
+live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow", "dep:rustls"]
 # Compile the TearSessionEnv adapter — the live `(defbancada)` handoff over a
 # running `tear-daemon`. Off by default: the plan is produced and previewed
 # without it, and the dep tree is heavy.

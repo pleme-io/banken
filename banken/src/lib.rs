@@ -19,12 +19,15 @@
 //!   preview, `S`→BREAK-GLASS witnessed record), and golden-frame +
 //!   dispatch integration tests. This is the sui-spec `MockEnv` discipline:
 //!   a real, verifiable increment whose read is canned data.
-//! - **DESIGN / UNTESTED-LIVE:** the live-cluster read
-//!   ([`KubeClusterEnv`](live::KubeClusterEnv), under the `live` feature).
-//!   No cluster was reachable this session (rio/camelot VPN-gated, local
-//!   k3s down), so the live read path was never exercised. It is wired
-//!   behind the same [`ClusterEnv`](banken_spec::env::ClusterEnv) seam and
-//!   lights up the instant a cluster returns. Do NOT conflate the two.
+//! - **PROVEN LIVE (2026-07-31, feature `live`):** the live-cluster **pod
+//!   read** ([`KubeClusterEnv`](live::KubeClusterEnv)). `camelot-eks` returned
+//!   109 pods — matching `kubectl get pods -A` at the same moment — and they
+//!   rendered through the same pipeline the fixture rows do, both from
+//!   `tests/live_read.rs` and from the binary in a real PTY.
+//!   **Scope of that claim: `list_resources` for pods, and nothing else.**
+//!   `logs`, `events`, `topology`, `health_signals`, `declare` and
+//!   `break_glass` still return typed "not yet wired" errors on the live
+//!   backend. Do not read the row as broader than it is.
 //!
 //! ## Module map
 //!

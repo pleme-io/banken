@@ -1,14 +1,33 @@
 //! `KubeClusterEnv` — the live-cluster OBSERVE backend (BANKEN.md §VI M0
 //! destination-tier / §VII "M0 read for a rio cluster").
 //!
-//! # pending-banken: live-read
+//! # Tier: PROVEN LIVE (measured 2026-07-31) — `pending-banken: live-read` CLOSED
 //!
-//! **Tier: DESIGN / UNTESTED-LIVE this session.** No Kubernetes cluster is
-//! reachable this session (rio/camelot VPN-gated, local k3s down), so this
-//! backend's read path has **not** been exercised against a real apiserver.
-//! The code is real (a typed `kube` client, never a fake `Ok`) and the seam
-//! is wired — it lights up the instant a cluster returns. Do NOT conflate
-//! "renders from fixtures" (PROVEN) with "live cluster read" (this — DESIGN).
+//! This backend's read path has been exercised against a real apiserver:
+//! `camelot-eks` (EKS v1.33, AWS SSO exec-credential auth) returned **109
+//! pods**, matching `kubectl get pods -A` at the same moment, and those rows
+//! rendered through the full `PodTable` → `draw_pod_table` pipeline. Two
+//! independent runs, both recorded in the commit that closed the row:
+//!
+//! - `tests/live_read.rs` (`#[ignore]`d, feature `live`) — the whole chain
+//!   with an assertion at each joint, ending on a golden-frame `TestBackend`
+//!   grid;
+//! - the **binary itself** in a real 120×28 PTY
+//!   (`banken --live --context camelot-eks`), snapshotted mid-run.
+//!
+//! **What that measurement cost, and why it is the whole point of the row:**
+//! `--features live` had *compiled clean* for weeks while the first live read
+//! aborted the process — kube 0.99's `rustls-tls` selects no rustls crypto
+//! provider, so the first TLS handshake panicked in
+//! `rustls/src/crypto/mod.rs:249`. A green build was never evidence.
+//! See [`ensure_crypto_provider`].
+//!
+//! Still NOT proven and deliberately unchanged: everything below
+//! `list_resources` for pods. `get_resource`, `logs`, `events`, `topology`,
+//! `health_signals`, `declare` and `break_glass` all still return typed
+//! "not yet wired" errors — do not read "banken reads a live cluster" as
+//! "banken does anything else live". AGE renders `-` for every row (the
+//! `creation_timestamp` derivation needs a clock; a `-` beats a wrong value).
 //!
 //! **NO SHELL.** This reads pods via the typed `kube` apiserver client
 //! against the current kubeconfig context — never a `kubectl` subprocess.
@@ -51,6 +70,30 @@ pub fn kubeconfig_current_context() -> Option<String> {
         .filter(|c| !c.is_empty())
 }
 
+/// Install the process-wide rustls crypto provider, once.
+///
+/// **This is not boilerplate — it is the fix for a measured runtime panic.**
+/// kube 0.99's `rustls-tls` feature pulls rustls 0.23 with
+/// `log,logging,std,tls12` and selects **no** crypto provider, so rustls has
+/// no process default and the first TLS handshake panics inside
+/// `rustls/src/crypto/mod.rs:249` rather than returning an error. Measured
+/// 2026-07-31: `--features live` compiled clean, and the first live read
+/// aborted the process. A clean compile was never evidence the backend reads,
+/// and this is precisely why `pending-banken: live-read` was a real row and
+/// not paperwork.
+///
+/// Installing explicitly (rather than relying on rustls's
+/// pick-from-crate-features path) makes the fix immune to a future dependency
+/// enabling `aws-lc-rs` as well — which would turn the "exactly one provider"
+/// inference back into the same panic.
+///
+/// `install_default` returns `Err` only when a provider is *already*
+/// installed, which is the desired end state, so it is deliberately discarded
+/// rather than propagated.
+fn ensure_crypto_provider() {
+    let _already_installed = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// Every context name the kubeconfig declares, in file order.
 ///
 /// Empty means the kubeconfig could not be read at all — which is different
@@ -91,6 +134,7 @@ impl KubeClusterEnv {
     /// cannot be resolved or the client cannot be constructed (the honest
     /// failure when no cluster / VPN is up — never a fake success).
     pub async fn connect() -> Result<Self, SpecError> {
+        ensure_crypto_provider();
         let client = Client::try_default().await.map_err(|e| SpecError::Interp {
             phase: "connect".into(),
             message: e.to_string(),
@@ -137,6 +181,7 @@ impl KubeClusterEnv {
     /// for — never a silent fall back to the current one, which would defeat
     /// the entire point of the flag.
     pub async fn connect_with_context(context: &str) -> Result<Self, SpecError> {
+        ensure_crypto_provider();
         let options = KubeConfigOptions {
             context: Some(context.to_owned()),
             ..Default::default()
@@ -166,8 +211,10 @@ impl KubeClusterEnv {
 
     /// The kubeconfig context this env is reading, when it is known.
     ///
-    /// UNTESTED-LIVE this session, like the rest of this backend
-    /// (`pending-banken: live-read`).
+    /// Built by [`Self::connect_with_context`] it is the name that was
+    /// connected with; built by [`Self::connect`] it is a separate read of the
+    /// kubeconfig's `current-context` and is therefore only *probably* the
+    /// same thing. The CLI takes the former path for exactly that reason.
     #[must_use]
     pub fn context_name(&self) -> Option<String> {
         self.context_name.clone()
