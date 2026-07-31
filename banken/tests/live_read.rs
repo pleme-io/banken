@@ -117,10 +117,10 @@ async fn a_named_context_renders_real_pod_rows() {
     let table = PodTable::from_view(&catalog, banken::app::VIEW_NAME, rows.clone())
         .expect("the authored :pods columns resolve against live rows");
     assert!(
-        table.unresolved_fields().is_empty(),
+        table.view().unresolved_fields().is_empty(),
         "every authored column must resolve against the LIVE reader's rows; \
          unresolved: {:?}",
-        table.unresolved_fields(),
+        table.view().unresolved_fields(),
     );
 
     // ── the render ──
@@ -138,7 +138,7 @@ async fn a_named_context_renders_real_pod_rows() {
     .with_cluster(context.clone());
 
     assert_eq!(
-        app.table().rows().len(),
+        app.table().view().rows().len(),
         rows.len(),
         "the app's own construction read returned the same row count",
     );
@@ -163,6 +163,7 @@ async fn a_named_context_renders_real_pod_rows() {
     }
     let selected = app
         .table()
+        .view()
         .selected_row()
         .expect("a non-empty live table has a selection")
         .name

@@ -1,21 +1,58 @@
-//! The `:pods` table cell drawer — banken's minimal `draw::table`.
+//! The `:pods` table cell drawer — banken's `draw::table` **with the
+//! pathology color axis**.
 //!
-//! # pending-banken: promote-tableview-to-egaku
+//! # This drawer is KEPT ON PURPOSE. `pending-banken: column-render-hints`
 //!
-//! This is the cell-drawer half of the [`crate::table`] interim (see that
-//! module's note): a generic `egaku_term::draw::table` belongs in
-//! egaku-term (P2, sibling of `draw::list`/`draw::split`), but adding it
-//! needs an egaku-term publish cycle out of reach this session. So the
-//! drawer lives in banken for now, built **only** on egaku-term 0.3.1's
-//! published typed surface — `Buffer::set_stringn` / `Buffer::blank` /
-//! `Style` / `Cell`. It emits **zero** raw VT and never `format!()`s a
-//! styled string (★★ TYPED EMISSION / Quadro P5): every visible glyph is a
-//! typed `Cell` write, and the runtime diffs the buffer so only changed
-//! cells flush (no full-clear, no flicker on a no-change tick).
+//! egaku-term `735d936` shipped a generic `draw::table` / `draw::table_with`
+//! over `egaku::TableView<R>`, lifted from this file, and banken's *model*
+//! collapsed onto the matching `egaku::TableView` (see [`crate::table`]). This
+//! drawer did **not** collapse with it, and the reason is one feature:
+//! [`status_style`]. A STATUS cell reading `CrashLoopBackOff` draws red and one
+//! reading `Running` draws green — the pathology color axis (BANKEN.md §V) at
+//! the cell level, and the single most load-bearing glyph in a k9s-shaped
+//! table.
 //!
-//! When egaku-term gains `draw::table`, this collapses to a one-line call.
+//! That coloring is **app knowledge and was deliberately not lifted**: it is
+//! keyed on the magic header `"STATUS"` and on a hardcoded list of Kubernetes
+//! phase strings, neither of which a generic table drawer should know. Adopting
+//! `draw::table_with` today would trade a real operator-facing signal for
+//! nothing, so the honest move is to keep the drawer and keep the token open.
+//!
+//! **The destination is unchanged and is what closes this:** a typed
+//! `:colorize` hint on the authored `ColumnSpec`, carried into
+//! `egaku::Column`, honored by `egaku_term::draw::table_with`. Then the magic
+//! header string is not the selector at all, this module deletes, and the call
+//! becomes one line. That needs an egaku + egaku-term change; banken must not
+//! make one from this repo.
+//!
+//! # What was taken from the lifted drawer anyway
+//!
+//! The **bottom-anchored viewport**. `TableView` carries no scroll offset — it
+//! is the ordered row set plus a cursor — so a drawer with fewer rows of screen
+//! than the table has rows must derive its own window. This one now does,
+//! exactly as `egaku_term::draw::table_with` does: `first_visible` is a pure
+//! function of `(selected_index, height)`, so no new state exists to be wrong
+//! in a second place. Before this, banken drew rows from index 0 and stopped at
+//! the bottom edge: on a cluster with more pods than the terminal has rows,
+//! `j` moved the cursor **off screen** and the operator was navigating blind.
+//! That was a live bug against camelot-eks, not a hypothetical.
+//!
+//! # What was NOT taken, and why that is inert here
+//!
+//! The lifted drawer measures column widths with `unicode_width`; this one
+//! counts `chars()`. The two disagree only on wide characters (CJK, emoji),
+//! and **no value banken projects can be one**: `NAME` is a Kubernetes object
+//! name (RFC-1123: lowercase alphanumeric, `-`, `.`), and `READY` / `STATUS` /
+//! `RESTARTS` / `AGE` are reader-generated ASCII. Adding a second unicode-width
+//! implementation to a crate that cannot exercise it would be duplication with
+//! no defect behind it — the fix arrives for free when this drawer deletes.
+//!
+//! Every visible glyph is still a typed `Buffer`/`Cell` write on egaku-term's
+//! published surface — zero raw VT, no `format!()` of a styled string
+//! (★★ TYPED EMISSION / Quadro P5). The runtime diffs the buffer so only
+//! changed cells flush.
 
-use banken_spec::types::Ordering;
+use egaku::SortOrder;
 use egaku_term::crossterm::style::Color;
 use egaku_term::{Buffer, Style};
 
@@ -27,13 +64,13 @@ const COL_GAP: u16 = 2;
 /// Compute the render width (in cells) of every column: the max of the
 /// header and every projected cell value, so the columns line up.
 fn column_widths(table: &PodTable) -> Vec<u16> {
-    table
-        .columns()
+    let view = table.view();
+    view.columns()
         .iter()
         .map(|col| {
             let mut w = col.header.chars().count();
-            for row in table.rows() {
-                w = w.max(table.cell_value(row, col).chars().count());
+            for row in view.rows() {
+                w = w.max(view.cell_value(row, col).chars().count());
             }
             u16::try_from(w).unwrap_or(u16::MAX)
         })
@@ -57,13 +94,15 @@ fn status_style(value: &str, base: Style) -> Style {
 /// Draw the `:pods` table into `buf` within the rectangle
 /// `(x, y, width, height)` (cell coordinates). Row `y` is the header;
 /// `y + 1` is a rule; rows start at `y + 2`. The selected row is drawn
-/// full-width reverse-video. Returns nothing — pure emission into the
-/// typed buffer.
+/// full-width reverse-video, and the visible window is bottom-anchored on the
+/// selection so the cursor is always on screen. Returns nothing — pure
+/// emission into the typed buffer.
 pub fn draw_pod_table(buf: &mut Buffer, x: u16, y: u16, width: u16, height: u16, table: &PodTable) {
     if width == 0 || height == 0 {
         return;
     }
 
+    let view = table.view();
     let widths = column_widths(table);
     let header_style = Style::default().fg(Color::Cyan).bold();
 
@@ -85,15 +124,30 @@ pub fn draw_pod_table(buf: &mut Buffer, x: u16, y: u16, width: u16, height: u16,
     }
 
     // ── Data rows ──
+    let visible_rows = usize::from(height.saturating_sub(2));
+    if visible_rows == 0 {
+        return;
+    }
+    // Bottom-anchored viewport: keep the selection on screen with no stored
+    // offset. See the module docs — this is `egaku_term::draw::table_with`'s
+    // derivation, and it is a pure function of (selected, height).
+    let first_visible = view
+        .selected_index()
+        .saturating_sub(visible_rows.saturating_sub(1));
     let first_data_row = y + 2;
-    let visible_rows = height.saturating_sub(2);
-    for (idx, row) in table.rows().iter().enumerate() {
-        let row_i = u16::try_from(idx).unwrap_or(u16::MAX);
-        if row_i >= visible_rows {
+
+    for (offset, row) in view
+        .rows()
+        .iter()
+        .skip(first_visible)
+        .take(visible_rows)
+        .enumerate()
+    {
+        let Ok(row_i) = u16::try_from(offset) else {
             break;
-        }
+        };
         let ry = first_data_row + row_i;
-        let is_selected = idx == table.selected_index();
+        let is_selected = first_visible + offset == view.selected_index();
 
         let base = if is_selected {
             // Full-width highlight bar first so padding to the right of the
@@ -152,9 +206,10 @@ fn draw_row_cells(
     base: Style,
     content: RowContent<'_>,
 ) {
+    let view = table.view();
     let right_edge = x.saturating_add(width);
     let mut cx = x;
-    for (col, &cw) in table.columns().iter().zip(widths.iter()) {
+    for (col, &cw) in view.columns().iter().zip(widths.iter()) {
         if cx >= right_edge {
             break;
         }
@@ -166,13 +221,14 @@ fn draw_row_cells(
                 row,
                 colorize_status,
             } => {
-                let v = table.cell_value(row, col).to_string();
+                let v = view.cell_value(row, col).to_string();
                 // Keyed on the HEADER, not the field: the header is the
                 // operator-facing name and is stable across readers, while
                 // the field is the reader's join key. `pending-banken:
                 // column-render-hints` — the destination is a typed
                 // `:colorize` hint on the authored `ColumnSpec` so a magic
-                // header string is not the selector at all.
+                // header string is not the selector at all, and this whole
+                // module collapses into `egaku_term::draw::table_with`.
                 let s = if *colorize_status && col.header == "STATUS" {
                     status_style(&v, base)
                 } else {
@@ -190,13 +246,13 @@ fn draw_row_cells(
 /// A short human label for the active sort — drawn into the status line.
 #[must_use]
 pub fn sort_label(table: &PodTable) -> String {
-    let arrow = match table.sort().order {
-        Ordering::Asc => "↑",
-        Ordering::Desc => "↓",
+    let arrow = match table.view().sort().order {
+        SortOrder::Asc => "↑",
+        SortOrder::Desc => "↓",
     };
     let mut s = String::new();
     s.push_str("sort:");
-    s.push_str(&table.sort().column);
+    s.push_str(&table.view().sort().column);
     s.push(' ');
     s.push_str(arrow);
     s
@@ -268,11 +324,66 @@ mod tests {
         );
     }
 
+    /// **THE VIEWPORT GATE.** A table taller than its rect must scroll the
+    /// selection into view, not clip it. Before the bottom-anchored window was
+    /// ported from `egaku_term::draw::table_with`, `j` past the last visible
+    /// row moved the cursor somewhere the operator could not see.
+    #[test]
+    fn the_viewport_scrolls_to_keep_the_selection_visible() {
+        // 12 rows, 4 rows of frame => 2 data rows on screen.
+        let rows: Vec<Row> = (0..12)
+            .map(|i| {
+                let mut name = String::from("pod-");
+                name.push(char::from(b'a' + i));
+                row(&name, "Running")
+            })
+            .collect();
+        let mut table = PodTable::pods(rows);
+        for _ in 0..11 {
+            table.view_mut().select_next();
+        }
+        let selected = table.view().selected_row().unwrap().name.clone();
+
+        let mut backend = TestBackend::new(60, 4);
+        backend.draw(|buf| draw_pod_table(buf, 0, 0, 60, 4, &table));
+        let frame = backend.to_lines().join("\n");
+        assert!(
+            frame.contains(&selected),
+            "the selected row must be on screen, got {frame:?}",
+        );
+    }
+
     #[test]
     fn sort_label_shows_column_and_direction() {
         let table = PodTable::pods(vec![row("catch-0", "Running")]);
         let label = sort_label(&table);
         assert!(label.contains("STATUS"));
         assert!(label.contains('↓'), "default is descending");
+    }
+
+    /// The pathology color axis is exactly what keeps this drawer alive
+    /// instead of collapsing into `egaku_term::draw::table_with`. If this
+    /// stops holding, the reason to keep the module is gone.
+    #[test]
+    fn an_unhealthy_status_draws_red_on_an_unselected_row() {
+        let table = PodTable::pods(vec![row("aaa", "CrashLoopBackOff"), row("bbb", "Running")]);
+        let mut backend = TestBackend::new(60, 8);
+        backend.draw(|buf| draw_pod_table(buf, 0, 0, 60, 8, &table));
+        let lines = backend.to_lines();
+        // STATUS desc puts "Running" first (selected), CrashLoopBackOff second.
+        let crash_row = lines
+            .iter()
+            .position(|l| l.contains("CrashLoopBackOff"))
+            .expect("the unhealthy row is drawn");
+        let col = u16::try_from(lines[crash_row].find("CrashLoopBackOff").unwrap()).unwrap();
+        let cell = backend
+            .cell(col, u16::try_from(crash_row).unwrap())
+            .expect("the status cell exists");
+        assert_eq!(
+            cell.fg,
+            Color::Red,
+            "CrashLoopBackOff must draw red — this is the whole reason \
+             banken keeps its own table drawer",
+        );
     }
 }

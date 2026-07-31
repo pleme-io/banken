@@ -47,6 +47,38 @@ pub struct Row {
     pub cells: Vec<(String, String)>,
 }
 
+/// A [`Row`] is an [`egaku::TableRow`] — the identity is the resource name,
+/// and a cell lookup is the association-list read every reader already
+/// populates.
+///
+/// # Why the impl lives HERE and not in `banken`
+///
+/// Not a placement preference: Rust's orphan rule leaves no other legal home.
+/// `egaku::TableRow` is foreign to `banken` and so is `banken_spec::env::Row`,
+/// so `impl egaku::TableRow for Row` inside `banken` is `E0117`. It belongs to
+/// whichever crate owns one of the two halves, and `Row` is ours.
+///
+/// # `None` vs `Some("")` is load-bearing here
+///
+/// [`egaku::TableView::unresolved_fields`] reports columns *no* row populates,
+/// and it can only do that if "the reader never emitted this field" and "the
+/// reader emitted it empty" are different answers. So this returns `None` for
+/// an absent key rather than `""` — which is exactly what the association-list
+/// `find` already yields, and why the reserved identity field is handled by
+/// the view rather than synthesised into `cells`.
+impl egaku::TableRow for Row {
+    fn identity(&self) -> &str {
+        &self.name
+    }
+
+    fn cell(&self, field: &str) -> Option<&str> {
+        self.cells
+            .iter()
+            .find(|(k, _)| k == field)
+            .map(|(_, v)| v.as_str())
+    }
+}
+
 /// A single log line stream (a poll-materialized snapshot; a true
 /// follow stream lands with the M1 informer).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

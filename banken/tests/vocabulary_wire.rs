@@ -200,14 +200,24 @@ fn the_pods_table_is_built_from_the_authored_view() {
     let c = catalog();
     let t = PodTable::from_view(&c, "pods", fixture_rows()).expect("the authored view builds");
 
-    let headers: Vec<&str> = t.columns().iter().map(|col| col.header.as_str()).collect();
+    let headers: Vec<&str> = t
+        .view()
+        .columns()
+        .iter()
+        .map(|col| col.header.as_str())
+        .collect();
     assert_eq!(headers, vec!["NAME", "READY", "STATUS", "RESTARTS", "AGE"]);
-    let fields: Vec<&str> = t.columns().iter().map(|col| col.field.as_str()).collect();
+    let fields: Vec<&str> = t
+        .view()
+        .columns()
+        .iter()
+        .map(|col| col.field.as_str())
+        .collect();
     assert_eq!(
         fields,
         vec![IDENTITY_FIELD, "ready", "phase", "restarts", "age"]
     );
-    assert_eq!(t.sort().column, "STATUS");
+    assert_eq!(t.view().sort().column, "STATUS");
     assert_eq!(t.kind(), ResourceKind::Pod);
 }
 
@@ -221,7 +231,7 @@ fn every_authored_column_resolves_against_the_readers_rows() {
     let c = catalog();
     let t = PodTable::from_view(&c, "pods", fixture_rows()).expect("builds");
     assert_eq!(
-        t.unresolved_fields(),
+        t.view().unresolved_fields(),
         Vec::<&str>::new(),
         "an authored column whose field no row carries would render forever empty"
     );
@@ -230,9 +240,9 @@ fn every_authored_column_resolves_against_the_readers_rows() {
     // (Rebuild through the public path with an extra ghost column is not
     // expressible — so assert the reporter itself on a table whose rows are
     // empty, where every data field is trivially unresolved.)
-    with_ghost.set_rows(Vec::new());
+    with_ghost.view_mut().set_rows(Vec::new());
     assert_eq!(
-        with_ghost.unresolved_fields().len(),
+        with_ghost.view().unresolved_fields().len(),
         4,
         "ready/phase/restarts/age"
     );
@@ -247,14 +257,14 @@ fn the_fallback_columns_mirror_the_authored_view() {
     let authored = PodTable::from_view(&c, "pods", Vec::new()).expect("builds");
     let fallback = PodTable::pods(Vec::new());
     assert_eq!(
-        fallback.columns(),
-        authored.columns(),
+        fallback.view().columns(),
+        authored.view().columns(),
         "pod_columns() is a MIRROR of specs/views.lisp — it drifted"
     );
-    assert_eq!(fallback.sort().column, authored.sort().column);
-    assert_eq!(fallback.sort().order, authored.sort().order);
+    assert_eq!(fallback.view().sort().column, authored.view().sort().column);
+    assert_eq!(fallback.view().sort().order, authored.view().sort().order);
     // And `pod_columns()` is what the fallback used.
-    assert_eq!(fallback.columns(), pod_columns().as_slice());
+    assert_eq!(fallback.view().columns(), pod_columns().as_slice());
 }
 
 /// A `:default-sort` naming a column the view does not declare is REFUSED.
@@ -317,6 +327,6 @@ fn the_app_builds_from_the_shipped_vocabulary() {
         "source: fixture",
     )
     .expect("the shipped vocabulary must build an app");
-    assert_eq!(app.table().rows().len(), 5);
-    assert_eq!(app.table().unresolved_fields(), Vec::<&str>::new());
+    assert_eq!(app.table().view().rows().len(), 5);
+    assert_eq!(app.table().view().unresolved_fields(), Vec::<&str>::new());
 }

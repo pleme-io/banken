@@ -54,7 +54,7 @@ fn pods_table_header_carries_columns_in_order() {
 #[test]
 fn pods_table_renders_every_fixture_row() {
     let table = fixture_table();
-    assert_eq!(table.rows().len(), 5);
+    assert_eq!(table.view().rows().len(), 5);
 
     let mut backend = TestBackend::new(80, 12);
     backend.draw(|buf| draw_pod_table(buf, 0, 0, 80, 12, &table));
@@ -62,7 +62,7 @@ fn pods_table_renders_every_fixture_row() {
     // Row 0 header, row 1 rule, rows 2.. data. Every pod name is present on
     // its own data row (assert by name presence per row, structured).
     let data_lines: Vec<&String> = lines.iter().skip(2).take(5).collect();
-    for row in table.rows() {
+    for row in table.view().rows() {
         assert!(
             data_lines.iter().any(|l| l.contains(&row.name)),
             "pod {} rendered on a data row",

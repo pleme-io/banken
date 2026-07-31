@@ -10,6 +10,40 @@ skip-magma: pure-binary-no-cluster-runtime
 skip-continuous-convergence: pure-binary-no-cluster-runtime
 skip-platform-mediated: pure-binary-no-cluster-runtime
 
+<!-- ── IN-FLIGHT DEBT: source changes that outrun their published deps ──
+     Each row names the exact chain that clears it. Nothing here is a
+     design gap; each is one push away. -->
+
+**`pending-egaku-bump: TableView/TableRow`** — `banken-spec` and `banken` name
+`egaku::{TableRow, TableView, Column, SortKey, SortOrder, TableError}`, which
+land in egaku `e602369` and are **UNPUSHED**. The published `egaku 0.1.4` this
+repo's `Cargo.lock` names predates them, so **HEAD does not compile against the
+locked dep** — measured, not assumed:
+
+```
+error[E0405]: cannot find trait `TableRow` in crate `egaku`
+  --> banken-spec/src/env.rs:69:13
+   |
+69 | impl egaku::TableRow for Row {
+   |             ^^^^^^^^ not found in `egaku`
+```
+
+`Cargo.lock` is deliberately left naming the **registry** `egaku 0.1.4` — a lock
+naming an unpushed rev is worse than one naming a stale rev. Measured green
+against the local sibling with
+`cargo test --workspace --config 'patch.crates-io.egaku.path="../egaku"'`
+(194 default / 196 `--features live` / 196 `--features tear`). That same E0405
+is the run's **positive control**: the code cannot compile against published
+egaku, so a green run proves the patch was actually used rather than silently
+ignored.
+
+Clearing it is one commit: **push egaku → release `egaku 0.1.5` → bump the pin
+in `banken/Cargo.toml` + `banken-spec/Cargo.toml` → `cargo update -p egaku` →
+regenerate the crate2nix lock in the SAME commit** (D2 delta-only, or the nix
+eval fails). banken carries no `Cargo.gen.lock` today — its `flake.nix` calls
+crate2nix on `Cargo.lock` directly — so the third step is `nix build` going
+green, not a file to regenerate; keep it in the same commit either way.
+
 One-sentence purpose: an **observe-first, GitOps-native cluster-navigator TUI** —
 keep k9s's fast keyboard navigation + health surfaces, structurally refuse its
 imperative-mutation console.
@@ -315,16 +349,48 @@ proven-live ✗ until a cluster is reachable / known ✓).
   selection + sort, alt-screen enter/Drop-restore via `egaku_term::AsyncApp` +
   `run_async`, and the **postigo dispatch wired through the UI** (`l`→OBSERVE logs,
   `s`→DECLARE full-manifest preview, `S`→BREAK-GLASS witnessed record — every path
-  through `banken_spec::apply`, no live-mutate path). Proof: **195 workspace tests**
-  green (`cargo test`; 105 banken-spec + 74 banken + 16 banken-config) incl. a `TestBackend` golden-frame test (asserts via
+  through `banken_spec::apply`, no live-mutate path). Proof: **194 workspace tests**
+  green (`cargo test`; 196 under `--features live` and under `--features tear`)
+  incl. a `TestBackend` golden-frame test (asserts via
   `to_lines()`/`cell()`, never `.contains()`) + a postigo-dispatch integration
-  test; `cargo fmt --check` clean. **74 tests green** in the binary crate
-  (`cargo test -p banken`).
-  - **`pending-banken: promote-tableview-to-egaku`** — the `TableView`/`draw::table`
-    are built **in banken for now** (egaku 0.1.4 has only `ListView`, egaku-term
-    0.3.1 has no `draw::table`; promoting a generic widget needs an egaku +
-    egaku-term publish cycle, out of reach without push/nix). Tier-honest interim,
-    not a silent fork — collapses to a thin adapter when egaku gains `TableView<Row>`.
+  test; `cargo fmt --check` clean. Counts moved 195 → 194 with the
+  `TableView` adoption below: six `PodTable` model tests left with the model
+  they tested (egaku owns them now, at 172 green there), and five landed here —
+  three on the pod *binding* + the viewport gate + the status-color gate.
+  - **`pending-banken: promote-tableview-to-egaku` — CLOSED (2026-07-31).**
+    egaku `e602369` landed `Selectable` + `TableView<R: TableRow>`, lifted from
+    this very file, and `banken/src/table.rs` collapsed onto it exactly as the
+    token said it would: **492 → 290 lines** (330 removed in the diff), and what
+    is left is the pod *binding* — `pod_columns`, `pod_default_sort`, the
+    `ResourceKind`, and `from_view`'s `(defk8sview)` reader — over a
+    `TableView<Row>` reached through `PodTable::view()` / `view_mut()`.
+    `impl egaku::TableRow for Row` lives in **banken-spec**, not banken: the
+    orphan rule leaves no other legal home (`E0117` otherwise).
+    - **One invariant got STRICTER on the way out.** `from_view`'s own
+      default-sort check is gone as *redundant*, not merely moved:
+      `TableView::new` performs it on the **only** constructor, so
+      `PodTable::pods` is covered too. `TableError::UnknownSortColumn` maps to
+      `SpecError::Binding` with the same message shape, and
+      `a_default_sort_naming_an_undeclared_column_fails_the_catalog` still
+      pins it. Tier is unchanged: **parse-time-rejected**, not
+      truly-unrepresentable — a `SortKey` naming a nonexistent column can be
+      written, just not installed.
+    - **The DRAWER did not collapse with the model, on purpose.** See
+      `pending-banken: column-render-hints` below — `status_style` (the §V
+      pathology color axis) is app knowledge that egaku-term's lifted
+      `draw::table_with` deliberately does not carry, and trading a red
+      `CrashLoopBackOff` for CJK column alignment banken can never exercise is
+      a bad trade. The **bottom-anchored viewport** was ported across anyway,
+      which fixed a live bug: banken drew from row 0 and clipped, so on a
+      cluster with more pods than the terminal has rows `j` moved the cursor
+      off screen (`the_viewport_scrolls_to_keep_the_selection_visible`).
+    - Fail-once measured on the adoption's load-bearing seam — `TableRow::cell`
+      rewritten to ignore its `field` and return the first cell:
+      **2 red / 51 green**,
+      `table::tests::the_pod_binding_reaches_the_lifted_model`
+      `left: ["1/1", "1/1", "1/1"] / right: ["Running", "Pending", "CrashLoopBackOff"]`
+      and `render::tests::an_unhealthy_status_draws_red_on_an_unselected_row`
+      `the unhealthy row is drawn`. Restored.
 - **SHIPPED (unit-green, 16 tests):** `banken-config` = the ★★ CONFIGURATION MANAGEMENT
   surface. `BankenConfig` carries **both faces on one struct** —
   `#[tatara(keyword = "defbanken")]` and `impl shikumi::TieredConfig` — exactly
@@ -441,6 +507,15 @@ proven-live ✗ until a cluster is reachable / known ✓).
     pathology-colored column by the magic header `"STATUS"`. The destination is
     a typed `:colorize` hint on the authored `ColumnSpec` so a magic string is
     not the selector at all.
+    **This row is now also what keeps `render.rs` alive at all (2026-07-31).**
+    egaku-term `735d936` shipped a generic `draw::table_with` over
+    `egaku::TableView<R>`, lifted from this drawer, and banken did **not**
+    adopt it — the lift deliberately left `status_style` behind as app
+    knowledge, so adopting today would delete the red `CrashLoopBackOff` for
+    nothing. Closing this row is what makes the swap free: `:colorize` on the
+    authored `ColumnSpec` → `egaku::Column` → `egaku_term::draw::table_with`,
+    after which `banken/src/render.rs` deletes and the call is one line.
+    Two egaku-side changes; banken must not make either from this repo.
   - **`pending-banken: pathology-taxonomy-backfill`** — three rules ship; the
     autorevivy taxonomy is 35 classes. Authoring rules whose evidence nothing
     supplies would be a catalog of rules that can never fire, so the backfill

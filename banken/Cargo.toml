@@ -19,6 +19,14 @@ banken-spec = { path = "../banken-spec" }
 # to construct `banken_spec::chord::ActionChord` values and `KeyRepeatGate`
 # to debounce the held-key path on the three postigo action chords.
 awase = "0.1"
+# The widget-STATE half of the fleet TUI vocabulary. `egaku::TableView<Row>`
+# is the generic table model banken's `PodTable` used to hand-roll — promoted
+# out of this repo by egaku `e602369`, which lifted it from that very file and
+# closed `pending-banken: promote-tableview-to-egaku`. Named directly rather
+# than reached through egaku-term because banken uses the *model* (columns,
+# cursor, sort) far more than it uses egaku-term's re-exports, and a widget
+# state machine reached through a renderer reads as if it needed one.
+egaku = "0.1"
 egaku-term = { version = "0.3.1", features = ["tokio"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 

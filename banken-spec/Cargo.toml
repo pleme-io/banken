@@ -17,6 +17,19 @@ repository.workspace = true
 # rather than last-write-wins.
 awase = "0.1"
 
+# The fleet widget-STATE vocabulary. Present for exactly one reason: the
+# `egaku::TableRow` impl on `env::Row` (see `env.rs`). Rust's orphan rule
+# puts that impl in Row's own crate or nowhere — `banken` cannot write
+# `impl egaku::TableRow for banken_spec::env::Row`, both halves being
+# foreign to it.
+#
+# This does NOT drag a renderer in. egaku is pure logic — serde / tracing /
+# thiserror / unicode-* and no drawing surface at all (that is what lets one
+# egaku value drive a GPU pane via garasu and a TTY pane via egaku-term). So
+# banken-spec stays a spec crate; it has simply declared that its read type
+# is displayable as a table row, which is a property of the DATA.
+egaku = "0.1"
+
 # ONE dep, not two: the derive macros arrive RENAMED through
 # `tatara_lisp::DeriveTataraDomain`, so `tatara-lisp-derive` is never
 # named here (see the workspace manifest).

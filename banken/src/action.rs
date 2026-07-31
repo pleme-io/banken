@@ -175,7 +175,7 @@ pub enum ActionResult {
 /// whole spec). `None` when the table is empty.
 #[must_use]
 pub fn current_selection(table: &PodTable) -> Option<Selection> {
-    let row = table.selected_row()?;
+    let row = table.view().selected_row()?;
     Some(Selection {
         kind: table.kind(),
         name: row.name.clone(),

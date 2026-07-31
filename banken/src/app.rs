@@ -302,7 +302,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     /// selection by name across the refresh.
     pub fn refresh(&mut self) {
         if let Ok(rows) = self.env.list_resources(ResourceKind::Pod, None) {
-            self.table.set_rows(rows);
+            self.table.view_mut().set_rows(rows);
         }
     }
 
@@ -361,15 +361,15 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         match action {
             Action::SelectNext => {
                 self.panel = Panel::Table;
-                self.table.select_next();
+                self.table.view_mut().select_next();
             }
             Action::SelectPrev => {
                 self.panel = Panel::Table;
-                self.table.select_prev();
+                self.table.view_mut().select_prev();
             }
             Action::ToggleSort => {
                 self.panel = Panel::Table;
-                self.table.toggle_sort_direction();
+                self.table.view_mut().toggle_sort_direction();
             }
             Action::ObserveLogs => {
                 let r = dispatch(&self.table, RowAction::ViewLogs, &self.operator, &self.env);
@@ -498,7 +498,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         let mut left = String::new();
         left.push_str(&self.source_label);
         left.push_str("  ");
-        left.push_str(&pod_count_label(self.table.rows().len()));
+        left.push_str(&pod_count_label(self.table.view().len()));
         left.push_str("  ");
         left.push_str(&sort_label(&self.table));
         buf.set_stringn(0, y, &left, width, bar);
@@ -1019,7 +1019,7 @@ mod tests {
     #[test]
     fn app_reads_the_pod_table_on_construction() {
         let a = app();
-        assert_eq!(a.table().rows().len(), 5);
+        assert_eq!(a.table().view().rows().len(), 5);
         assert!(a.overlay().is_none(), "no overlay at rest");
     }
 
@@ -1027,12 +1027,12 @@ mod tests {
     fn navigation_moves_the_selection() {
         let mut a = app();
         // Start at row 0, move down twice → row 2, up once → row 1.
-        assert_eq!(a.table().selected_index(), 0);
+        assert_eq!(a.table().view().selected_index(), 0);
         a.apply_action(Action::SelectNext);
         a.apply_action(Action::SelectNext);
-        assert_eq!(a.table().selected_index(), 2);
+        assert_eq!(a.table().view().selected_index(), 2);
         a.apply_action(Action::SelectPrev);
-        assert_eq!(a.table().selected_index(), 1);
+        assert_eq!(a.table().view().selected_index(), 1);
     }
 
     #[test]
@@ -1517,7 +1517,7 @@ mod tests {
             );
         }
         assert_eq!(
-            a.table().selected_index(),
+            a.table().view().selected_index(),
             4,
             "all four navigation ticks moved the selection"
         );
