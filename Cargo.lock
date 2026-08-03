@@ -147,7 +147,7 @@ dependencies = [
  "anyhow",
  "awase",
  "banken-spec",
- "egaku 0.1.5",
+ "egaku",
  "egaku-term",
  "izumi",
  "k8s-openapi",
@@ -176,7 +176,7 @@ name = "banken-spec"
 version = "0.1.0"
 dependencies = [
  "awase",
- "egaku 0.1.5",
+ "egaku",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -478,24 +478,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "egaku"
-version = "0.1.9"
-source = "git+https://github.com/pleme-io/egaku#f07c7efb9275d8b9f5f690dedc01def6524c4e33"
-dependencies = [
- "serde",
- "thiserror 2.0.19",
- "tracing",
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
 name = "egaku-term"
-version = "0.3.4"
-source = "git+https://github.com/pleme-io/egaku-term?rev=04539db#04539db2e1075084e6fc26e4161308ce6a21f9e4"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0978c30ccbdf0842e55d9a1e3211f88180738fcd6911121c7e94001db2ea1502"
 dependencies = [
  "crossterm",
- "egaku 0.1.9",
+ "egaku",
  "futures-util",
  "thiserror 2.0.19",
  "tokio",
@@ -1148,7 +1137,8 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "izumi"
 version = "0.1.14"
-source = "git+https://github.com/pleme-io/izumi?rev=50ab0f6#50ab0f65d80c8899f85da22c98cb826640a289d6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e7e41e05b1ccdc8df794d90d0271819d1ea499c05132d0cc91c5f1f53c5ed6e"
 dependencies = [
  "blake3",
  "dirs",
