@@ -16,11 +16,20 @@
 //! # pending-banken: live-watch
 //!
 //! M0's refresh is nominally a 1 Hz poll (BANKEN.md §VI; the true watch
-//! informer is M1 unbuilt substrate). `run_async` refreshes on every
-//! event, which is sufficient against the static fixture source this
-//! session (fixture data does not change, so a poll tick would be a
-//! no-op). A periodic `refresh()` call — driven by a `tokio::select!`
-//! tick against a live `ClusterEnv::watch` — lands with the live read.
+//! informer is M1 unbuilt substrate). **There is no refresh at all.**
+//! This paragraph used to say "`run_async` refreshes on every event";
+//! corrected 2026-08-03. `run_async` RE-DRAWS on every event, over rows
+//! read once in `try_new` — and `refresh()` below has **zero callers**,
+//! verified by a repo-wide grep. Against the static fixture that is
+//! invisible (the data never changes); against the live backend the table
+//! is frozen until a keystroke.
+//!
+//! The reason it cannot simply be called: `egaku_term::run_async` has no
+//! tick and no `select!` — one `events.next().await`, input only. Its own
+//! docs advertised an `AsyncApp::tick` that does not exist, which is what
+//! this comment was written against. Closing `pending-banken: live-watch`
+//! therefore means hand-rolling the loop here the way `hibiki` already
+//! does, NOT waiting on a tick — see `hibiki/src/main.rs:209`.
 
 use std::time::Instant;
 
