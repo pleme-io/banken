@@ -13,29 +13,35 @@
 //! one of {the table, an action-result overlay, a bancada awaiting
 //! confirmation}.
 //!
-//! # pending-banken: live-watch
+//! # pending-banken: live-watch — the POLL half is closed (2026-08-03)
 //!
-//! M0's refresh is nominally a 1 Hz poll (BANKEN.md §VI; the true watch
-//! informer is M1 unbuilt substrate). **There is no refresh at all.**
-//! This paragraph used to say "`run_async` refreshes on every event";
-//! corrected 2026-08-03. `run_async` RE-DRAWS on every event, over rows
-//! read once in `try_new` — and `refresh()` below has **zero callers**,
-//! verified by a repo-wide grep. Against the static fixture that is
-//! invisible (the data never changes); against the live backend the table
-//! is frozen until a keystroke.
+//! It used to be open in full, and the two prior states of this comment are
+//! worth keeping straight because each was wrong in a different way. It first
+//! claimed "`run_async` refreshes on every event"; that was corrected to
+//! "there is no refresh at all" — `run_async` RE-DREW on every event over
+//! rows read once in `try_new`, and `refresh()` had **zero callers**. The
+//! correction then concluded that closing this row meant hand-rolling the
+//! loop here, "NOT waiting on a tick", because `egaku_term`'s docs advertised
+//! an `AsyncApp::tick` that did not exist.
 //!
-//! The reason it cannot simply be called: `egaku_term::run_async` has no
-//! tick and no `select!` — one `events.next().await`, input only. Its own
-//! docs advertised an `AsyncApp::tick` that does not exist, which is what
-//! this comment was written against. Closing `pending-banken: live-watch`
-//! therefore means hand-rolling the loop here the way `hibiki` already
-//! does, NOT waiting on a tick — see `hibiki/src/main.rs:209`.
+//! That conclusion was right about the phantom method and wrong about the
+//! remedy. The load-bearing fix was upstream, not here: `AsyncApp` now has
+//! `wake`/`on_wake` and `run_async` selects over them (egaku-term 0.3.4), so
+//! banken overrides two methods instead of duplicating a terminal loop —
+//! and every other fleet TUI gets the same arm for free rather than
+//! hand-rolling its own copy.
+//!
+//! What is closed: the table now moves without a keystroke, absorbed off-task
+//! by [`crate::feed`] over `izumi::refresh`. What is NOT: this is a 1 Hz
+//! **poll**, which is what BANKEN.md §VI M0 specifies. A true `kube` watch
+//! informer is M1 and unbuilt, so the row stays open under its own name.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use awase::repeat_gate::KeyRepeatGate;
 use banken_spec::chord::ActionChord;
-use banken_spec::env::ClusterEnv;
+use banken_spec::env::{ClusterEnv, Row};
 use banken_spec::nav::NavIntent;
 use banken_spec::types::{OperatorId, ResourceKind};
 use banken_spec::{Catalog, SpecError};
@@ -51,6 +57,7 @@ use crate::action::{
     ActionResult, PendingBancada, RowAction, dispatch, open_bancada, preview_bancada,
     resolve_bancada,
 };
+use crate::feed::PodFeed;
 use crate::render::{draw_pod_table, sort_label};
 use crate::table::PodTable;
 
@@ -165,7 +172,12 @@ enum Panel {
 /// a mock, or reads a fixture and opens real panes, without either seam
 /// knowing about the other.
 pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
-    env: E,
+    /// `Arc` rather than `E` because the background feed
+    /// ([`crate::feed::PodFeed`]) needs its own handle to the same backend:
+    /// it reads on tokio's blocking pool while the app keeps serving input.
+    /// Every constructor takes `impl Into<Arc<E>>`, so a caller still passes
+    /// a plain env and nothing at the call sites changed.
+    env: Arc<E>,
     /// Where a confirmed bancada is opened. See [`crate::session`].
     session: S,
     operator: OperatorId,
@@ -208,6 +220,12 @@ pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
     /// and marks the elision, so a narrow terminal costs the *least* important
     /// hints rather than all of them.
     legend_parts: Vec<String>,
+    /// The background absorb plane, when one is running.
+    ///
+    /// `None` is the default and means input-only — which is what every
+    /// non-tokio test builds, and what `AsyncApp::wake` lowers to a
+    /// `pending()` for. See [`crate::feed`].
+    feed: Option<PodFeed>,
 }
 
 impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
@@ -227,7 +245,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     /// - [`SpecError::Binding`] when an authored chord has no egaku-term
     ///   projection.
     pub fn try_new(
-        env: E,
+        env: impl Into<Arc<E>>,
         session: S,
         operator: OperatorId,
         source_label: impl Into<String>,
@@ -245,12 +263,13 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     /// projection, or when the app's dispatch table names an action the
     /// catalog does not declare.
     pub fn with_catalog(
-        env: E,
+        env: impl Into<Arc<E>>,
         session: S,
         operator: OperatorId,
         source_label: impl Into<String>,
         catalog: &Catalog,
     ) -> Result<Self, SpecError> {
+        let env = env.into();
         let keys = keymap_from_catalog(catalog)?;
         // Initial read. A read failure yields an empty table (the app still
         // runs and shows "0 pods"); the read is retried on the next
@@ -276,6 +295,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             done: false,
             source_label: source_label.into(),
             legend_parts: key_legend_parts(catalog),
+            feed: None,
         })
     }
 
@@ -307,11 +327,68 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         &self.session
     }
 
-    /// Re-read the pod table from the env (the poll refresh). Preserves the
-    /// selection by name across the refresh.
+    /// Re-read the pod table from the env, on the calling thread.
+    ///
+    /// A read failure leaves the current rows in place — a transient
+    /// apiserver error must not blank a table an operator is reading.
+    ///
+    /// **This blocks.** Against `KubeClusterEnv` it is an HTTPS round trip,
+    /// so calling it from the task that owns the terminal freezes input for
+    /// the duration. That is why the running app does not call it: the
+    /// steady-state path is [`Self::with_feed`], which does the same read on
+    /// tokio's blocking pool. This stays for a synchronous caller (a test, a
+    /// one-shot) that genuinely wants the read inline.
     pub fn refresh(&mut self) {
         if let Ok(rows) = self.env.list_resources(ResourceKind::Pod, None) {
-            self.table.view_mut().set_rows(rows);
+            self.set_rows(rows);
+        }
+    }
+
+    /// Install `rows` as the table contents. The single write path, so the
+    /// inline refresh and the feed's apply cannot drift apart.
+    fn set_rows(&mut self, rows: Vec<Row>) {
+        self.table.view_mut().set_rows(rows);
+    }
+
+    /// Attach a background absorb plane reading the same env every
+    /// `interval` (see [`crate::feed`]).
+    ///
+    /// Builder-style and opt-in: an app without a feed is input-only, which
+    /// is what every synchronous test wants and what `AsyncApp::wake` lowers
+    /// to `pending()` for. Requires a tokio runtime, which is why it is not
+    /// simply done in `try_new`.
+    ///
+    /// # Panics
+    ///
+    /// Never directly; `tokio::spawn` panics if called outside a runtime.
+    #[must_use]
+    pub fn with_feed(mut self, interval: std::time::Duration) -> Self
+    where
+        E: Send + Sync + 'static,
+    {
+        self.feed = Some(PodFeed::start(
+            Arc::clone(&self.env),
+            ResourceKind::Pod,
+            interval,
+        ));
+        self
+    }
+
+    /// The attached feed, if any — for a test asserting the plane is live,
+    /// and for the renderer to report a faulted one.
+    #[must_use]
+    pub fn feed(&self) -> Option<&PodFeed> {
+        self.feed.as_ref()
+    }
+
+    /// Pull whatever the feed has absorbed into the table.
+    ///
+    /// The `&mut self` apply half of the wakeup. Separate from
+    /// [`Self::refresh`] because it performs **no read** — the read already
+    /// happened, off this task. A no-op when there is no feed.
+    pub fn apply_feed(&mut self) {
+        if let Some(rows) = self.feed.as_ref().map(PodFeed::rows) {
+            self.set_rows(rows);
         }
     }
 
@@ -988,6 +1065,24 @@ impl<E: ClusterEnv + Send + Sync, S: SessionEnv + Send + Sync> AsyncApp for Bank
 
     async fn draw(&self, frame: &mut Buffer) -> TermResult<()> {
         self.render(frame);
+        Ok(())
+    }
+
+    /// The signal: resolve when the feed has new rows, or never when there is
+    /// no feed. `pending()` for the no-feed case is not a placeholder — it is
+    /// exactly the pre-feed behaviour, so an app built without one runs
+    /// byte-identically to how it ran before this existed.
+    async fn wake(&self) {
+        match &self.feed {
+            Some(feed) => feed.changed().await,
+            None => std::future::pending().await,
+        }
+    }
+
+    /// The apply. Runs after the select resolved, so unlike `wake` it is
+    /// never dropped part-way and cannot leave the table half-written.
+    async fn on_wake(&mut self) -> TermResult<()> {
+        self.apply_feed();
         Ok(())
     }
 

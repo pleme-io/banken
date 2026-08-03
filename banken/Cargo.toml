@@ -27,8 +27,23 @@ awase = "0.1"
 # cursor, sort) far more than it uses egaku-term's re-exports, and a widget
 # state machine reached through a renderer reads as if it needed one.
 egaku = "0.1"
-egaku-term = { version = "0.3.1", features = ["tokio"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+# git+rev, not a crates.io version, and NOT by preference: egaku-term's
+# auto-release has been failing since 0.3.2 (rebase conflict in the bump job),
+# so crates.io still serves 0.3.1 — which predates `AsyncApp::wake` and cannot
+# build `crate::feed`. Pinning the rev is the honest way to depend on code
+# that exists; the alternative was to pretend a published 0.3.4 was there.
+# Swap back to `version = "0.3.4"` the moment the release pipeline is green.
+egaku-term = { git = "https://github.com/pleme-io/egaku-term", rev = "04539db", version = "0.3", features = ["tokio"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+# izumi (泉) — the fleet's live-source absorb plane. banken uses ONE piece of
+# it: `refresh::{LiveStore, spawn_interval_refresh}`, the reusable
+# blocking-read-on-a-cadence loop that keeps `:pods` moving without a
+# keystroke (see `crate::feed`). Deliberately NOT `izumi::Engine` — that seam
+# runs a source through a subprocess `Environment`, which cannot express a
+# typed `kube` client call, and forcing it through would have broken izumi's
+# own mock contract to reach a fit that was never there.
+# git+rev pin, the madori/irodzuki idiom; bump the rev to track izumi.
+izumi = { git = "https://github.com/pleme-io/izumi", rev = "50ab0f6", version = "0.1" }
 
 # ── The live-cluster read path (BANKEN.md §VI M0 destination-tier). ──
 # Gated behind the `live` feature so the default build (the fixture path

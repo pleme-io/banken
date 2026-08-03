@@ -137,7 +137,13 @@ async fn run_fixture(operator: OperatorId) -> Result<(), String> {
     // lets a `(defbancada)` resolve `(:context cluster)`. It is not a claim
     // that a cluster named "fixture" exists — the status line says
     // "source: fixture" right beside it.
-    .with_cluster(FIXTURE_CLUSTER);
+    .with_cluster(FIXTURE_CLUSTER)
+    // Attached even here, where the fixture never changes and the feed can
+    // therefore never show anything new. That is deliberate: running the
+    // exact same absorb path in both modes is what keeps the fixture a real
+    // rehearsal of the live one. A feed that only existed under `--live`
+    // would be a feed nobody ever exercised until it mattered.
+    .with_feed(banken::feed::DEFAULT_POLL);
     egaku_term::run_async(&mut app)
         .await
         .map_err(|e| e.to_string())
@@ -174,7 +180,12 @@ async fn run_live(operator: OperatorId, context: &str) -> Result<(), String> {
     label.push_str(&cluster);
     let mut app = BankenApp::try_new(env, session_env(), operator, label)
         .map_err(|e| e.to_string())?
-        .with_cluster(cluster);
+        .with_cluster(cluster)
+        // The mode this exists for: the table now re-reads the apiserver on
+        // its own cadence, on the blocking pool, so a pod that changes phase
+        // shows up without the operator pressing anything — and a slow or
+        // unreachable apiserver never freezes the keyboard.
+        .with_feed(banken::feed::DEFAULT_POLL);
     egaku_term::run_async(&mut app)
         .await
         .map_err(|e| e.to_string())

@@ -283,3 +283,56 @@ pub trait ClusterEnv {
     // *** `break_glass` IS a typed witnessed mutate; `declare` mutates ***
     // *** git, then a reconciler applies. The absence is the primitive.***
 }
+
+/// A shared handle to a cluster IS a cluster.
+///
+/// Needed the moment a surface reads the same backend from two places at
+/// once — an app serving input while a background feed re-reads on a
+/// cadence. Without this, holding the env as `Arc<E>` forces every call site
+/// that passes it along to spell `&*env`, and each one is a chance to forget.
+///
+/// It forwards rather than re-implements, so the three-class postigo gate is
+/// structurally identical through an `Arc`: there is no `scale`/`delete` here
+/// for the same reason there is none above — nothing to forward to.
+impl<T: ClusterEnv + ?Sized> ClusterEnv for std::sync::Arc<T> {
+    fn list_resources(&self, kind: ResourceKind, ns: Option<&str>) -> Result<Vec<Row>, SpecError> {
+        (**self).list_resources(kind, ns)
+    }
+
+    fn get_resource(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
+    ) -> Result<Row, SpecError> {
+        (**self).get_resource(kind, name, ns)
+    }
+
+    fn logs(&self, pod: &str, ns: &str, follow: bool) -> Result<LogStream, SpecError> {
+        (**self).logs(pod, ns, follow)
+    }
+
+    fn events(&self, ns: Option<&str>) -> Result<Vec<Event>, SpecError> {
+        (**self).events(ns)
+    }
+
+    fn topology(&self, root: &ResourceRef) -> Result<DepTree, SpecError> {
+        (**self).topology(root)
+    }
+
+    fn health_signals(&self, w: &Workload) -> Result<HealthReading, SpecError> {
+        (**self).health_signals(w)
+    }
+
+    fn watch(&self, kind: ResourceKind, ns: Option<&str>) -> Result<WatchStream, SpecError> {
+        (**self).watch(kind, ns)
+    }
+
+    fn declare(&self, change: DeclareChange) -> Result<ChangeRef, SpecError> {
+        (**self).declare(change)
+    }
+
+    fn break_glass(&self, action: WitnessedAction) -> Result<GlassRecord, SpecError> {
+        (**self).break_glass(action)
+    }
+}

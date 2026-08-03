@@ -80,6 +80,7 @@
 pub mod action;
 pub mod app;
 pub mod cli;
+pub mod feed;
 pub mod fixture;
 pub mod keys;
 pub mod render;
