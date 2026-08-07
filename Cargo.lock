@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "banken"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "awase",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "banken-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ishou-tokens 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "banken-spec"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "awase",
  "egaku",
