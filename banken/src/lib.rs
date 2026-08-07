@@ -82,7 +82,6 @@ pub mod app;
 pub mod cli;
 pub mod feed;
 pub mod fixture;
-pub mod keys;
 pub mod render;
 pub mod session;
 pub mod table;

@@ -16,7 +16,20 @@ use banken_spec::env::ClusterEnv;
 use banken_spec::testing::MockSessionEnv;
 use banken_spec::types::{OperatorId, ResourceKind};
 use banken_spec::{Catalog, SpecError, load_catalog};
-use egaku_term::__re::KeyCombo;
+use awase::{Hotkey, Key, MatchContext, Modifiers};
+
+/// The action an authored chord resolves to in the app keymap.
+///
+/// One lookup helper because the authored chord and the delivered chord are
+/// now the SAME type: there is no projection step to assert around.
+fn act(km: &awase::KeyMode<Action>, hk: Hotkey) -> Option<&Action> {
+    km.find_binding(&hk, &MatchContext::default()).map(|b| &b.action)
+}
+
+/// An unmodified chord.
+fn bare(k: Key) -> Hotkey {
+    Hotkey::new(Modifiers::NONE, k)
+}
 
 fn catalog() -> Catalog {
     load_catalog().expect("the shipped vocabulary must resolve")
@@ -38,29 +51,29 @@ fn the_keymap_is_built_from_the_authored_catalog() {
     let km = keymap_from_catalog(&c).expect("the shipped catalog builds a keymap");
 
     // Navigation, from specs/navkeys.lisp.
-    assert_eq!(km.lookup(&KeyCombo::key("j")), Some(&Action::SelectNext));
-    assert_eq!(km.lookup(&KeyCombo::key("down")), Some(&Action::SelectNext));
-    assert_eq!(km.lookup(&KeyCombo::key("k")), Some(&Action::SelectPrev));
-    assert_eq!(km.lookup(&KeyCombo::key("up")), Some(&Action::SelectPrev));
-    assert_eq!(km.lookup(&KeyCombo::key("o")), Some(&Action::ToggleSort));
-    assert_eq!(km.lookup(&KeyCombo::key("q")), Some(&Action::Quit));
-    // `escape` authored → `esc` delivered, via the ONE measured translation.
-    assert_eq!(km.lookup(&KeyCombo::key("esc")), Some(&Action::Dismiss));
-    assert_eq!(
-        km.lookup(&KeyCombo::key("escape")),
-        None,
-        "the runtime combo is `esc`; `escape` is the AUTHORED spelling only"
-    );
+    assert_eq!(act(&km, bare(Key::J)), Some(&Action::SelectNext));
+    assert_eq!(act(&km, bare(Key::Down)), Some(&Action::SelectNext));
+    assert_eq!(act(&km, bare(Key::K)), Some(&Action::SelectPrev));
+    assert_eq!(act(&km, bare(Key::Up)), Some(&Action::SelectPrev));
+    assert_eq!(act(&km, bare(Key::O)), Some(&Action::ToggleSort));
+    assert_eq!(act(&km, bare(Key::Q)), Some(&Action::Quit));
+    // `escape` used to need the ONE measured `escape`→`esc` translation, and
+    // this spot carried a second assertion pinning that the AUTHORED spelling
+    // was NOT the delivered one. That assertion had nothing to say once the
+    // two vocabularies became one type — there is no second spelling to be
+    // wrong about. Its disappearance is the clearest single sign the
+    // projection is really gone, rather than moved somewhere else.
+    assert_eq!(act(&km, bare(Key::Escape)), Some(&Action::Dismiss));
 
     // postigo, from specs/actions.lisp.
-    assert_eq!(km.lookup(&KeyCombo::key("l")), Some(&Action::ObserveLogs));
-    assert_eq!(km.lookup(&KeyCombo::key("s")), Some(&Action::DeclareScale));
+    assert_eq!(act(&km, bare(Key::L)), Some(&Action::ObserveLogs));
+    assert_eq!(act(&km, bare(Key::S)), Some(&Action::DeclareScale));
     assert_eq!(
-        km.lookup(&KeyCombo::new("s", vec!["shift".into()])),
+        act(&km, Hotkey::new(Modifiers::SHIFT, Key::S)),
         Some(&Action::BreakGlass),
     );
     assert_ne!(
-        km.lookup(&KeyCombo::key("s")),
+        act(&km, bare(Key::S)),
         Some(&Action::BreakGlass),
         "bare `s` must be DECLARE, never BREAK-GLASS",
     );
@@ -92,26 +105,33 @@ fn respelling_an_authored_chord_moves_the_runtime_binding() {
 
     let km = keymap_from_catalog(&c).expect("builds");
     assert_eq!(
-        km.lookup(&KeyCombo::key("z")),
+        act(&km, bare(Key::Z)),
         Some(&Action::ToggleSort),
         "the AUTHORED chord drives the runtime binding"
     );
     assert_eq!(
-        km.lookup(&KeyCombo::key("o")),
+        act(&km, bare(Key::O)),
         None,
         "and the old chord is gone — proving nothing hardcoded it"
     );
 }
 
-/// **THE GATE.** An authored chord the two key vocabularies disagree on is
-/// REFUSED by name, never silently dropped or guessed into a combo the event
-/// layer will not deliver.
+/// **INVERTED, and that inversion is the point.**
+///
+/// This test used to assert that `space` was REFUSED. awase spelled it
+/// `space`, crossterm delivers `Char(' ')`, egaku-term named that a literal
+/// one-character string, and no safe translation existed — so banken refused
+/// the chord by name rather than guess. The refusal was correct given two
+/// vocabularies; it was still an authored chord an operator could not use.
+///
+/// With typed delivery there is one vocabulary and `space` is an ordinary
+/// key. The gate now asserts the opposite, and the old refusal path has no
+/// remaining input: **banken's unprojectable set is empty.**
 #[test]
-fn an_unprojectable_authored_chord_is_refused_by_name() {
-    // `space`: awase spells it `space`, crossterm delivers `Char(' ')`.
-    let bad = banken_spec::CANONICAL_NAVKEYS_LISP.replace(":keys \"o\"", ":keys \"space\"");
-    assert!(bad.contains(":keys \"space\""), "substitution landed");
-    let nav = banken_spec::loader::load_all::<banken_spec::nav::NavKeySpec>(&bad)
+fn space_is_now_an_ordinary_authored_chord() {
+    let respelled = banken_spec::CANONICAL_NAVKEYS_LISP.replace(":keys \"o\"", ":keys \"space\"");
+    assert!(respelled.contains(":keys \"space\""), "substitution landed");
+    let nav = banken_spec::loader::load_all::<banken_spec::nav::NavKeySpec>(&respelled)
         .expect("`space` is a valid awase chord, so it PARSES");
     let c = Catalog::resolve(
         banken_spec::load_views().unwrap(),
@@ -122,18 +142,52 @@ fn an_unprojectable_authored_chord_is_refused_by_name() {
         nav,
         banken_spec::load_bancadas().unwrap(),
     )
-    .expect("and it cross-resolves — the divergence is a RENDER concern");
+    .expect("and it cross-resolves");
 
-    let err = keymap_from_catalog(&c).expect_err("an unprojectable chord must be refused");
-    match err {
-        SpecError::Binding(msg) => {
-            assert!(msg.contains("space"), "the refusal names the chord: {msg}");
+    let km = keymap_from_catalog(&c).expect("`space` binds — it is just a key now");
+    assert_eq!(
+        act(&km, bare(Key::Space)),
+        Some(&Action::ToggleSort),
+        "the authored `space` reaches the runtime"
+    );
+    // …and it is genuinely deliverable, not merely bindable: the probe drives
+    // synthetic events through the same function the runtime uses.
+    egaku_term::event::testing::assert_all_deliverable(&[bare(Key::Space)]);
+}
+
+/// A duplicate authored chord is still refused by name — the check moved from
+/// the projection into `try_bind`, it did not disappear with it.
+#[test]
+fn a_duplicate_authored_chord_is_refused_by_name() {
+    // Point `toggle-sort` at `q`, which `quit` already claims.
+    let clashing = banken_spec::CANONICAL_NAVKEYS_LISP.replace(":keys \"o\"", ":keys \"q\"");
+    assert!(clashing.contains(":keys \"q\""), "substitution landed");
+    let Ok(nav) = banken_spec::loader::load_all::<banken_spec::nav::NavKeySpec>(&clashing) else {
+        // The catalog's own conflict pass may reject it first, which is an
+        // even earlier refusal and equally acceptable.
+        return;
+    };
+    let Ok(c) = Catalog::resolve(
+        banken_spec::load_views().unwrap(),
+        banken_spec::load_actions().unwrap(),
+        banken_spec::load_pathologies().unwrap(),
+        banken_spec::load_wards().unwrap(),
+        banken_spec::load_drills().unwrap(),
+        nav,
+        banken_spec::load_bancadas().unwrap(),
+    ) else {
+        return;
+    };
+
+    match keymap_from_catalog(&c) {
+        Err(SpecError::Binding(msg)) => {
             assert!(
-                msg.contains("toggle-sort"),
-                "and the form that authored it: {msg}"
+                msg.contains("could never fire"),
+                "the refusal explains the consequence: {msg}"
             );
         }
-        other => panic!("expected a Binding error, got {other:?}"),
+        Err(other) => panic!("expected a Binding error, got {other:?}"),
+        Ok(_) => panic!("a duplicate chord must not silently displace a binding"),
     }
 }
 

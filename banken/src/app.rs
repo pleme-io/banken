@@ -47,7 +47,7 @@ use banken_spec::types::{OperatorId, ResourceKind};
 use banken_spec::{Catalog, SpecError};
 use egaku_term::crossterm::style::Color;
 use egaku_term::{
-    __re::{KeyCombo, KeyMap},
+    __re::KeyMap,
     AsyncApp, Buffer, Result as TermResult, Style,
 };
 
@@ -195,7 +195,7 @@ pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
     bancadas: Vec<BancadaSpec>,
     table: PodTable,
     panel: Panel,
-    keys: KeyMap<Action>,
+    keys: awase::KeyMode<Action>,
     /// Quadro T8: awase's `KeyRepeatGate` debounces the held-key path on
     /// the three `postigo` action chords. See [`Action::is_repeat_gated`]
     /// for why navigation is exempt.
@@ -407,7 +407,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     /// it to the terminal trait would have meant no mock-driven test could
     /// ever ask it.
     #[must_use]
-    pub fn keymap(&self) -> &KeyMap<Action> {
+    pub fn keymap(&self) -> &awase::KeyMode<Action> {
         &self.keys
     }
 
@@ -844,19 +844,18 @@ const DISPATCHABLE_ACTIONS: &[(&str, Action)] = &[
 /// # Errors
 ///
 /// - [`SpecError::Binding`] when an authored chord has no egaku-term
-///   projection (see [`crate::keys::chord_to_combo`]) — a refusal, never a
+///   duplicate chord (see [`bind`]) — a refusal, never a
 ///   guessed mapping.
 /// - [`SpecError::Binding`] when a [`DISPATCHABLE_ACTIONS`] row names an
 ///   action the catalog does not declare (the hand-list drifted ahead of the
 ///   spec).
-pub fn keymap_from_catalog(catalog: &Catalog) -> Result<KeyMap<Action>, SpecError> {
-    let mut km = KeyMap::new();
+pub fn keymap_from_catalog(catalog: &Catalog) -> Result<awase::KeyMode<Action>, SpecError> {
+    let mut km: awase::KeyMode<Action> = awase::KeyMode::typed("default", false);
 
     // Navigation — the intent projection is exhaustive, so every authored
     // nav key binds.
     for nav in catalog.nav_keys() {
-        let combo = project(nav.keys, &nav.name)?;
-        km.bind(combo, Action::from(nav.intent));
+        bind(&mut km, nav.keys, Action::from(nav.intent), &nav.name)?;
     }
 
     // postigo — only the actions the app can actually dispatch.
@@ -874,8 +873,7 @@ pub fn keymap_from_catalog(catalog: &Catalog) -> Result<KeyMap<Action>, SpecErro
                 );
                 SpecError::Binding(m)
             })?;
-        let combo = project(spec.keys, &spec.name)?;
-        km.bind(combo, *action);
+        bind(&mut km, spec.keys, *action, &spec.name)?;
     }
 
     // bancadas — the pre-warmed tear sessions reachable from THIS view.
@@ -886,27 +884,44 @@ pub fn keymap_from_catalog(catalog: &Catalog) -> Result<KeyMap<Action>, SpecErro
     // giving the operator a chord that opens something from a screen they
     // are not on.
     for (i, g) in catalog.bancadas_from(VIEW_NAME).into_iter().enumerate() {
-        let combo = project(g.keys, &g.name)?;
-        km.bind(combo, Action::OpenBancada(i));
+        bind(&mut km, g.keys, Action::OpenBancada(i), &g.name)?;
     }
 
     Ok(km)
 }
 
-/// Project an authored chord onto the delivered combo, or refuse by name.
-fn project(chord: ActionChord, owner: &str) -> Result<KeyCombo, SpecError> {
-    crate::keys::chord_to_combo(chord).ok_or_else(|| {
-        let mut m = String::from("authored chord `");
-        m.push_str(&chord.canonical());
-        m.push_str("` on `");
-        m.push_str(owner);
-        m.push_str(
-            "` has no egaku-term projection — the awase and egaku-term key \
-             vocabularies diverge on it and banken refuses to guess a mapping \
-             (see banken::keys)",
-        );
-        SpecError::Binding(m)
-    })
+/// Bind an authored chord, refusing a duplicate rather than displacing it.
+///
+/// **This replaced a 199-line projection.** The authored chord used to be an
+/// `awase::Hotkey` and the delivered chord an `egaku_term::KeyCombo` — two
+/// types, so every binding had to cross a hand-maintained translation with a
+/// measured two-row table, an explicit agreeing-variant list, and an outright
+/// refusal of `space`. `egaku_term` now delivers `awase::Hotkey`, so the
+/// authored value and the delivered value are the same type and there is
+/// nothing left to project.
+///
+/// What is gained beyond the deletion: `try_bind` makes a duplicate chord an
+/// error here. The old `KeyMap::bind` was a `HashMap` insert — the second
+/// binding silently displaced the first, and only the catalog's separate
+/// conflict pass stood between that and a lost chord.
+fn bind(
+    km: &mut awase::KeyMode<Action>,
+    chord: ActionChord,
+    action: Action,
+    owner: &str,
+) -> Result<(), SpecError> {
+    use std::fmt::Write as _;
+    km.try_bind(awase::Binding::new(chord.hotkey(), action))
+        .map_err(|displaced| {
+            let mut m = String::from("authored chord `");
+            m.push_str(&chord.canonical());
+            m.push_str("` on `");
+            m.push_str(owner);
+            m.push_str("` is already bound to `");
+            let _ = write!(m, "{:?}", displaced.action);
+            m.push_str("` — one of the two could never fire");
+            SpecError::Binding(m)
+        })
 }
 
 /// Fit as many whole legend entries as `available` columns allow, appending
@@ -1051,9 +1066,24 @@ pub fn unbound_action_names(catalog: &Catalog) -> Vec<String> {
 impl<E: ClusterEnv + Send + Sync, S: SessionEnv + Send + Sync> AsyncApp for BankenApp<E, S> {
     type Action = Action;
 
+    /// Vestigial: banken dispatches through [`Self::hotkey_map`].
+    ///
+    /// `AsyncApp::keymap` is still a required method, so this returns a
+    /// permanently-empty map. It is never consulted — the runtime prefers the
+    /// typed path whenever `hotkey_map` is `Some`. A static rather than a
+    /// field so the empty map costs the struct nothing.
     fn keymap(&self) -> &KeyMap<Action> {
-        // Delegates to the inherent accessor — one source, two callers.
-        BankenApp::keymap(self)
+        static EMPTY: std::sync::OnceLock<KeyMap<Action>> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(KeyMap::new)
+    }
+
+    /// The typed keymap — banken's real dispatch source.
+    ///
+    /// The authored chord (`awase::Hotkey`, conflict-checked by the catalog)
+    /// and the delivered chord (now also `awase::Hotkey`) are one type, so
+    /// this is a direct borrow with no projection in between.
+    fn hotkey_map(&self) -> Option<&awase::KeyMode<Action>> {
+        Some(BankenApp::keymap(self))
     }
 
     async fn handle(&mut self, action: &Action) -> TermResult<()> {
@@ -1093,6 +1123,15 @@ impl<E: ClusterEnv + Send + Sync, S: SessionEnv + Send + Sync> AsyncApp for Bank
 
 #[cfg(test)]
 mod tests {
+    /// The action an authored chord resolves to.
+    ///
+    /// One helper because the authored chord and the delivered chord are the
+    /// same type now — there is no projection to assert around.
+    fn act(km: &awase::KeyMode<super::Action>, hk: awase::Hotkey) -> Option<&super::Action> {
+        km.find_binding(&hk, &awase::MatchContext::default())
+            .map(|b| &b.action)
+    }
+
     use std::time::Duration;
 
     use awase::repeat_gate::DEFAULT_MIN_INTERVAL;
@@ -1172,15 +1211,15 @@ mod tests {
     fn keymap_binds_the_postigo_chords() {
         let a = app();
         assert_eq!(
-            a.keymap().lookup(&KeyCombo::key("l")),
+            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::L)),
             Some(&Action::ObserveLogs)
         );
         assert_eq!(
-            a.keymap().lookup(&KeyCombo::key("s")),
+            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::S)),
             Some(&Action::DeclareScale)
         );
         assert_eq!(
-            a.keymap().lookup(&KeyCombo::new("s", vec!["shift".into()])),
+            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::SHIFT, awase::Key::S)),
             Some(&Action::BreakGlass)
         );
     }
@@ -1202,17 +1241,14 @@ mod tests {
                 .iter()
                 .find(|x| x.name == name)
                 .unwrap_or_else(|| panic!("authored action `{name}`"));
-            // Project the AUTHORED chord into the delivered-combo vocabulary
-            // and look it up in the app keymap — so the assertion is on the
-            // authored value, not a hand-repeated literal.
-            let combo = crate::keys::chord_to_combo(spec.keys).unwrap_or_else(|| {
-                panic!(
-                    "authored chord `{}` for `{name}` has no egaku-term combo",
-                    spec.keys
-                )
-            });
+            // Look the AUTHORED chord up in the app keymap directly — the
+            // assertion is on the authored value, not a hand-repeated
+            // literal. There is no projection step any more: the authored
+            // chord and the delivered chord are the same type.
             assert_eq!(
-                a.keymap().lookup(&combo),
+                a.keymap()
+                    .find_binding(&spec.keys.hotkey(), &awase::MatchContext::default())
+                    .map(|b| &b.action),
                 Some(&expected_action),
                 "the app keymap must bind `{name}`'s AUTHORED chord `{}` to {expected_action:?}",
                 spec.keys,
@@ -1221,7 +1257,7 @@ mod tests {
         // And `shell` is bound to the SHIFTED chord specifically — the whole
         // point of authoring `shift+s` instead of `S`.
         assert_ne!(
-            a.keymap().lookup(&KeyCombo::key("s")),
+            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::S)),
             Some(&Action::BreakGlass),
             "bare `s` must be DECLARE, never BREAK-GLASS",
         );
@@ -1273,11 +1309,11 @@ mod tests {
         let a = app();
         assert_eq!(a.bancadas().len(), 2, "both recipes launch from :pods");
         assert_eq!(
-            a.keymap().lookup(&KeyCombo::key("g")),
+            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::G)),
             Some(&Action::OpenBancada(0)),
         );
         assert_eq!(
-            a.keymap().lookup(&KeyCombo::new("g", vec!["shift".into()])),
+            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::SHIFT, awase::Key::G)),
             Some(&Action::OpenBancada(1)),
         );
         // The index and the recipe agree — the whole reason both come from
@@ -1552,7 +1588,7 @@ mod tests {
     fn the_authored_confirm_chord_binds_to_enter() {
         let a = app();
         assert_eq!(
-            a.keymap().lookup(&KeyCombo::key("enter")),
+            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::Return)),
             Some(&Action::Confirm),
         );
     }
