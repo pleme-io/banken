@@ -162,11 +162,11 @@ dependencies = [
 name = "banken-config"
 version = "0.1.1"
 dependencies = [
- "ishou-tokens 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ishou-tokens",
  "serde",
  "serde_json",
  "serde_yaml",
- "shikumi 0.1.345",
+ "shikumi",
  "tatara-lisp",
  "thiserror 2.0.19",
 ]
@@ -512,7 +512,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -630,36 +630,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "gen-macros"
-version = "0.1.32"
-source = "git+https://github.com/pleme-io/gen#e174470020226ca8e46a798210a59aba6088a953"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "gen-platform"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bd3330ab010888b50cac22c779cdb77837f3f51dddeddb0dba4c2133db2c929"
 dependencies = [
- "gen-macros 0.1.29",
- "gen-types 0.1.29",
- "inventory",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "gen-platform"
-version = "0.1.32"
-source = "git+https://github.com/pleme-io/gen#e174470020226ca8e46a798210a59aba6088a953"
-dependencies = [
- "gen-macros 0.1.32",
- "gen-types 0.1.32",
+ "gen-macros",
+ "gen-types",
  "inventory",
  "serde",
  "serde_json",
@@ -671,20 +648,6 @@ name = "gen-types"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b1a9d6cc05c9773e79aa4c93ee94eec230bcdd3b97f4d4fae6469b9e4392835"
-dependencies = [
- "blake3",
- "chrono",
- "indexmap",
- "inventory",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "gen-types"
-version = "0.1.32"
-source = "git+https://github.com/pleme-io/gen#e174470020226ca8e46a798210a59aba6088a953"
 dependencies = [
  "blake3",
  "chrono",
@@ -1113,16 +1076,6 @@ name = "ishou-tokens"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2abd6028743865f80057c30ae3e0285e37cfb20dc9d6278a66d4b7ecd283745c"
-dependencies = [
- "irodori",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "ishou-tokens"
-version = "0.1.4"
-source = "git+https://github.com/pleme-io/ishou#8f14a59d04042370897874f5d259b26a8837a696"
 dependencies = [
  "irodori",
  "serde",
@@ -1913,28 +1866,10 @@ checksum = "b16ee133464b7ed883612752c462ac6846e4365dd1dcbf15d788a1a81235fb38"
 dependencies = [
  "arc-swap",
  "async-trait",
- "figment",
- "gen-platform 0.1.29",
- "gen-types 0.1.29",
- "notify",
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.19",
- "tracing",
-]
-
-[[package]]
-name = "shikumi"
-version = "0.1.452"
-source = "git+https://github.com/pleme-io/shikumi?branch=main#56adc8828ccb5f4f66258ca66ba402b92ae01dbb"
-dependencies = [
- "arc-swap",
- "async-trait",
  "clap",
  "figment",
- "gen-platform 0.1.32",
- "gen-types 0.1.32",
+ "gen-platform",
+ "gen-types",
  "notify",
  "serde",
  "serde_json",
@@ -2085,8 +2020,9 @@ dependencies = [
 
 [[package]]
 name = "tear-client"
-version = "0.1.8"
-source = "git+https://github.com/pleme-io/tear?branch=main#1c1007de850eb5935067de2b87041b953323a59c"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "481dab13e4634a4784555eba129d3cd8b91eb8f845fb30b56a0c6045c388f083"
 dependencies = [
  "parking_lot",
  "serde_yaml_ng",
@@ -2096,17 +2032,18 @@ dependencies = [
 
 [[package]]
 name = "tear-config"
-version = "0.1.8"
-source = "git+https://github.com/pleme-io/tear?branch=main#1c1007de850eb5935067de2b87041b953323a59c"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fac87fc0b45e8ff8ccde9c63af91263ba51195386e35d0e08f881a71255dc10"
 dependencies = [
  "anyhow",
  "arc-swap",
- "ishou-tokens 0.1.4 (git+https://github.com/pleme-io/ishou)",
+ "ishou-tokens",
  "notify",
  "once_cell",
  "serde",
  "serde_yaml_ng",
- "shikumi 0.1.452",
+ "shikumi",
  "tear-types",
  "thiserror 2.0.19",
  "tracing",
@@ -2114,13 +2051,14 @@ dependencies = [
 
 [[package]]
 name = "tear-types"
-version = "0.1.8"
-source = "git+https://github.com/pleme-io/tear?branch=main#1c1007de850eb5935067de2b87041b953323a59c"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f17cc03579b29a2a7af9a79341b041167e7f4d29dff105a649ce100e00315f06"
 dependencies = [
  "anyhow",
  "blake3",
  "ciborium",
- "ishou-tokens 0.1.4 (git+https://github.com/pleme-io/ishou)",
+ "ishou-tokens",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -2535,7 +2473,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

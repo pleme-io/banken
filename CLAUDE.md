@@ -10,11 +10,17 @@ skip-magma: pure-binary-no-cluster-runtime
 skip-continuous-convergence: pure-binary-no-cluster-runtime
 skip-platform-mediated: pure-binary-no-cluster-runtime
 
-<!-- IN-FLIGHT DEBT: none. Both bump rows cleared 2026-07-31 — egaku
-     0.1.5 and tear 1c1007d are published and pinned. 194 tests green
-     by default, 200 under --features tear, against real pins with no
-     patch override. Kept out of the body deliberately: a cleared
-     waiver is deleted, not annotated. -->
+<!-- IN-FLIGHT DEBT: none. Re-measured 2026-08-07 after `default` became
+     ["live", "tear"]: 199 tests green by default, `cargo fmt --check`
+     clean on the files this touched, `--no-default-features` still
+     compiles (both #[cfg] arms live). Cargo.lock now carries ZERO git
+     sources — tear-client/tear-types moved to crates.io 0.1.12, which
+     also removed the transitive git shikumi / gen / second ishou-tokens
+     the old `branch = "main"` pin dragged in. The prior note's "tear
+     1c1007d is published and pinned" was two claims at once and only
+     the first was true: it was published, and pinned by GIT REV anyway.
+     Kept out of the body deliberately: a cleared waiver is deleted,
+     not annotated. -->
 
 One-sentence purpose: an **observe-first, GitOps-native cluster-navigator TUI** —
 keep k9s's fast keyboard navigation + health surfaces, structurally refuse its
@@ -43,10 +49,18 @@ the runtime is byte-identical against a mock, a live backend, or a build with
 no adapter compiled in. Rows come from `E`; a confirmed `(defbancada)` opens
 through `S`.
 
+Both live adapters are in the **default** build as of 0.1.2 — `default =
+["live", "tear"]` — so the `absent` column below describes
+`--no-default-features`, not what an operator gets. That matters beyond taste:
+substrate's rust tool-release shape reads its cargo features from gen's build
+spec (cargo's *default* resolve) and exposes no per-consumer knob, so this
+crate's `default` IS `pkgs.banken`, and a lean default meant every fleet node
+shipped a navigator that could not navigate.
+
 | seam | mock | live | absent |
 |---|---|---|---|
-| `ClusterEnv` | `MockClusterEnv` / `FixtureClusterEnv` | `KubeClusterEnv` (feat `live`) | `--live` is a typed CLI error |
-| `SessionEnv` | `MockSessionEnv` | `LazyTearSessionEnv` (feat `tear`) | `UnwiredSessionEnv` — a typed refusal |
+| `ClusterEnv` | `MockClusterEnv` / `FixtureClusterEnv` | `KubeClusterEnv` (feat `live`, DEFAULT) | `--live` is a typed CLI error |
+| `SessionEnv` | `MockSessionEnv` | `LazyTearSessionEnv` (feat `tear`, DEFAULT) | `UnwiredSessionEnv` — a typed refusal |
 
 `UnwiredSessionEnv` **refuses** rather than returning `Ok(())`: a stub would
 make the app report a session it never opened, and the operator would go
@@ -281,16 +295,24 @@ such.
   (remain-on-exit), so the output stays readable; the operator just cannot type
   in that pane. Both shipped recipes hold a long-running pane (`logs --follow`,
   `get events --watch`), so neither session can fully exit and be reaped.
-- **`pending-banken: bancada-tear-feature-nix-unverified`** — the `tear`
-  feature's dep took banken's `Cargo.lock` from **zero** git sources to four
-  (tear, shikumi, gen, plus a second `ishou-tokens` 0.1.4 from git alongside
-  the registry one banken-config keeps — measured, so banken-config's
-  published-0.1.4 theme receipt is unchanged). Cargo resolves the lock
-  feature-independently, so crate2nix sees those git crates even though the
-  default build never compiles them: that is the documented
-  crate2nix-vs-`fetchgit` base32-vs-SRI drift class. `cargo test`/`fmt` are
-  green on default, `live` and `tear`; **`nix build` is UNVERIFIED** — run it,
-  and reach for `nix run .#hashfix -- loop` if the cascade fires.
+- **`pending-banken: bancada-tear-feature-nix-unverified` — CLOSED
+  (2026-08-07), and the fix was to remove the CAUSE rather than verify the
+  symptom.** The row existed because the `tear` feature's dep took banken's
+  `Cargo.lock` from zero git sources to four (tear, shikumi, gen, plus a
+  second `ishou-tokens` 0.1.4 from git alongside banken-config's registry
+  one), which is the crate2nix-vs-`fetchgit` base32-vs-SRI drift class, and
+  `nix build` had never been run against it. Both deps were **published on
+  crates.io the whole time** (`tear-client` / `tear-types` 0.1.12, checked
+  against the sparse index) — the git pin bought nothing and cost the drift
+  class plus a `branch = "main"` float that pins nothing. Repointed at the
+  registry: the lock now carries **zero** git sources, transitive ones
+  included. `nix build .#banken` is green with `default = ["live", "tear"]`
+  — it compiled `kube 0.99` and `tear-client 0.1.12` through the substrate
+  path — and the resulting store artifact answers `--live` by reading the
+  kubeconfig rather than by refusing. `hashfix` was never needed.
+  **Generalize: a git dep on a sibling pleme-io crate is a defect, not a
+  pin.** It makes the depending crate structurally unreleasable and drags the
+  drift class in behind it; the sibling is almost always already published.
 - **`pending-banken: bancada-container-selection`** — M0 has no container
   picker, so a recipe referencing `(:context container)` refuses by name.
 - The `stage_witnessed` arm sends the argv **without a newline**: the

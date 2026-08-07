@@ -76,23 +76,46 @@ rustls = { version = "0.23", default-features = false, features = ["ring"], opti
 # `tear` feature: it drags tear-config → shikumi's figment/notify tree into the
 # binary, which the default (fixture) build has no use for.
 #
-# *** LOCK-SHAPE CONSEQUENCE — read before assuming `nix build` is unaffected. ***
-# banken's Cargo.lock carried **zero** git sources before this dep; it now
-# carries four (tear, shikumi, gen, and a SECOND ishou-tokens 0.1.4 from git,
-# alongside the registry one banken-config keeps — measured, so banken-config's
-# published-0.1.4 theme receipt is unchanged). Cargo resolves the lock
-# feature-independently, so crate2nix sees those git crates even though the
-# default build never compiles them, which is the documented
-# crate2nix-vs-fetchgit base32-vs-SRI drift class (`nix run .#hashfix -- loop`).
-# `cargo test`/`fmt` are green on default, `live` and `tear`; `nix build` is
-# UNVERIFIED here. `pending-banken: bancada-tear-feature-nix-unverified`.
-tear-client = { git = "https://github.com/pleme-io/tear", branch = "main", optional = true, version = "0.1" }
-tear-types = { git = "https://github.com/pleme-io/tear", branch = "main", optional = true, version = "0.1" }
+# *** REGISTRY, NOT GIT — corrected 2026-08-07. ***
+# These were `git = "https://github.com/pleme-io/tear", branch = "main"`, and
+# the comment here recorded the consequence in detail: banken's Cargo.lock
+# carried zero git sources before the dep and four after (tear, shikumi, gen,
+# and a SECOND ishou-tokens 0.1.4 from git alongside banken-config's registry
+# one). Cargo resolves the lock feature-independently, so crate2nix saw those
+# git crates even though the default build never compiled them — the
+# crate2nix-vs-fetchgit base32-vs-SRI drift class (`nix run .#hashfix -- loop`),
+# plus a `branch = "main"` float that pins nothing.
+#
+# The whole cost was avoidable: tear-client and tear-types are BOTH published
+# on crates.io (0.1.12, verified against the sparse index). A pleme-io crate
+# reaches another pleme-io crate through the registry, never through git — a
+# git dep also makes the depending crate structurally unreleasable, which is
+# the same wall egaku-term and izumi already hit in this file.
+tear-client = { version = "0.1", optional = true }
+tear-types = { version = "0.1", optional = true }
 
 [features]
-default = []
+# `live` is ON by default (2026-08-07). It was off, and the stated reason —
+# "the fixture path is fast" — was a producer-side convenience that the
+# CONSUMER paid for: substrate's rust tool-release shape reads its feature set
+# from gen's build spec (cargo's default resolve) and exposes no per-consumer
+# feature knob, so `pkgs.banken` — the ONLY way this binary reaches a node —
+# was structurally the fixture build. A cluster navigator that answers
+# `--live` with "requires building with --features live" is not a navigator;
+# the default has to be the binary an operator actually wants. Every dep this
+# turns on is a registry dep (kube / k8s-openapi / anyhow / rustls+ring), so
+# the crates.io release shape is unchanged.
+#
+# `tear` comes with it. The reason it was held back was never the feature —
+# it was that its two deps were GIT sources, i.e. the crate2nix-vs-fetchgit
+# hash-drift class. Repointing them at crates.io (see the tear-client comment
+# above) removes that objection, and with it `pending-banken:
+# bancada-tear-feature-nix-unverified`, so there is nothing left to justify
+# shipping `UnwiredSessionEnv`'s typed refusal to every node when the real
+# adapter is one registry dep away.
+default = ["live", "tear"]
 # Compile the KubeClusterEnv live-read backend. Heavy dep tree (kube +
-# k8s-openapi + rustls) — off by default so the fixture path is fast.
+# k8s-openapi + rustls).
 live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow", "dep:rustls"]
 # Compile the TearSessionEnv adapter — the live `(defbancada)` handoff over a
 # running `tear-daemon`. Off by default: the plan is produced and previewed

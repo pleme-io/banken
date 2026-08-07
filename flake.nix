@@ -32,12 +32,16 @@
       src = self;
       repo = "pleme-io/banken";
 
-      # NOTE on features: banken's Cargo.toml declares `default = []`, so
-      # this builds the FIXTURE path (BANKEN.md §VI M0, proven green). The
-      # live-cluster read sits behind the `live` cargo feature (kube +
-      # k8s-openapi + rustls — a heavy tree we do not force on consumers).
-      # Substrate exposes no per-consumer feature knob today, so selecting
-      # `live` from Nix is `pending-banken: live-read` alongside the live
-      # read itself; `cargo build --features live` is the path meanwhile.
+      # NOTE on features (corrected 2026-08-07): this used to say the Nix
+      # build was the FIXTURE path, with `live` unreachable from Nix because
+      # substrate exposes no per-consumer feature knob. The second half is
+      # still true — substrate's tool-release shape takes its feature set
+      # from gen's build spec (cargo's *default* resolve), and there is no
+      # `rootFeatures` on this shape — but the conclusion was wrong. The knob
+      # that WAS available is the one this crate owns: `default`. banken's
+      # Cargo.toml now declares `default = ["live"]`, so `packages.default`
+      # (and therefore `pkgs.banken` on every fleet node) carries the
+      # KubeClusterEnv read. See banken/Cargo.toml's `[features]` block for
+      # why `tear` deliberately did NOT come along.
     };
 }

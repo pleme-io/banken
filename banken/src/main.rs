@@ -103,6 +103,25 @@ fn missing_context_hint() -> String {
     String::new()
 }
 
+/// What `--help` says about `--live`, DERIVED from whether the backend is
+/// actually compiled in rather than asserted by hand.
+///
+/// The hand-written form ("requires --features live") outlived its own truth
+/// the moment `live` joined `default` in Cargo.toml: the help text told every
+/// operator to rebuild for a capability the binary already had. A usage line
+/// that states a build fact is a claim, and a claim that nothing re-derives
+/// rots silently — so the two `#[cfg]` arms below ARE the derivation, and the
+/// stale case has no way to be written.
+#[cfg(feature = "live")]
+fn live_availability() -> &'static str {
+    ""
+}
+
+#[cfg(not(feature = "live"))]
+fn live_availability() -> &'static str {
+    " (unavailable — rebuild with `--features live`)"
+}
+
 /// The [`SessionEnv`](banken_spec::bancada::SessionEnv) a confirmed
 /// `(defbancada)` opens through.
 ///
@@ -215,7 +234,10 @@ fn print_usage() {
     println!("  :pods            the pod table (default; the only M0 view)");
     println!();
     println!("FLAGS:");
-    println!("  --live           read from the live cluster (requires --features live)");
+    println!(
+        "  --live           read from the live cluster{}",
+        live_availability()
+    );
     println!("  --context <name> the kubeconfig context to read — REQUIRED with --live.");
     println!("                   banken will not read \"whatever current-context happens");
     println!("                   to be\": a merged KUBECONFIG routinely points at a");
