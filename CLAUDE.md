@@ -384,8 +384,8 @@ proven-live ✗ until a cluster is reachable / known ✓).
   selection + sort, alt-screen enter/Drop-restore via `egaku_term::AsyncApp` +
   `run_async`, and the **postigo dispatch wired through the UI** (`l`→OBSERVE logs,
   `s`→DECLARE full-manifest preview, `S`→BREAK-GLASS witnessed record — every path
-  through `banken_spec::apply`, no live-mutate path). Proof: **194 workspace tests**
-  green (`cargo test`; 196 under `--features live` and under `--features tear`)
+  through `banken_spec::apply`, no live-mutate path). Proof: **206 workspace tests**
+  green (`cargo test`, and identically under `--features live`)
   incl. a `TestBackend` golden-frame test (asserts via
   `to_lines()`/`cell()`, never `.contains()`) + a postigo-dispatch integration
   test; `cargo fmt --check` clean. Counts moved 195 → 194 with the
@@ -591,9 +591,55 @@ proven-live ✗ until a cluster is reachable / known ✓).
     `health_signals`, `declare`, `break_glass` all still return typed
     "not yet wired" errors on the live backend. AGE renders `-` on every row
     (the `creation_timestamp` derivation needs a clock; `-` beats a wrong
-    value). The watch informer is still a poll —
-    **`pending-banken: live-watch`**, and `BankenApp::refresh()` still has no
-    caller, so a live table does not update until a keystroke.
+    value).
+- **SHIPPED + PROVEN LIVE (2026-08-08): the WATCH plane.
+  `pending-banken: live-watch` CLOSED.** `banken/src/absorb.rs` +
+  `KubeClusterEnv::spawn_pod_absorber` replace the 1 Hz poll with
+  `kube::runtime::watcher` under `Config::streaming_lists()` +
+  `.default_backoff()`. Measured on `camelot-eks`: **absorbed 83 pods by watch,
+  generation 1, matching `kubectl get pods -A` at the same moment (83)**
+  (`tests/live_read.rs::the_watch_plane_absorbs_from_a_real_cluster`,
+  `#[ignore]`d, refuses to guess a context). 206 workspace tests green with and
+  without `--features live`.
+  - **The C-watch ceiling was a fact about this crate's Cargo features, not
+    about kube-rs.** BANKEN.md §IX called the informer "unbuilt substrate banken
+    must build"; `kube-runtime` 0.99 — the version already resolved — ships
+    `Config::streaming_lists()`, `bookmarks: true` by default, `metadata_watcher`
+    and the whole resourceVersion/410 machine. Enabling the `runtime` feature was
+    the entire acquisition. **Generalize: before grading a capability ABSENT,
+    check whether it is merely unenabled.**
+  - **What it replaced, measured:** the poll moved **3,580,862 B per tick** at
+    1 Hz — 3.4 MiB/s decoded, **96 GiB per 8-hour day, per instance**. A 30 s
+    watch on the same cluster moved **0 bytes**. Poll cost is proportional to
+    state SIZE; delta cost to CHANGE.
+  - **One reader, two producers.** The app holds a `Despensa` and never learns
+    which producer filled it: `--live` attaches the watch stream, the fixture
+    attaches `spawn_poll_absorber` over `izumi::refresh` (consumed, not
+    re-rolled — QUADRO §T14). An enum of `Watched|Polled` in the app would have
+    put the transport in the app's own type.
+  - **The wake is content-gated, and a PHASE change also wakes.**
+    `LiveStore::push` bumped its generation unconditionally, so the old feed
+    repainted ~60×/min against a still cluster. Gating on the row hash *alone*
+    would have been the opposite error — a `Synced → Degraded` transition must
+    repaint the status line even though not one row moved, or a dead watch
+    renders as a healthy one.
+  - **`pending-banken: grip` — NOT closed, and absorption makes it sharper.** A
+    `Row` has no uid, so the replica keys on `(namespace, name)`: unique at an
+    instant, **not** across delete-and-recreate. Acting on a row is no safer
+    than before, and a cache with a TTL widens the read→keystroke window from
+    the old 1 Hz poll to the TTL. The fix is **not** a carried freshness witness
+    — that was built and broken: rows launder at `app.rs`'s `set_rows` into
+    `egaku::TableView<Row>`, a foreign container that knows nothing about
+    freshness, and a stale reading held beside a live table `cargo check`s
+    clean. The design is to **re-derive at the act** (`ClusterEnv::grip`).
+  - `pending-banken: absorb-multi-gvk` — one kind (pods), one watch. Discovery,
+    admission bounds and per-kind fidelity are M3/M4.
+  - `pending-banken: absorb-display-fidelity` — the plane still absorbs full
+    `Pod` objects. Measured on the same cluster: `Accept: …as=Table` with
+    `includeObject=None` is **170 B/pod vs 18,747 B** (110×) and its cells carry
+    a server-rendered `Age`, which would close the `AGE renders -` gap above for
+    free. It carries **no uid** (`row.object` is `null`), which is exactly why
+    it composes with `grip`-at-the-act rather than with a carried witness.
 - **DESIGN / next arc (M1→M4):** the watch informer (poll→true watch), the health
   ward's **RENDER** (its `(defward)` vocabulary + the `WardVerdict` evaluator are
   SHIPPED mock-green; no ward panel is drawn yet — do not read the vocabulary as
