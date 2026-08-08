@@ -639,3 +639,146 @@ specDir: banken-spec/specs
         );
     }
 }
+
+// ── The discovery loader — the writable-overlay tier ────────────────
+
+impl BankenConfig {
+    /// Load the effective config from every discovered layer, lowest priority
+    /// first.
+    ///
+    /// # Why `discover_all` + `load_merged` and not `discover` + `load`
+    ///
+    /// Measured on this machine 2026-08-08: **4 of 4** sampled fleet app
+    /// configs (`mado.yaml`, `tear.yaml`, `tend/config.yaml`,
+    /// `escriba/rc.lisp`) are symlinks into `/nix/store`, and `~/.config`
+    /// carries **41** such symlinks. `touch` on the store target is
+    /// `Permission denied`. So the single-file path (`discover()` → `load()`)
+    /// resolves to a **read-only** file for essentially every deployed app —
+    /// an operator cannot change a value without a rebuild, and any editing
+    /// surface built over it would refuse 100% of the fleet.
+    ///
+    /// `ConfigDiscovery::discover_all` already returns a merge-ordered path
+    /// list **including `{app}-*.yaml` partials** (`discovery.rs:1682`,
+    /// `:1814`), and `ConfigStore::load_merged` is documented as its
+    /// counterpart. So the writable tier needs no new shikumi machinery: the
+    /// nix-owned `banken.yaml` stays the base, and an **unmanaged**
+    /// `banken-local.yaml` beside it is a writable overlay that wins.
+    ///
+    /// # Errors
+    ///
+    /// Propagates discovery and merge failures untouched. A **missing** config
+    /// is not an error — it yields [`shikumi::TieredConfig::prescribed_default`],
+    /// because banken must start on a machine that has never configured it.
+    pub fn discover_effective() -> Result<Self, shikumi::ShikumiError> {
+        let paths = shikumi::ConfigDiscovery::new("banken")
+            .hierarchical()
+            .discover_all()?;
+
+        if paths.is_empty() {
+            return Ok(<Self as shikumi::TieredConfig>::prescribed_default());
+        }
+        Ok(
+            shikumi::ConfigStore::<Self>::load_merged(&paths, "BANKEN_")?
+                .get()
+                .as_ref()
+                .clone(),
+        )
+    }
+
+    /// Every layer discovery would fold, lowest priority first.
+    ///
+    /// Exposed because *which file supplied a value* is the question an
+    /// operator actually has, and the answer is not derivable from the folded
+    /// value. A surface that shows an effective value without being able to
+    /// name its source is the provenance hole this loader exists inside of.
+    pub fn layers() -> Result<Vec<std::path::PathBuf>, shikumi::ShikumiError> {
+        shikumi::ConfigDiscovery::new("banken")
+            .hierarchical()
+            .discover_all()
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+
+    /// The COMPLETE base, as home-manager renders it. Completeness is not
+    /// incidental: `BankenConfig` carries `deny_unknown_fields` and no serde
+    /// field defaults, and figment merges every source THEN extracts once — so
+    /// the merged document must be whole. In deployment the nix-owned base is
+    /// whole by construction and only the overlay is partial, which is exactly
+    /// the shape these tests exercise.
+    const BASE_YAML: &str = "context: \"\"\nnamespace: \"\"\nrefreshIntervalMs: 1000\ntheme: vellum\nscrollbackLines: 10000\nspecDir: specs\n";
+
+    /// THE claim the writable tier rests on: a `banken-*.yaml` partial beside
+    /// the base file **wins**, so a nix-owned read-only base can be overridden
+    /// by a writable overlay without touching it.
+    ///
+    /// Measured on this machine 2026-08-08: 4 of 4 sampled fleet app configs
+    /// are `/nix/store` symlinks and `~/.config` holds 41 of them; `touch` on
+    /// the target is Permission denied. So without this precedence there is no
+    /// way for an operator to change a value at all short of a rebuild — and
+    /// any editing surface built over the single-file path would refuse 100%
+    /// of the deployed fleet.
+    ///
+    /// This drives `ConfigStore::load_merged` over an explicit path list rather
+    /// than `discover_effective()` because the latter walks up from the process
+    /// CWD, and a test that mutates CWD races every other test in the binary.
+    /// The merge ORDER is the thing under test, and it is the same order
+    /// `ConfigDiscovery::discover_all` produces.
+    #[test]
+    fn a_local_overlay_wins_over_the_base_file() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let base = dir.path().join("banken.yaml");
+        let local = dir.path().join("banken-local.yaml");
+
+        // The nix-owned base: what home-manager renders, read-only in reality.
+        std::fs::write(&base, BASE_YAML).expect("base");
+        // The unmanaged overlay: the file an operator can actually write.
+        std::fs::write(&local, "refreshIntervalMs: 250\n").expect("overlay");
+
+        let store = shikumi::ConfigStore::<BankenConfig>::load_merged(
+            &[base, local],
+            "BANKEN_OVERLAY_TEST_",
+        )
+        .expect("merge");
+
+        let cfg = store.get();
+        assert_eq!(
+            cfg.refresh_interval_ms, 250,
+            "the writable overlay must win over the read-only base — without this \
+             an operator cannot change a value without a rebuild"
+        );
+    }
+
+    /// The overlay is a PARTIAL: a field it does not mention keeps the base's
+    /// value rather than reverting to the type's default. Without this the
+    /// overlay would be a whole-file replacement and an operator changing one
+    /// knob would silently reset every other one.
+    #[test]
+    fn an_overlay_does_not_erase_fields_it_omits() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let base = dir.path().join("banken.yaml");
+        let local = dir.path().join("banken-local.yaml");
+
+        std::fs::write(
+            &base,
+            BASE_YAML.replace("namespace: \"\"", "namespace: flux-system"),
+        )
+        .expect("base");
+        std::fs::write(&local, "refreshIntervalMs: 250\n").expect("overlay");
+
+        let store = shikumi::ConfigStore::<BankenConfig>::load_merged(
+            &[base, local],
+            "BANKEN_OVERLAY_PARTIAL_TEST_",
+        )
+        .expect("merge");
+
+        let cfg = store.get();
+        assert_eq!(cfg.refresh_interval_ms, 250, "the overlay's field wins");
+        assert_eq!(
+            cfg.namespace, "flux-system",
+            "a field the overlay omits must survive from the base"
+        );
+    }
+}

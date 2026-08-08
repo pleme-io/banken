@@ -162,7 +162,7 @@ async fn run_fixture(operator: OperatorId) -> Result<(), String> {
     // exact same absorb path in both modes is what keeps the fixture a real
     // rehearsal of the live one. A feed that only existed under `--live`
     // would be a feed nobody ever exercised until it mattered.
-    .with_feed(banken::feed::DEFAULT_POLL);
+    .with_feed(refresh_interval());
     egaku_term::run_async(&mut app)
         .await
         .map_err(|e| e.to_string())
@@ -226,6 +226,33 @@ async fn run_live(
     egaku_term::run_async(&mut app)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// The `:pods` refresh period, read from the AUTHORED config.
+///
+/// This function is the whole reason `banken-config` is now a dependency. The
+/// interval was a hardcoded `feed::DEFAULT_POLL`, so `:refresh-interval-ms` in
+/// a `(defbanken …)` form was authored, tested, and **ignored** — the config
+/// crate's 16 tests were green the entire time it had no consumer.
+///
+/// A discovery failure falls back to the documented default rather than
+/// refusing to start: banken must run on a machine that has never configured
+/// it, and a navigator that will not open because a config file is malformed
+/// is worse than one that opens on its prescribed defaults and says so.
+///
+/// `0` means "never auto-refresh" in the authored vocabulary — the
+/// zero-opinion floor — and is honoured as `DEFAULT_POLL` here only because
+/// the feed has no manual-only mode yet; that gap is
+/// `pending-banken: manual-refresh-mode` rather than a silent reinterpretation
+/// of an authored zero.
+fn refresh_interval() -> std::time::Duration {
+    let ms = banken_config::BankenConfig::discover_effective()
+        .map(|c| c.refresh_interval_ms)
+        .unwrap_or_else(|_| u64::try_from(banken::feed::DEFAULT_POLL.as_millis()).unwrap_or(1000));
+    if ms == 0 {
+        return banken::feed::DEFAULT_POLL;
+    }
+    std::time::Duration::from_millis(ms)
 }
 
 /// Without the `live` feature, `--live` is an explicit typed error — never

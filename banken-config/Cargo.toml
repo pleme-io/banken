@@ -40,3 +40,8 @@ ishou-tokens = "0.1"
 
 [lints.clippy]
 pedantic = "warn"
+
+[dev-dependencies]
+# For the overlay-precedence test: a real temp directory, because the claim
+# being proven is about FILES on disk and their merge order.
+tempfile = "3"

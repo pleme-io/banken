@@ -15,6 +15,13 @@ path = "src/main.rs"
 
 [dependencies]
 banken-spec = { path = "../banken-spec" }
+# *** WIRED 2026-08-08. It was NOT a dependency of this binary. ***
+# `banken-config` shipped 16 green tests and carried both faces on one struct
+# (the `defbanken` Lisp keyword + `impl shikumi::TieredConfig`) — and nothing
+# consumed it. `main.rs` hardcoded the poll interval, so `:refresh-interval-ms`
+# was authored, tested, and IGNORED. A config surface nothing reads is worse
+# than no config surface, because it looks like it works.
+banken-config = { path = "../banken-config" }
 # The fleet keybinding vocabulary. banken uses awase's typed `Hotkey`/`Key`
 # to construct `banken_spec::chord::ActionChord` values and `KeyRepeatGate`
 # to debounce the held-key path on the three postigo action chords.
