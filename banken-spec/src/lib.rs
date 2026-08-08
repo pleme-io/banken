@@ -88,6 +88,7 @@ pub mod bindings;
 pub mod catalog;
 pub mod chord;
 pub mod closed;
+pub mod discovery;
 pub mod drill;
 pub mod env;
 pub mod error;
