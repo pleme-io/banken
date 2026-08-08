@@ -46,10 +46,7 @@ use banken_spec::nav::NavIntent;
 use banken_spec::types::{OperatorId, ResourceKind};
 use banken_spec::{Catalog, SpecError};
 use egaku_term::crossterm::style::Color;
-use egaku_term::{
-    __re::KeyMap,
-    AsyncApp, Buffer, Result as TermResult, Style,
-};
+use egaku_term::{__re::KeyMap, AsyncApp, Buffer, Result as TermResult, Style};
 
 use banken_spec::bancada::{BancadaSpec, SessionEnv};
 
@@ -1211,15 +1208,24 @@ mod tests {
     fn keymap_binds_the_postigo_chords() {
         let a = app();
         assert_eq!(
-            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::L)),
+            act(
+                a.keymap(),
+                awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::L)
+            ),
             Some(&Action::ObserveLogs)
         );
         assert_eq!(
-            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::S)),
+            act(
+                a.keymap(),
+                awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::S)
+            ),
             Some(&Action::DeclareScale)
         );
         assert_eq!(
-            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::SHIFT, awase::Key::S)),
+            act(
+                a.keymap(),
+                awase::Hotkey::new(awase::Modifiers::SHIFT, awase::Key::S)
+            ),
             Some(&Action::BreakGlass)
         );
     }
@@ -1257,7 +1263,10 @@ mod tests {
         // And `shell` is bound to the SHIFTED chord specifically — the whole
         // point of authoring `shift+s` instead of `S`.
         assert_ne!(
-            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::S)),
+            act(
+                a.keymap(),
+                awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::S)
+            ),
             Some(&Action::BreakGlass),
             "bare `s` must be DECLARE, never BREAK-GLASS",
         );
@@ -1309,11 +1318,17 @@ mod tests {
         let a = app();
         assert_eq!(a.bancadas().len(), 2, "both recipes launch from :pods");
         assert_eq!(
-            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::G)),
+            act(
+                a.keymap(),
+                awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::G)
+            ),
             Some(&Action::OpenBancada(0)),
         );
         assert_eq!(
-            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::SHIFT, awase::Key::G)),
+            act(
+                a.keymap(),
+                awase::Hotkey::new(awase::Modifiers::SHIFT, awase::Key::G)
+            ),
             Some(&Action::OpenBancada(1)),
         );
         // The index and the recipe agree — the whole reason both come from
@@ -1588,7 +1603,10 @@ mod tests {
     fn the_authored_confirm_chord_binds_to_enter() {
         let a = app();
         assert_eq!(
-            act(a.keymap(), awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::Return)),
+            act(
+                a.keymap(),
+                awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::Return)
+            ),
             Some(&Action::Confirm),
         );
     }

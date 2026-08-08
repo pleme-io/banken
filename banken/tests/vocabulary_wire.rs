@@ -9,6 +9,7 @@
 //! `pending-banken: keymap-derived-from-catalog`). These tests prove the
 //! derivation: change the authored spec, and the runtime moves.
 
+use awase::{Hotkey, Key, MatchContext, Modifiers};
 use banken::app::{Action, BankenApp, key_legend, keymap_from_catalog, unbound_action_names};
 use banken::fixture::FixtureClusterEnv;
 use banken::table::{IDENTITY_FIELD, PodTable, pod_columns};
@@ -16,14 +17,14 @@ use banken_spec::env::ClusterEnv;
 use banken_spec::testing::MockSessionEnv;
 use banken_spec::types::{OperatorId, ResourceKind};
 use banken_spec::{Catalog, SpecError, load_catalog};
-use awase::{Hotkey, Key, MatchContext, Modifiers};
 
 /// The action an authored chord resolves to in the app keymap.
 ///
 /// One lookup helper because the authored chord and the delivered chord are
 /// now the SAME type: there is no projection step to assert around.
 fn act(km: &awase::KeyMode<Action>, hk: Hotkey) -> Option<&Action> {
-    km.find_binding(&hk, &MatchContext::default()).map(|b| &b.action)
+    km.find_binding(&hk, &MatchContext::default())
+        .map(|b| &b.action)
 }
 
 /// An unmodified chord.
