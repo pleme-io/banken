@@ -219,7 +219,18 @@ async fn the_watch_plane_absorbs_from_a_real_cluster() {
     // Named explicitly rather than defaulted: this test asserts the STREAMING
     // path specifically (generation 1 for the whole initial set), and a silent
     // strategy change would make it assert something else while staying green.
-    let _task = env.spawn_pod_absorber(publisher, banken::absorb::ListStrategy::Streaming);
+    // The strategy is an INPUT, so this test is a differential harness across
+    // read paths rather than an assertion about one. Measured 2026-08-08: the
+    // same binary reaches `Synced` against camelot-eks on either strategy, and
+    // against a local engenho ONLY on `list-watch` — because engenho does not
+    // negotiate `sendInitialEvents`, so `streaming` degrades to a live tail
+    // whose terminating bookmark never arrives and `InitDone` never fires.
+    let strategy = std::env::var("BANKEN_LIST_STRATEGY")
+        .ok()
+        .and_then(|s| banken::absorb::ListStrategy::parse(&s))
+        .unwrap_or(banken::absorb::ListStrategy::Streaming);
+    println!("list strategy: {}", strategy.label());
+    let _task = env.spawn_pod_absorber(publisher, strategy);
 
     // Wait for the initial streaming list to complete. Generous, because a cold
     // exec-credential plugin invocation is ~0.7 s on its own.

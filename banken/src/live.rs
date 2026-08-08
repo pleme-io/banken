@@ -197,13 +197,13 @@ impl KubeClusterEnv {
                     let mut m = String::from("kubeconfig context `");
                     m.push_str(context);
                     m.push_str("`: ");
-                    m.push_str(&e.to_string());
+                    m.push_str(&Self::error_chain(&e));
                     m
                 },
             })?;
         let client = Client::try_from(config).map_err(|e| SpecError::Interp {
             phase: "connect".into(),
-            message: e.to_string(),
+            message: Self::error_chain(&e),
         })?;
         Ok(Self {
             client,
@@ -333,6 +333,29 @@ impl KubeClusterEnv {
         })
     }
 
+    /// Flatten an error and **every** error beneath it into one line.
+    ///
+    /// `kube::Error`'s own `Display` is the outermost wrapper only — a failed
+    /// apiserver connection renders as `ServiceError: client error (Connect)`,
+    /// which names the layer that noticed and nothing an operator can act on.
+    /// The cause (a TLS refusal, a closed port, an unknown authority) is one or
+    /// more `source()` hops down and was being discarded at every `map_err` in
+    /// this file.
+    ///
+    /// Measured against a local engenho apiserver: the flattened string is the
+    /// difference between `client error (Connect)` and the named TLS failure.
+    /// Built with `push_str`, never `format!()` (★★ TYPED EMISSION).
+    fn error_chain(e: &dyn std::error::Error) -> String {
+        let mut m = e.to_string();
+        let mut src = e.source();
+        while let Some(cause) = src {
+            m.push_str(": ");
+            m.push_str(&cause.to_string());
+            src = cause.source();
+        }
+        m
+    }
+
     async fn list_pods(&self, ns: Option<&str>) -> Result<Vec<Row>, SpecError> {
         let api: Api<Pod> = match ns {
             Some(ns) => Api::namespaced(self.client.clone(), ns),
@@ -343,7 +366,7 @@ impl KubeClusterEnv {
             .await
             .map_err(|e| SpecError::Interp {
                 phase: "list-resources".into(),
-                message: e.to_string(),
+                message: Self::error_chain(&e),
             })?;
         // `filter_map`, not `map`: an object with no `metadata.uid` is a
         // malformed read, and rendering it with a synthesised identity is the
