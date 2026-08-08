@@ -23,7 +23,7 @@ fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
     BankenApp::try_new(
         FixtureClusterEnv::new(),
         MockSessionEnv::new(),
-        OperatorId("drzzln".into()),
+        OperatorId::new("drzzln").expect("a literal witness is non-blank"),
         "source: fixture",
     )
     .expect("the shipped vocabulary must build an app")
@@ -103,7 +103,7 @@ fn no_dispatch_path_performs_a_live_mutation() {
         use banken_spec::types::ResourceKind;
         PodTable::pods(env.list_resources(ResourceKind::Pod, None).unwrap())
     };
-    let op = OperatorId("drzzln".into());
+    let op = OperatorId::new("drzzln").expect("a literal witness is non-blank");
 
     // OBSERVE → a read, never a write of either kind.
     let observe = dispatch(&table, RowAction::ViewLogs, &op, &env);

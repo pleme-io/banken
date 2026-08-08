@@ -1224,7 +1224,7 @@ mod tests {
         BankenApp::try_new(
             FixtureClusterEnv::new(),
             MockSessionEnv::new(),
-            OperatorId("drzzln".into()),
+            OperatorId::new("drzzln").expect("a literal witness is non-blank"),
             "source: fixture",
         )
         .expect("the shipped vocabulary must build an app")
@@ -1631,7 +1631,7 @@ mod tests {
         );
         let (_, argv, action) = &witnessed[0];
         assert!(argv.contains(&"exec".to_string()), "got {argv:?}");
-        assert_eq!(action.witness.0, "drzzln");
+        assert_eq!(action.witness.as_str(), "drzzln");
         assert!(action.runbook.0.contains("RUNBOOK"));
 
         match a.overlay() {

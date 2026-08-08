@@ -130,7 +130,7 @@ fn app_frame_renders_title_table_and_status_line() {
     let app = BankenApp::try_new(
         FixtureClusterEnv::new(),
         MockSessionEnv::new(),
-        OperatorId("drzzln".into()),
+        OperatorId::new("drzzln").expect("a literal witness is non-blank"),
         "source: fixture",
     )
     .expect("the shipped vocabulary must build an app");

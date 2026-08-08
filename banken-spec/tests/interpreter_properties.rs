@@ -46,7 +46,7 @@ fn shell_action() -> K8sActionSpec {
         // action's chord (see banken_spec::chord).
         keys: ActionChord::shifted(Key::S),
         legality: ActionLegality::BreakGlass {
-            witness: OperatorId("drzzln".into()),
+            witness: OperatorId::new("drzzln").expect("a literal witness is non-blank"),
             runbook: RunbookRef("clusters/rio/RUNBOOK.md".into()),
         },
         manifest_scope: ManifestScope::Full,
@@ -166,7 +166,10 @@ fn break_glass_is_the_only_live_arm_and_is_witnessed() {
     let out = apply(&shell_action(), &selection_with_spec(), &env).unwrap();
     match out {
         Outcome::GlassLogged(record) => {
-            assert_eq!(record.action.witness, OperatorId("drzzln".into()));
+            assert_eq!(
+                record.action.witness,
+                OperatorId::new("drzzln").expect("a literal witness is non-blank")
+            );
             assert_eq!(
                 record.action.runbook,
                 RunbookRef("clusters/rio/RUNBOOK.md".into())

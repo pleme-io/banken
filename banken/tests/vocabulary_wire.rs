@@ -378,7 +378,7 @@ fn the_app_builds_from_the_shipped_vocabulary() {
     let app = BankenApp::try_new(
         FixtureClusterEnv::new(),
         MockSessionEnv::new(),
-        OperatorId("drzzln".into()),
+        OperatorId::new("drzzln").expect("a literal witness is non-blank"),
         "source: fixture",
     )
     .expect("the shipped vocabulary must build an app");

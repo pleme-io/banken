@@ -155,7 +155,7 @@ fn app_counting(reads: Arc<AtomicUsize>) -> BankenApp<TickingEnv, UnwiredSession
     BankenApp::try_new(
         TickingEnv::sharing(reads),
         UnwiredSessionEnv::new(),
-        OperatorId("drzzln".into()),
+        OperatorId::new("drzzln").expect("a literal witness is non-blank"),
         "source: ticking",
     )
     .expect("the shipped vocabulary must build an app")

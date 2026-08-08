@@ -903,7 +903,7 @@ mod tests {
                 logs_pane(PanePlacement::Root),
                 exec_pane(PanePlacement::Below),
             ],
-            witness: Some(OperatorId("drzzln".into())),
+            witness: Some(OperatorId::new("drzzln").expect("a literal witness is non-blank")),
             runbook: Some(RunbookRef("clusters/rio/RUNBOOK.md".into())),
         }
     }
@@ -921,7 +921,7 @@ mod tests {
         );
         match glass_recipe().legality().expect("glass recipe") {
             ActionLegality::BreakGlass { witness, runbook } => {
-                assert_eq!(witness.0, "drzzln");
+                assert_eq!(witness.as_str(), "drzzln");
                 assert!(runbook.0.contains("RUNBOOK"));
             }
             other => panic!("a mutating recipe must be BREAK-GLASS, got {other:?}"),
@@ -930,7 +930,7 @@ mod tests {
         // flips the class, with nothing else changed.
         let mut flipped = observe_recipe();
         flipped.panes[1].command.effect = CommandEffect::Mutates;
-        flipped.witness = Some(OperatorId("drzzln".into()));
+        flipped.witness = Some(OperatorId::new("drzzln").expect("a literal witness is non-blank"));
         flipped.runbook = Some(RunbookRef("R.md".into()));
         assert_eq!(
             flipped.legality().expect("flipped").class(),
@@ -961,7 +961,7 @@ mod tests {
     #[test]
     fn a_witness_on_a_pure_observe_recipe_is_rejected() {
         let mut r = observe_recipe();
-        r.witness = Some(OperatorId("drzzln".into()));
+        r.witness = Some(OperatorId::new("drzzln").expect("a literal witness is non-blank"));
         r.runbook = Some(RunbookRef("R.md".into()));
         assert!(matches!(r.validate(), Err(SpecError::UnneededWitness(n)) if n == "pod-triage"),);
     }
@@ -1161,7 +1161,7 @@ mod tests {
         let (_, argv, action) = &witnessed[0];
         assert_eq!(argv[0], "kubectl");
         assert!(argv.contains(&"exec".to_string()));
-        assert_eq!(action.witness.0, "drzzln");
+        assert_eq!(action.witness.as_str(), "drzzln");
         assert!(action.runbook.0.contains("RUNBOOK"));
         assert_eq!(
             action.selector, "glass-camelot-eks-catch-catch-7d9f",

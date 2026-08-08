@@ -127,7 +127,7 @@ async fn a_named_context_renders_real_pod_rows() {
     let app = BankenApp::try_new(
         env,
         UnwiredSessionEnv::new(),
-        OperatorId("drzzln".into()),
+        OperatorId::new("drzzln").expect("a literal witness is non-blank"),
         {
             let mut label = String::from("source: LIVE ");
             label.push_str(&context);

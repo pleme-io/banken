@@ -41,8 +41,67 @@ pub struct StackRef(pub String);
 pub struct MergeflowRef(pub String);
 
 /// A typed operator identity — the BREAK-GLASS witness.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct OperatorId(pub String);
+///
+/// # Why the field is private
+///
+/// It was `pub String` with no validation until 2026-08-08, which meant
+/// `OperatorId(String::new())` compiled anywhere in the workspace and the
+/// BREAK-GLASS arm would happily record an **empty** witness. Combined with
+/// `WitnessedAction`'s then-public fields, the honest reading of the shipped
+/// seal was: *the method is absent (`E0599`, CI-guarded), but nobody had ever
+/// actually been witnessed.* The absent method was real; the witness was
+/// decoration.
+///
+/// Now the only constructor refuses a blank, so a witness that names nobody
+/// has no value. **Tier: parse-time-rejected, not truly-unrepresentable** — an
+/// author can still supply `"x"`, and no type can know whether a string names a
+/// human who consented. That ceiling is C-witness in BANKEN.md §IX and is not
+/// closable here; what closes here is the *empty* case, which was the one
+/// reachable by accident.
+///
+/// `Deserialize` is deliberately retained — a `(defbancada)`'s authored
+/// `:witness` must still parse — and it routes through the same check, so a
+/// blank in a `.lisp` file is a load error rather than a silent empty witness.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OperatorId(String);
+
+impl OperatorId {
+    /// The sole constructor. `None` for a blank or whitespace-only identity.
+    ///
+    /// # Errors / `None`
+    /// Returns `None` when `id` is empty or entirely whitespace — the case that
+    /// used to construct silently.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Option<Self> {
+        let id = id.into();
+        if id.trim().is_empty() {
+            return None;
+        }
+        Some(Self(id))
+    }
+
+    /// The identity as authored.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for OperatorId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for OperatorId {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(d)?;
+        Self::new(raw).ok_or_else(|| serde::de::Error::custom("an operator id cannot be blank"))
+    }
+}
 
 /// A reference to a `RUNBOOK.md` (the forced break-glass log target).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
@@ -406,4 +465,42 @@ pub struct K8sActionSpec {
     pub legality: ActionLegality,
     /// The manifest scope for DECLARE lowering — always `Full`.
     pub manifest_scope: ManifestScope,
+}
+
+#[cfg(test)]
+mod witness_tests {
+    use super::OperatorId;
+
+    /// A witness that names nobody must not be constructible.
+    ///
+    /// This is the fail-once for the 2026-08-08 seal. Before it, `OperatorId`
+    /// was `pub String` with no validation: `OperatorId(String::new())`
+    /// compiled anywhere in the workspace, so the BREAK-GLASS arm would record
+    /// an **empty** witness and every guard stayed green. The absent
+    /// mutate-method was real; the witness was decoration.
+    ///
+    /// Reverting the field to `pub String` turns this red at the type level —
+    /// `OperatorId::new` would no longer be the only way in.
+    #[test]
+    fn a_blank_witness_has_no_value() {
+        assert!(OperatorId::new("").is_none(), "empty names nobody");
+        assert!(OperatorId::new("   ").is_none(), "whitespace names nobody");
+        assert!(OperatorId::new("\t\n").is_none(), "whitespace names nobody");
+        assert!(OperatorId::new("drzzln").is_some());
+    }
+
+    /// The AUTHORED path is the one that matters: a blank `:witness` in a
+    /// `.lisp` must be a load error, not a silently-empty witness. `Deserialize`
+    /// routes through the same constructor precisely so the two faces cannot
+    /// disagree.
+    #[test]
+    fn a_blank_witness_is_refused_at_the_parse_boundary() {
+        let err = serde_json::from_str::<OperatorId>("\"\"")
+            .expect_err("a blank authored witness must not deserialize");
+        assert!(
+            err.to_string().contains("blank"),
+            "the refusal must name the cause, got: {err}"
+        );
+        assert!(serde_json::from_str::<OperatorId>("\"drzzln\"").is_ok());
+    }
 }

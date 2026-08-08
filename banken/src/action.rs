@@ -234,7 +234,7 @@ pub fn dispatch<E: ClusterEnv>(
             }
         }
         Ok(Outcome::GlassLogged(record)) => ActionResult::BreakGlassRecord {
-            witness: record.action.witness.0,
+            witness: record.action.witness.as_str().to_owned(),
             runbook: record.action.runbook.0,
             selector: record.action.selector,
             record_id: record.record_id,
@@ -403,7 +403,7 @@ mod tests {
         // class) — otherwise the demo diverges from the citizenship
         // catalog. Load the authored actions and cross-check.
         let authored = banken_spec::load_actions().expect("authored actions load");
-        let op = OperatorId("drzzln".into());
+        let op = OperatorId::new("drzzln").expect("a literal witness is non-blank");
         for (action, key) in [
             (RowAction::ViewLogs, "l"),
             (RowAction::DeclareScale, "s"),
@@ -429,7 +429,7 @@ mod tests {
     fn declare_dispatch_produces_a_full_manifest_preview() {
         let t = table();
         let env = FixtureClusterEnv::new();
-        let op = OperatorId("drzzln".into());
+        let op = OperatorId::new("drzzln").expect("a literal witness is non-blank");
         let result = dispatch(&t, RowAction::DeclareScale, &op, &env);
         match result {
             ActionResult::DeclarePreview {
@@ -449,7 +449,7 @@ mod tests {
     fn observe_dispatch_reads_logs_and_mutates_nothing() {
         let t = table();
         let env = FixtureClusterEnv::new();
-        let op = OperatorId("drzzln".into());
+        let op = OperatorId::new("drzzln").expect("a literal witness is non-blank");
         let result = dispatch(&t, RowAction::ViewLogs, &op, &env);
         match result {
             ActionResult::Observed { lines, .. } => assert!(!lines.is_empty()),
@@ -461,7 +461,7 @@ mod tests {
     fn break_glass_dispatch_is_witnessed() {
         let t = table();
         let env = FixtureClusterEnv::new();
-        let op = OperatorId("drzzln".into());
+        let op = OperatorId::new("drzzln").expect("a literal witness is non-blank");
         let result = dispatch(&t, RowAction::BreakGlassShell, &op, &env);
         match result {
             ActionResult::BreakGlassRecord {

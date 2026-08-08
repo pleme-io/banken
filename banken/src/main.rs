@@ -48,7 +48,7 @@ fn main() {
         }
     };
 
-    let operator = OperatorId("drzzln".into());
+    let operator = OperatorId::new("drzzln").expect("a literal witness is non-blank");
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

@@ -87,7 +87,7 @@ fn a_mutating_recipe_is_break_glass_and_an_observing_one_is_not() {
     assert!(glass.mutates(), "it stages `kubectl exec`");
     match glass.legality().expect("legal") {
         ActionLegality::BreakGlass { witness, runbook } => {
-            assert_eq!(witness.0, "drzzln");
+            assert_eq!(witness.as_str(), "drzzln");
             assert!(runbook.0.contains("RUNBOOK"));
         }
         other => panic!("a recipe staging a live effect must be BREAK-GLASS, got {other:?}"),
@@ -239,7 +239,7 @@ fn opening_the_break_glass_recipe_routes_the_exec_through_the_witnessed_arm() {
         argv.contains(&"exec".to_string()) && argv.contains(&"catch".to_string()),
         "the witnessed argv is the resolved exec: {argv:?}",
     );
-    assert_eq!(action.witness.0, "drzzln");
+    assert_eq!(action.witness.as_str(), "drzzln");
     assert_eq!(action.runbook.0, "clusters/rio/RUNBOOK.md");
     assert_eq!(action.selector, "glass-camelot-eks-catch-catch-7d9f4c");
 }

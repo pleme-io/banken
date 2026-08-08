@@ -242,7 +242,7 @@ mod tests {
                 name: "shell".into(),
                 keys: ActionChord::shifted(Key::S),
                 legality: ActionLegality::BreakGlass {
-                    witness: OperatorId("drzzln".into()),
+                    witness: OperatorId::new("drzzln").expect("a literal witness is non-blank"),
                     runbook: RunbookRef("clusters/rio/RUNBOOK.md".into()),
                 },
                 manifest_scope: ManifestScope::Full,
