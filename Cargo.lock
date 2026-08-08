@@ -206,7 +206,7 @@ dependencies = [
 
 [[package]]
 name = "banken"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "banken-config"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "ishou-tokens",
  "serde",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "banken-spec"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "awase",
  "egaku",
