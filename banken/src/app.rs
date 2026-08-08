@@ -230,6 +230,11 @@ pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
     /// watching. The watch absorber does not need one: its task ends when the
     /// stream does.
     absorb_stop: Option<crate::absorb::PollGuard>,
+    /// The absorb generation already folded into the table.
+    ///
+    /// Starts at `0`, which is `Snapshot::empty()`'s generation, so a freshly
+    /// built app whose absorber has not published yet does no work.
+    applied_generation: u64,
 }
 
 impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
@@ -301,6 +306,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             legend_parts: key_legend_parts(catalog),
             absorb: None,
             absorb_stop: None,
+            applied_generation: 0,
         })
     }
 
@@ -415,10 +421,46 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     /// The `&mut self` apply half of the wakeup. Separate from
     /// [`Self::refresh`] because it performs **no read** — the read already
     /// happened, off this task. A no-op when there is no absorber.
+    /// # Cost, measured — and why the generation gate is here
+    ///
+    /// `set_rows` takes a `Vec<Row>`, so reaching it from the published
+    /// `Arc<[Row]>` costs a **deep clone of every `Row` and every `String` in
+    /// every cell**. Measured at N=10 000: `Arc::to_vec()` alone is **10.16 ms
+    /// of this function's 14.9 ms, and 4.0 MB of allocation per call**.
+    ///
+    /// The gate below removes every *redundant* one of those. It does not
+    /// remove the copy on a real change — that needs `egaku::TableView` to
+    /// accept an `Arc<[Row]>` it can adopt by refcount, which is an **egaku**
+    /// change and must not be made from this repo (QUADRO T1: widgets live in
+    /// egaku, never in an app). `pending-banken: adopt-arc-rows`.
+    ///
+    /// The gate is not redundant with the absorb plane's content hash: the hash
+    /// decides whether to **wake**, this decides whether to **rebuild the
+    /// table**. They are different questions the moment anything other than a
+    /// wake calls this — and `on_wake` is not the only caller a future arm can
+    /// add.
+    ///
+    /// # The symptom IS the cost, which is why the test asserts on bytes
+    ///
+    /// A redundant apply has **no user-visible effect** — `set_rows` preserves
+    /// the selection, so an earlier cursor-survival test for this gate **passed
+    /// with the gate deleted** and was vacuous. `a_redundant_apply_allocates_nothing`
+    /// asserts on a counting allocator instead; deleting the arm below turns it
+    /// red with a non-zero byte count (measured: 784 B on the fixture).
     pub fn apply_feed(&mut self) {
-        if let Some(rows) = self.absorb.as_ref().map(|d| d.snapshot().rows()) {
-            self.set_rows(rows.to_vec());
+        let Some(despensa) = self.absorb.as_ref() else {
+            return;
+        };
+        let snapshot = despensa.snapshot();
+        let generation = snapshot.generation();
+        // `0` is the pre-absorption generation, and `applied_generation` starts
+        // there too — so an absorber that has published nothing yet correctly
+        // does no work, rather than rebuilding the table from an empty set.
+        if generation == self.applied_generation {
+            return;
         }
+        self.applied_generation = generation;
+        self.set_rows(snapshot.rows().to_vec());
     }
 
     /// The stop flag for the poll absorber, if one is running.

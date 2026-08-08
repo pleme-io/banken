@@ -117,6 +117,36 @@ fn unused(phase: &str) -> SpecError {
     }
 }
 
+/// A counting allocator, so "this call is free" is an assertion rather than a
+/// hope. Scoped to this test binary only.
+struct Counting;
+
+static ALLOCATED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+unsafe impl std::alloc::GlobalAlloc for Counting {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        ALLOCATED.fetch_add(l.size(), Ordering::Relaxed);
+        unsafe { std::alloc::System.alloc(l) }
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(p, l) }
+    }
+}
+
+#[global_allocator]
+static COUNTING_ALLOC: Counting = Counting;
+
+struct CountingHandle;
+static COUNTING: CountingHandle = CountingHandle;
+impl CountingHandle {
+    fn reset(&self) {
+        ALLOCATED.store(0, Ordering::SeqCst);
+    }
+    fn bytes(&self) -> usize {
+        ALLOCATED.load(Ordering::SeqCst)
+    }
+}
+
 fn app() -> BankenApp<TickingEnv, UnwiredSessionEnv> {
     app_counting(Arc::new(AtomicUsize::new(0)))
 }
@@ -209,5 +239,50 @@ async fn dropping_the_app_stops_the_feed() {
     assert!(
         after <= at_drop + 1,
         "the feed must stop when the app drops: {at_drop} reads at drop, {after} after 200ms"
+    );
+}
+
+/// A redundant apply must ALLOCATE NOTHING.
+///
+/// `apply_feed` reaches `egaku::TableView::set_rows` through a `Vec<Row>`, so
+/// every call deep-clones every `Row` and every `String` in every cell —
+/// measured elsewhere at **10.16 ms and 4.0 MB per call at N=10 000**. The
+/// generation gate removes every redundant one.
+///
+/// # Why this asserts on BYTES and not on the cursor
+///
+/// An earlier version of this test moved the selection and asserted it
+/// survived. **It passed with the gate deleted** — `set_rows` preserves the
+/// selection index, so a redundant apply has no user-visible symptom at all.
+/// That test was vacuous: it would have shipped a gate nobody could prove.
+///
+/// The cost IS the symptom, so the cost is what gets asserted. Deleting the
+/// `if generation == self.applied_generation { return }` arm turns this red
+/// with a non-zero byte count.
+#[tokio::test]
+async fn a_redundant_apply_allocates_nothing() {
+    let mut app = app().with_feed(Duration::from_millis(20));
+    let feed = app.absorber().expect("absorber attached");
+    assert!(feed_reached(feed, 2).await, "the feed must produce");
+
+    // First apply does real work — it must, or the measurement below is
+    // measuring an app that never absorbed anything.
+    COUNTING.reset();
+    app.apply_feed();
+    let first = COUNTING.bytes();
+    assert!(
+        first > 0,
+        "the first apply must actually build the table; it allocated {first} bytes"
+    );
+
+    // Second apply, same generation: the gate must make it free.
+    COUNTING.reset();
+    app.apply_feed();
+    let redundant = COUNTING.bytes();
+
+    assert_eq!(
+        redundant, 0,
+        "a redundant apply must allocate nothing; it allocated {redundant} bytes \
+         (the first, real, apply allocated {first})"
     );
 }
