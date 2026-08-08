@@ -146,6 +146,8 @@ fn observe_action_mutates_nothing() {
     let env = MockClusterEnv::new().with_row(
         ResourceKind::Deployment,
         Row {
+            uid: banken_spec::env::Uid::new("test-uid").expect("non-blank"),
+            version: None,
             name: "catch".into(),
             namespace: Some("catch".into()),
             cells: vec![("READY".into(), "2/2".into())],
@@ -207,6 +209,8 @@ fn observe_reads_return_seeded_rows() {
         .with_row(
             ResourceKind::Pod,
             Row {
+                uid: banken_spec::env::Uid::new("test-uid").expect("non-blank"),
+                version: None,
                 name: "catch-0".into(),
                 namespace: Some("catch".into()),
                 cells: vec![],
@@ -215,6 +219,8 @@ fn observe_reads_return_seeded_rows() {
         .with_row(
             ResourceKind::Pod,
             Row {
+                uid: banken_spec::env::Uid::new("test-uid").expect("non-blank"),
+                version: None,
                 name: "catch-1".into(),
                 namespace: Some("catch".into()),
                 cells: vec![],

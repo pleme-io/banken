@@ -277,12 +277,19 @@ impl KubeClusterEnv {
                     Ok(event) => {
                         let folded = match event {
                             watcher::Event::Init => replica.fold(Ev::Init),
-                            watcher::Event::InitApply(p) => {
-                                replica.fold(Ev::InitApply(pod_to_row(p)))
-                            }
+                            watcher::Event::InitApply(p) => match pod_to_row(p) {
+                                Some(r) => replica.fold(Ev::InitApply(r)),
+                                None => Folded::Quiet,
+                            },
                             watcher::Event::InitDone => replica.fold(Ev::InitDone),
-                            watcher::Event::Apply(p) => replica.fold(Ev::Apply(pod_to_row(p))),
-                            watcher::Event::Delete(p) => replica.fold(Ev::Delete(pod_to_row(p))),
+                            watcher::Event::Apply(p) => match pod_to_row(p) {
+                                Some(r) => replica.fold(Ev::Apply(r)),
+                                None => Folded::Quiet,
+                            },
+                            watcher::Event::Delete(p) => match pod_to_row(p) {
+                                Some(r) => replica.fold(Ev::Delete(r)),
+                                None => Folded::Quiet,
+                            },
                         };
                         // Only a set-changing fold reaches the publisher, and the
                         // publisher gates again on the content hash. Two gates
@@ -325,14 +332,27 @@ impl KubeClusterEnv {
                 phase: "list-resources".into(),
                 message: e.to_string(),
             })?;
-        Ok(list.items.into_iter().map(pod_to_row).collect())
+        // `filter_map`, not `map`: an object with no `metadata.uid` is a
+        // malformed read, and rendering it with a synthesised identity is the
+        // failure this type exists to remove. The apiserver always sets uid, so
+        // in practice this drops nothing.
+        Ok(list.items.into_iter().filter_map(pod_to_row).collect())
     }
 }
 
 /// Project a `k8s_openapi` Pod into a banken [`Row`] keyed by the authored
 /// `(defk8sview "pods")` fields (`ready`/`phase`/`restarts`/`age`, rendered
 /// under the headers READY/STATUS/RESTARTS/AGE). Read-only projection.
-fn pod_to_row(pod: Pod) -> Row {
+/// Returns `None` for an object carrying **no `metadata.uid`**.
+///
+/// That is not a defensive `unwrap_or_default` — a uid-less object is not a
+/// thing banken observed, it is a malformed read, and the apiserver always sets
+/// `metadata.uid`. Synthesising one from `(namespace, name)` would reintroduce
+/// exactly the non-unique identity this type exists to remove, and would do it
+/// invisibly. The caller counts what it skipped rather than rendering it.
+fn pod_to_row(pod: Pod) -> Option<Row> {
+    let uid = banken_spec::env::Uid::new(pod.metadata.uid.clone().unwrap_or_default())?;
+    let version = pod.metadata.resource_version.clone();
     let name = pod.metadata.name.clone().unwrap_or_default();
     let namespace = pod.metadata.namespace.clone();
 
@@ -374,9 +394,11 @@ fn pod_to_row(pod: Pod) -> Row {
         s
     };
 
-    Row {
+    Some(Row {
+        uid,
         name,
         namespace,
+        version,
         // Keyed by the AUTHORED `(defk8sview "pods")` `:field` values, same
         // as the fixture reader — see `banken::table::Column::field`.
         cells: vec![
@@ -387,7 +409,7 @@ fn pod_to_row(pod: Pod) -> Row {
             // (needs a clock); shown as "-" rather than a wrong value.
             ("age".into(), "-".into()),
         ],
-    }
+    })
 }
 
 impl ClusterEnv for KubeClusterEnv {
@@ -490,6 +512,13 @@ mod tests {
 
     fn pod_with(name: &str, phase: &str, waiting_reason: Option<&str>, ready: bool) -> Pod {
         let mut pod = Pod::default();
+        // A real apiserver ALWAYS sets these two, so a test double that omits
+        // them is not modelling a cluster — it is modelling a malformed read.
+        // (It briefly did: both projection tests failed on
+        // `pod_to_row(..).expect("the fixture pod carries a uid")` the moment
+        // uid became load-bearing, which is the seal doing its job.)
+        pod.metadata.uid = Some(format!("uid-{name}"));
+        pod.metadata.resource_version = Some("1".into());
         pod.metadata.name = Some(name.into());
         pod.metadata.namespace = Some("catch".into());
         let mut cs = ContainerStatus {
@@ -520,7 +549,8 @@ mod tests {
     // read itself is untested this session; this exercises the projection.)
     #[test]
     fn pod_to_row_projects_canonical_columns() {
-        let row = pod_to_row(pod_with("catch-api", "Running", None, true));
+        let row = pod_to_row(pod_with("catch-api", "Running", None, true))
+            .expect("the fixture pod carries a uid");
         assert_eq!(row.name, "catch-api");
         let get = |k: &str| {
             row.cells
@@ -540,7 +570,8 @@ mod tests {
             "Pending",
             Some("CrashLoopBackOff"),
             false,
-        ));
+        ))
+        .expect("the fixture pod carries a uid");
         let status = row
             .cells
             .iter()

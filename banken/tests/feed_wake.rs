@@ -50,6 +50,8 @@ impl TickingEnv {
 
     fn pod(n: usize) -> Row {
         Row {
+            uid: banken_spec::env::Uid::new(format!("t-{n}")).expect("non-blank"),
+            version: None,
             name: format!("pod-{n}"),
             namespace: Some("default".into()),
             cells: vec![
@@ -78,9 +80,16 @@ impl ClusterEnv for TickingEnv {
         name: &str,
         _ns: Option<&str>,
     ) -> Result<Row, SpecError> {
+        // `..Row::default()` used to close this literal. It cannot now, and
+        // that is the point: `Row` no longer derives `Default`, so a row must
+        // be spelled out rather than half-invented. Every field here is an
+        // explicit test value.
         Ok(Row {
+            uid: banken_spec::env::Uid::new(format!("t-{name}")).expect("non-blank"),
+            version: None,
             name: name.to_owned(),
-            ..Row::default()
+            namespace: None,
+            cells: Vec::new(),
         })
     }
 

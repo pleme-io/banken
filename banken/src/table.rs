@@ -238,6 +238,8 @@ mod tests {
 
     fn row(name: &str, status: &str) -> Row {
         Row {
+            uid: banken_spec::env::Uid::new(format!("t-{name}")).expect("non-blank"),
+            version: None,
             name: name.into(),
             namespace: Some("catch".into()),
             cells: vec![

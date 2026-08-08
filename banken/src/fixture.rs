@@ -48,8 +48,18 @@ impl Default for FixtureClusterEnv {
 /// render + sort must handle.
 fn fixture_pods() -> Vec<Row> {
     let mk = |name: &str, ready: &str, status: &str, restarts: &str, age: &str| Row {
+        // A fixture INVENTS its uid, and that is stated rather than hidden: a
+        // real uid is assigned by the apiserver, so the fixture's is a stable
+        // stand-in that makes identity deterministic across runs. It is
+        // prefixed so it can never be mistaken for one a cluster issued.
+        uid: banken_spec::env::Uid::new(format!("fixture-{name}"))
+            .expect("a fixture uid is non-blank by construction"),
         name: name.into(),
         namespace: Some("catch".into()),
+        // A fixture has no resourceVersion — it was never observed from an
+        // apiserver. `None` is the honest value; a synthetic one would let a
+        // precondition be minted against a version nothing ever served.
+        version: None,
         // Keyed by the AUTHORED `(defk8sview "pods")` `:field` values
         // (`ready`/`phase`/`restarts`/`age`), not by the header text. The
         // authored field is the join key; keying by header made the authored

@@ -34,14 +34,75 @@ use crate::{
 
 // ── Read-path value types (the afferent surface) ───────────────────
 
+/// A Kubernetes object identity — `metadata.uid`.
+///
+/// # Why this exists, and why it is not a `String`
+///
+/// `Row::identity()` used to be the bare `name`. In the all-namespaces view
+/// banken actually ships, two pods called `api` in different namespaces were
+/// therefore **one identity** — and `(namespace, name)` is no better, because
+/// it is unique only *at an instant*. client-go's own `shared_informer.go`
+/// documents the recycle trap verbatim: delete object `X` with uid `A`, create
+/// object `X` with uid `B`, and a watcher is notified of **an update from the
+/// first to the second**, never of the delete-then-create.
+///
+/// Every precondition banken will ever mint — a grip on a row before a
+/// live-effect action, a `resourceVersion` on a patch, an observed reclaim —
+/// is addressed by this value. Keyed on a name, all of them could be minted
+/// against the wrong object while every guard stayed green.
+///
+/// The field is private with a fallible constructor for the same reason
+/// [`crate::types::OperatorId`]'s is: a blank identity names nothing, and was
+/// constructible by accident.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Uid(String);
+
+impl Uid {
+    /// The sole constructor. `None` for a blank identity.
+    #[must_use]
+    pub fn new(uid: impl Into<String>) -> Option<Self> {
+        let uid = uid.into();
+        if uid.trim().is_empty() {
+            return None;
+        }
+        Some(Self(uid))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Uid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// One row of an observed resource table — an ordered set of typed
 /// cells, plus the resource's identity for drill-down.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// # `Default` is deliberately absent
+///
+/// It used to derive it, which made an all-empty `Row` constructible — so a
+/// cache miss returning `Row::default()` renders as a blank **real** row rather
+/// than as an absence. A row is something banken OBSERVED; there is no such
+/// thing as a default one.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
+    /// The object's `metadata.uid` — the identity, never the name.
+    pub uid: Uid,
     /// Resource name.
     pub name: String,
     /// Namespace, if namespaced.
     pub namespace: Option<String>,
+    /// The object's `metadata.resourceVersion` at the moment it was observed.
+    ///
+    /// Opaque and **not orderable** — k8s only guarantees ordering from
+    /// apiserver 1.35, and `camelot-eks` is v1.33. Compare it for EQUALITY to
+    /// answer "has this object moved since I looked", never with `<`.
+    pub version: Option<String>,
     /// Column-keyed cell values (`"READY" -> "1/1"`, …). Ordered so a
     /// renderer draws deterministically.
     pub cells: Vec<(String, String)>,
@@ -67,8 +128,9 @@ pub struct Row {
 /// `find` already yields, and why the reserved identity field is handled by
 /// the view rather than synthesised into `cells`.
 impl egaku::TableRow for Row {
+    /// The **uid**, never the name — see [`Uid`] for why the name was wrong.
     fn identity(&self) -> &str {
-        &self.name
+        self.uid.as_str()
     }
 
     fn cell(&self, field: &str) -> Option<&str> {

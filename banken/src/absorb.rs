@@ -445,6 +445,8 @@ mod tests {
 
     fn row(ns: &str, name: &str, status: &str) -> Row {
         Row {
+            uid: banken_spec::env::Uid::new(format!("t-{ns}-{name}")).expect("non-blank"),
+            version: None,
             name: name.to_owned(),
             namespace: Some(ns.to_owned()),
             cells: vec![("STATUS".to_owned(), status.to_owned())],
@@ -558,5 +560,77 @@ mod tests {
         let (d, _p) = channel();
         assert_eq!(*d.snapshot().phase(), SyncPhase::Absorbing);
         assert_eq!(d.snapshot().generation(), 0);
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    use banken_spec::env::Uid;
+
+    fn row_uid(uid: &str, ns: &str, name: &str, status: &str) -> Row {
+        Row {
+            uid: Uid::new(uid).expect("non-blank"),
+            name: name.to_owned(),
+            namespace: Some(ns.to_owned()),
+            version: None,
+            cells: vec![("STATUS".to_owned(), status.to_owned())],
+        }
+    }
+
+    /// THE name-recycle case, and the reason `Row` carries a uid at all.
+    ///
+    /// client-go's `shared_informer.go` documents the trap verbatim: delete
+    /// object `X` with uid `A`, create object `X` with uid `B`, and a watcher
+    /// is notified of **an update from the first to the second** — never of the
+    /// delete-then-create.
+    ///
+    /// # What this asserts, and what it deliberately does NOT
+    ///
+    /// The replica stays keyed on `(namespace, name)` and that is CORRECT: k8s
+    /// guarantees that pair unique at any instant, and because the recycle
+    /// arrives as an update with no delete, uid-keying would leave the DEAD
+    /// object in the table forever. So the row set is right either way, and an
+    /// earlier version of this test asserted `rows[0].uid == "B"` — which
+    /// passed with the fix reverted, because it read a FIELD rather than the
+    /// behaviour.
+    ///
+    /// The consequence that actually matters is that the row's **identity**
+    /// changes even though its name does not, so anything holding the old
+    /// identity can detect the swap. Reverting `TableRow::identity` to
+    /// `&self.name` turns this red.
+    #[test]
+    fn a_recycled_name_changes_the_rows_identity() {
+        use egaku::TableRow;
+        let mut r = Replica::default();
+
+        r.fold(Ev::Apply(row_uid("A", "catch", "api", "Running")));
+        let before = r.rows()[0].identity().to_owned();
+
+        // The recycle, as a watcher actually delivers it: one Apply, no Delete.
+        r.fold(Ev::Apply(row_uid("B", "catch", "api", "Pending")));
+        let after = r.rows()[0].identity().to_owned();
+
+        assert_eq!(r.rows().len(), 1, "one live object at this (ns, name)");
+        assert_ne!(
+            before, after,
+            "the identity must change across a recycle; on the bare name it did not, \
+             and a precondition minted before the swap would still have matched after it"
+        );
+    }
+
+    /// Two objects sharing a name in different namespaces are two rows — and
+    /// under the old bare-name identity they were ONE, in the all-namespaces
+    /// view banken actually ships.
+    #[test]
+    fn same_name_different_namespace_are_distinct_identities() {
+        use egaku::TableRow;
+        let a = row_uid("uid-a", "alpha", "api", "Running");
+        let b = row_uid("uid-b", "beta", "api", "Running");
+        assert_ne!(
+            a.identity(),
+            b.identity(),
+            "identity must be the uid; on the bare name these collided"
+        );
     }
 }
