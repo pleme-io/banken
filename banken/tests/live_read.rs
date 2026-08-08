@@ -280,3 +280,47 @@ async fn the_watch_plane_absorbs_from_a_real_cluster() {
         snap.generation()
     );
 }
+
+/// **The discovery gate.** Two aggregated requests build a real RESTMapper,
+/// and `po` resolves to Pod against an actual apiserver.
+///
+/// This is the thing kube-rs structurally cannot do (`ApiResource` discards
+/// shortNames), so a green unit test over a fixture document proves the
+/// parser and nothing about the wire. Only a real server proves the `Accept`
+/// negotiation — which is exactly the class of gap that let `--features live`
+/// compile clean for weeks while the first live read panicked.
+#[tokio::test]
+#[ignore = "reads a real cluster; run with --ignored and BANKEN_LIVE_CONTEXT set"]
+async fn discovery_resolves_shortnames_against_a_real_cluster() {
+    let ctx = required_context();
+    let env = banken::live::KubeClusterEnv::connect_with_context(&ctx)
+        .await
+        .expect("connect to the named context");
+
+    let mapper = env
+        .discover()
+        .await
+        .expect("the server must serve aggregated discovery (no silent fallback by design)");
+
+    let n = mapper.entries().len();
+    assert!(n > 0, "a real cluster describes at least one resource");
+    println!("discovered {n} resources from `{ctx}` in TWO requests (/api + /apis)");
+
+    // The payoff: a short name resolves, carrying the SERVER's plural.
+    let pods = mapper
+        .resolve("po")
+        .expect("`po` must resolve on any cluster");
+    assert_eq!(pods.kind(), "Pod");
+    assert_eq!(pods.plural(), "pods");
+    assert!(pods.is_namespaced());
+    assert!(pods.is_listable(), "pods must be list+watch-able");
+
+    // And every entry carries a server-stated plural — never a guess.
+    for e in mapper.entries() {
+        assert!(
+            !e.plural().is_empty(),
+            "{} carries no plural; a guessed one is what 404s silently",
+            e.kind()
+        );
+    }
+}

@@ -35,6 +35,30 @@
 //! | 4 | a **subresource** treated as a listable resource | subresources are parsed into their parent, never aliased | truly-unrep *within this surface* |
 //! | 5 | a resource **that cannot be listed** offered for absorption | [`ApiResourceEntry::is_listable`] gates it; [`RestMapper::listable`] is the absorber's only door | only-mitigated (C-list-gate: a caller may still read `entries()` directly) |
 //!
+//! # `pending-banken: alias-group-preference` — an open decision, not a bug
+//!
+//! Strict refusal is right for a *genuine* collision and may be too strict for
+//! the common one. Measured on camelot-eks: `pods` is served by **core/v1 AND
+//! `metrics.k8s.io/v1beta1`**, so a bare `pods` is `Ambiguous` here — while
+//! `kubectl get pods` happily returns core pods, because client-go applies a
+//! deterministic group preference (core wins).
+//!
+//! Three candidate rules, undecided on purpose:
+//!
+//! 1. **Strict (today).** Refuse; the operator writes `pods` → refused →
+//!    `pods.metrics.k8s.io` or a core-qualified form. Safest, noisiest.
+//! 2. **Core-preferred.** If exactly one candidate is the core group, take it
+//!    and say so. Matches kubectl, still deterministic and *stated* rather
+//!    than accidental — and non-core collisions (the ones that actually
+//!    surprise people) still refuse.
+//! 3. **Preference list**, kubectl-style.
+//!
+//! Nothing forces the choice yet: the mapper is **not wired into the app**, so
+//! today's strictness breaks nothing. Deciding it while wiring — against a
+//! real cluster — beats guessing now. Rule 2 is the likely answer; it is not
+//! yet implemented, and this row exists so that is not mistaken for an
+//! oversight.
+//!
 //! **State 2 is the same class this repo fixed one layer over on the same day.**
 //! A `KUBECONFIG` merge list can declare one context name twice, and kube-rs
 //! resolves it first-wins and silently (see `banken::live::resolve_context`).
@@ -54,6 +78,19 @@ use crate::error::SpecError;
 /// `Accept: application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList`.
 #[derive(Debug, Deserialize)]
 struct ApiGroupDiscoveryList {
+    /// **Validated, not decorative.** A server that does not implement
+    /// aggregated discovery ignores the `Accept` header and answers the legacy
+    /// `APIGroupList` — whose payload lives under `groups`, not `items`. That
+    /// document deserializes into this struct *perfectly happily*, yielding
+    /// `items: []`, i.e. **a blind reading presented as an empty one**
+    /// (`AFLUENTE` Gate-0 state 2).
+    ///
+    /// Measured 2026-08-08 against a local engenho apiserver, which returned
+    /// `{"kind":"APIGroupList",...}` and produced a mapper describing zero
+    /// resources with no error at all. Checking `kind` converts that into a
+    /// refusal naming what actually came back.
+    #[serde(default)]
+    kind: String,
     #[serde(default)]
     items: Vec<ApiGroupDiscovery>,
 }
@@ -298,6 +335,38 @@ pub struct RestMapper {
 }
 
 impl RestMapper {
+    /// The only document kind this parser accepts.
+    const AGGREGATED_KIND: &'static str = "APIGroupDiscoveryList";
+
+    /// Merge two parsed maps — the **core** group (`/api`) and the **named**
+    /// groups (`/apis`).
+    ///
+    /// # Why this exists at all
+    ///
+    /// Kubernetes serves the core group at a *different endpoint*. `/apis`
+    /// carries the 50-odd named groups and **does not contain core at all**.
+    /// Measured against camelot-eks 2026-08-08: `/apis` returned 53 groups
+    /// with **zero** core entries, so `pods` resolved to
+    /// **`metrics.k8s.io/pods`** — a real resource, the wrong one — and `po`
+    /// did not resolve at all, because core's `shortNames: ["po"]` was never
+    /// fetched. `/api` returns exactly one group, named `""`, holding it.
+    ///
+    /// The fixture tests could not catch this: a hand-written document
+    /// naturally includes a core group, so they exercised a shape the wire
+    /// never produces from one endpoint.
+    #[must_use]
+    pub fn merged(mut self, other: Self) -> Self {
+        let offset = self.entries.len();
+        self.entries.extend(other.entries);
+        for (alias, idxs) in other.by_alias {
+            self.by_alias
+                .entry(alias)
+                .or_default()
+                .extend(idxs.into_iter().map(|i| i + offset));
+        }
+        self
+    }
+
     /// Parse an `APIGroupDiscoveryList` document.
     ///
     /// # Errors
@@ -314,6 +383,30 @@ impl RestMapper {
                     m
                 },
             })?;
+
+        // The document-kind gate. See `ApiGroupDiscoveryList::kind`.
+        if doc.kind != Self::AGGREGATED_KIND {
+            return Err(SpecError::Interp {
+                phase: "discovery".into(),
+                message: {
+                    let mut m = String::from("expected an ");
+                    m.push_str(Self::AGGREGATED_KIND);
+                    m.push_str(", got `");
+                    m.push_str(if doc.kind.is_empty() {
+                        "<no kind field>"
+                    } else {
+                        &doc.kind
+                    });
+                    m.push_str(
+                        "`. The server does not implement aggregated discovery \
+                         (apidiscovery.k8s.io/v2) and ignored the Accept header. \
+                         banken refuses rather than falling back to per-group \
+                         discovery, which would silently cost N+2 requests.",
+                    );
+                    m
+                },
+            });
+        }
 
         let mut entries = Vec::new();
         for group in doc.items {
@@ -578,6 +671,41 @@ mod tests {
             other => panic!("a create-only resource must be NotListable, got {other:?}"),
         }
         assert!(m.listable("pods").is_ok());
+    }
+
+    /// **A blind reading must never present as an empty one.**
+    ///
+    /// A server without aggregated discovery ignores the `Accept` header and
+    /// answers the LEGACY `APIGroupList`, whose payload is under `groups`.
+    /// That document deserializes into our aggregated struct perfectly happily
+    /// and yields `items: []` — a mapper describing zero resources, with no
+    /// error. banken would then report "this cluster has no API resources",
+    /// which is false about every cluster that has ever existed.
+    ///
+    /// Caught by running against a real engenho apiserver on 2026-08-08; the
+    /// seven fixture tests above all passed while this hole was open, because
+    /// every one of them fed a well-formed aggregated document. Only a server
+    /// that disagrees can find this.
+    #[test]
+    fn a_legacy_discovery_document_is_refused_not_read_as_empty() {
+        // The real shape engenho returned, trimmed.
+        let legacy = r#"{"kind":"APIGroupList","apiVersion":"v1","groups":[
+            {"name":"apps","versions":[{"groupVersion":"apps/v1","version":"v1"}]}]}"#;
+        let err = RestMapper::from_aggregated_json(legacy)
+            .expect_err("a legacy APIGroupList must be REFUSED, never read as empty");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("APIGroupList"),
+            "the refusal must name what actually came back: {msg}"
+        );
+        assert!(
+            msg.contains("aggregated discovery"),
+            "and say which capability is missing: {msg}"
+        );
+
+        // A document with no `kind` at all is equally refused — absence is not
+        // permission.
+        assert!(RestMapper::from_aggregated_json(r#"{"items":[]}"#).is_err());
     }
 
     /// An unknown alias names near-misses rather than just failing.

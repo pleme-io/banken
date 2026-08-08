@@ -544,6 +544,65 @@ impl KubeClusterEnv {
         })
     }
 
+    /// The `Accept` header that asks for **aggregated** discovery.
+    ///
+    /// One request for the whole cluster's resource map, versus kube-rs's
+    /// `Discovery::run()` at N+2 sequential requests (68 against camelot-eks).
+    /// See `banken_spec::discovery` for why banken owns this at all.
+    const AGGREGATED_DISCOVERY_ACCEPT: &'static str =
+        "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList";
+
+    /// Fetch the cluster's resource map in ONE request.
+    ///
+    /// # Errors
+    ///
+    /// `SpecError::Interp { phase: "discovery" }` when the request fails or
+    /// the body is not an aggregated-discovery document.
+    ///
+    /// **There is deliberately no fallback to legacy per-group discovery.** A
+    /// silent downgrade to 68 requests is the same unannounced-degradation
+    /// class `ListStrategy` refuses to have an `Auto` variant for: it would
+    /// turn "this server is old" into a latency mystery instead of an answer.
+    /// A server that does not serve aggregated discovery gets a refusal that
+    /// says so.
+    /// **TWO** requests, not one, and that is a fact about Kubernetes rather
+    /// than a shortcoming here: the core group lives at `/api` and the named
+    /// groups at `/apis`, and **`/apis` does not contain core at all**.
+    /// Measured against camelot-eks: `/apis` alone yields 53 groups in which
+    /// `pods` resolves to `metrics.k8s.io/pods` — the wrong resource — and
+    /// `po` does not resolve, because core's short names were never fetched.
+    /// Still two requests against kube-rs's 68.
+    pub async fn discover(&self) -> Result<banken_spec::discovery::RestMapper, SpecError> {
+        let core = self.discover_at("/api").await?;
+        let named = self.discover_at("/apis").await?;
+        Ok(core.merged(named))
+    }
+
+    /// One aggregated-discovery request against a single endpoint.
+    async fn discover_at(
+        &self,
+        uri: &str,
+    ) -> Result<banken_spec::discovery::RestMapper, SpecError> {
+        let req = http::Request::builder()
+            .uri(uri)
+            .header(http::header::ACCEPT, Self::AGGREGATED_DISCOVERY_ACCEPT)
+            .body(Vec::new())
+            .map_err(|e| SpecError::Interp {
+                phase: "discovery".into(),
+                message: e.to_string(),
+            })?;
+        let body = self
+            .client
+            .clone()
+            .request_text(req)
+            .await
+            .map_err(|e| SpecError::Interp {
+                phase: "discovery".into(),
+                message: Self::error_chain(&e),
+            })?;
+        banken_spec::discovery::RestMapper::from_aggregated_json(&body)
+    }
+
     /// Flatten an error and **every** error beneath it into one line.
     ///
     /// `kube::Error`'s own `Display` is the outermost wrapper only — a failed

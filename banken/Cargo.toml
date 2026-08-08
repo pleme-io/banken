@@ -86,6 +86,10 @@ arc-swap = "1"
 # explicit `ensure_crypto_provider()` remains the belt to this braces.
 kube = { version = "0.99", default-features = false, features = ["client", "rustls-tls", "runtime"], optional = true }
 k8s-openapi = { version = "0.24", features = ["latest"], optional = true }
+# Only for building the ONE raw aggregated-discovery request (`Client::request_text`
+# takes an `http::Request`). Already in the lock at 1.4.2 via kube, so this is a
+# direct edge, not a new package.
+http = { version = "1", optional = true }
 anyhow = { version = "1", optional = true }
 # *** NOT redundant with kube's `rustls-tls`. Measured 2026-07-31. ***
 # kube 0.99's `rustls-tls` pulls rustls 0.23 with features
@@ -152,7 +156,7 @@ tear-types = { version = "0.1", optional = true }
 default = ["live", "tear"]
 # Compile the KubeClusterEnv live-read backend. Heavy dep tree (kube +
 # k8s-openapi + rustls).
-live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow", "dep:rustls", "dep:futures"]
+live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow", "dep:rustls", "dep:futures", "dep:http"]
 # Compile the TearSessionEnv adapter — the live `(defbancada)` handoff over a
 # running `tear-daemon`. Off by default: the plan is produced and previewed
 # without it, and the dep tree is heavy.

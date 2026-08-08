@@ -216,6 +216,7 @@ dependencies = [
  "egaku",
  "egaku-term",
  "futures",
+ "http",
  "izumi",
  "k8s-openapi",
  "kube",
