@@ -43,6 +43,8 @@
 //! mutation this backend performs, so both return a typed
 //! `SpecError::Interp` "not yet wired" rather than a silent wrong `Ok`.
 
+use std::path::PathBuf;
+
 use banken_spec::env::{
     ChangeRef, ClusterEnv, DeclareChange, DepTree, Event, GlassRecord, HealthReading, LogStream,
     ResourceRef, Row, WatchStream, WitnessedAction, Workload,
@@ -109,6 +111,187 @@ pub fn kubeconfig_context_names() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Every kubeconfig file `KUBECONFIG` names, in the order they merge.
+///
+/// `KUBECONFIG` is a **`:`-separated merge list**, not a single path. That is
+/// not a detail — it is the whole reason [`resolve_context`] exists.
+#[must_use]
+pub fn kubeconfig_files() -> Vec<PathBuf> {
+    match std::env::var_os("KUBECONFIG") {
+        Some(v) => std::env::split_paths(&v)
+            .filter(|p| !p.as_os_str().is_empty())
+            .collect(),
+        // The single-file default. Reported as a one-element list so callers
+        // never branch on "merged or not".
+        None => std::env::var_os("HOME")
+            .map(|h| vec![PathBuf::from(h).join(".kube").join("config")])
+            .unwrap_or_default(),
+    }
+}
+
+/// A context name that resolved to exactly ONE declaration, and the apiserver
+/// that declaration names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedContext {
+    /// The context name, as asked for.
+    pub name: String,
+    /// The `cluster.server` URL the context resolves to. **This is the field
+    /// that makes "the right cluster" checkable** — a name is not unique, a
+    /// URL is what actually gets dialled.
+    pub server: String,
+    /// The single kubeconfig file that declared it.
+    pub file: PathBuf,
+}
+
+/// Why a `--context` could not be turned into exactly one apiserver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContextError {
+    /// **The silent-wrong-cluster class.** Two or more files in the merge list
+    /// declare this context name. kube-rs (and client-go) resolve this
+    /// first-wins and say NOTHING: `append_new_named`
+    /// (`kube-client-0.99.0/src/config/file_config.rs`) filters out every later
+    /// entry whose name already exists — no error, no warning. So the operator
+    /// asks for a name, gets whichever file happened to sort first, and every
+    /// row they read is real. Only the cluster is wrong.
+    ///
+    /// Measured 2026-08-08: `engenho-local` named a local apiserver in one file
+    /// and `engenho-local.quero.cloud` in `~/.kube/config`. banken read the
+    /// remote one and looked entirely healthy doing it.
+    Ambiguous {
+        name: String,
+        /// Every file declaring the name, in merge order. The first is the one
+        /// that would silently have won.
+        files: Vec<PathBuf>,
+    },
+    /// No file declares it. Carries what IS available, so the refusal costs a
+    /// keystroke rather than a detour.
+    NotFound {
+        name: String,
+        available: Vec<String>,
+    },
+    /// A file in the merge list could not be read or parsed.
+    Unreadable { file: PathBuf, message: String },
+}
+
+impl std::fmt::Display for ContextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ambiguous { name, files } => {
+                write!(
+                    f,
+                    "context `{name}` is declared by {} kubeconfig files",
+                    files.len()
+                )?;
+                for (i, p) in files.iter().enumerate() {
+                    write!(f, "\n  {}. {}", i + 1, p.display())?;
+                    if i == 0 {
+                        write!(f, "   <- would silently win")?;
+                    }
+                }
+                write!(
+                    f,
+                    "\nRefusing: the name does not identify one cluster. \
+                     Point KUBECONFIG at a single file, or rename one context."
+                )
+            }
+            Self::NotFound { name, available } => {
+                write!(f, "no kubeconfig context named `{name}`. Available:")?;
+                for a in available {
+                    write!(f, "\n  {a}")?;
+                }
+                Ok(())
+            }
+            Self::Unreadable { file, message } => {
+                write!(
+                    f,
+                    "kubeconfig {} could not be read: {message}",
+                    file.display()
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ContextError {}
+
+/// Resolve a context name against **each kubeconfig file separately**, and
+/// refuse unless exactly one declares it.
+///
+/// # Why this cannot delegate to kube-rs
+///
+/// `Kubeconfig::read()` merges the whole list *before* anyone can look, and the
+/// merge is lossy by design: a duplicate name is dropped silently. By the time
+/// a caller holds the merged config, the evidence that the name was ambiguous
+/// is gone. The only place the question is answerable is before the merge —
+/// which is here.
+///
+/// # Errors
+///
+/// [`ContextError::Ambiguous`] when >1 file declares `name` — the whole point.
+/// [`ContextError::NotFound`] when none does. [`ContextError::Unreadable`] when
+/// a listed file cannot be parsed.
+pub fn resolve_context(name: &str) -> Result<ResolvedContext, ContextError> {
+    let mut declaring: Vec<(PathBuf, Option<String>)> = Vec::new();
+    let mut available: Vec<String> = Vec::new();
+
+    for file in kubeconfig_files() {
+        let kc = match Kubeconfig::read_from(&file) {
+            Ok(kc) => kc,
+            // A missing entry in a merge list is normal (client-go tolerates
+            // it); an unreadable one that EXISTS is not.
+            Err(e) if !file.exists() => {
+                let _absent = e;
+                continue;
+            }
+            Err(e) => {
+                return Err(ContextError::Unreadable {
+                    file,
+                    message: e.to_string(),
+                });
+            }
+        };
+
+        for ctx in &kc.contexts {
+            if !available.contains(&ctx.name) {
+                available.push(ctx.name.clone());
+            }
+            if ctx.name == name {
+                // Resolve the cluster this context points at, within THIS file
+                // — a context and its cluster entry can be split across files,
+                // but the common case is co-located and a missing server is
+                // reported rather than invented.
+                let server = ctx.context.as_ref().and_then(|c| {
+                    kc.clusters
+                        .iter()
+                        .find(|cl| cl.name == c.cluster)
+                        .and_then(|cl| cl.cluster.as_ref())
+                        .and_then(|cl| cl.server.clone())
+                });
+                declaring.push((file.clone(), server));
+            }
+        }
+    }
+
+    match declaring.len() {
+        0 => Err(ContextError::NotFound {
+            name: name.to_owned(),
+            available,
+        }),
+        1 => {
+            let (file, server) = declaring.remove(0);
+            Ok(ResolvedContext {
+                name: name.to_owned(),
+                server: server.unwrap_or_else(|| "<no server declared>".to_owned()),
+                file,
+            })
+        }
+        _ => Err(ContextError::Ambiguous {
+            name: name.to_owned(),
+            files: declaring.into_iter().map(|(f, _)| f).collect(),
+        }),
+    }
+}
+
 /// A live cluster env reading through the typed `kube` client against the
 /// current kubeconfig context. Constructed async (the client resolves the
 /// kubeconfig + builds the TLS stack); reads are blocking-from-the-caller's
@@ -126,6 +309,11 @@ pub struct KubeClusterEnv {
     /// on whatever cluster their shell happens to point at. See
     /// [`banken_spec::bancada`].
     context_name: Option<String>,
+    /// The apiserver URL that was actually dialled, when it is known.
+    ///
+    /// `None` on the [`Self::connect`] path, which never resolves a named
+    /// context and so cannot claim one. See [`Self::server`].
+    server: Option<String>,
 }
 
 impl KubeClusterEnv {
@@ -156,6 +344,11 @@ impl KubeClusterEnv {
             client,
             handle: tokio::runtime::Handle::current(),
             context_name,
+            // `try_default` does not report the URL it resolved, and inventing
+            // one by re-reading the kubeconfig would be the same
+            // probably-the-same-thing guess this constructor already carries on
+            // `context_name`. `None` is the honest value.
+            server: None,
         })
     }
 
@@ -185,6 +378,13 @@ impl KubeClusterEnv {
     /// the entire point of the flag.
     pub async fn connect_with_context(context: &str) -> Result<Self, SpecError> {
         ensure_crypto_provider();
+        // Resolve BEFORE connecting. An ambiguous name has no path past this
+        // line, so "banken read the wrong cluster and looked fine doing it"
+        // has no code path rather than a warning nobody reads.
+        let resolved = resolve_context(context).map_err(|e| SpecError::Interp {
+            phase: "connect".into(),
+            message: e.to_string(),
+        })?;
         let options = KubeConfigOptions {
             context: Some(context.to_owned()),
             ..Default::default()
@@ -209,7 +409,18 @@ impl KubeClusterEnv {
             client,
             handle: tokio::runtime::Handle::current(),
             context_name: Some(context.to_owned()),
+            server: Some(resolved.server),
         })
+    }
+
+    /// The apiserver URL this env actually dialled, when it is known.
+    ///
+    /// A context NAME does not identify a cluster — two files in a `KUBECONFIG`
+    /// merge list may declare the same one. The URL does. Surfacing it is what
+    /// lets an operator check "the right cluster" instead of trusting a label.
+    #[must_use]
+    pub fn server(&self) -> Option<&str> {
+        self.server.as_deref()
     }
 
     /// The kubeconfig context this env is reading, when it is known.
@@ -650,5 +861,125 @@ mod tests {
             .find(|(k, _)| k == "ready")
             .map(|(_, v)| v.as_str());
         assert_eq!(ready, Some("0/1"));
+    }
+
+    // ── context resolution ──
+    //
+    // These drive the REAL `KUBECONFIG` env var, so they must not run
+    // concurrently with each other. `cargo test` threads within a binary, so
+    // they share one mutex rather than trusting luck.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A scratch directory that removes itself. Hand-rolled rather than
+    /// pulling `tempfile` in: a dev-dependency here would move `Cargo.lock`
+    /// and drag the gen build-spec regeneration behind it, which is a lot of
+    /// blast radius for two fixture files.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let mut name = String::from("banken-ctx-test-");
+            name.push_str(tag);
+            name.push('-');
+            name.push_str(&std::process::id().to_string());
+            let dir = std::env::temp_dir().join(name);
+            let _fresh = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create scratch dir");
+            Self(dir)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _best_effort = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_kubeconfig(dir: &std::path::Path, file: &str, ctx: &str, server: &str) -> PathBuf {
+        let path = dir.join(file);
+        let mut s = String::from("apiVersion: v1\nkind: Config\nclusters:\n- name: ");
+        s.push_str(ctx);
+        s.push_str("\n  cluster:\n    server: ");
+        s.push_str(server);
+        s.push_str("\nusers:\n- name: u\n  user: {}\ncontexts:\n- name: ");
+        s.push_str(ctx);
+        s.push_str("\n  context:\n    cluster: ");
+        s.push_str(ctx);
+        s.push_str("\n    user: u\n");
+        std::fs::write(&path, s).expect("write fixture kubeconfig");
+        path
+    }
+
+    /// **THE gate.** Two files in the merge list declaring one context name is
+    /// refused — never resolved first-wins.
+    ///
+    /// This is the class that bit us for real on 2026-08-08: `engenho-local`
+    /// named a local apiserver in one file and a remote one in `~/.kube/config`,
+    /// and banken read the remote cluster while looking perfectly healthy. The
+    /// rows were real; only the cluster was wrong.
+    #[test]
+    fn a_context_declared_by_two_files_is_refused() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = Scratch::new("ambig");
+        let a = write_kubeconfig(dir.path(), "a.yaml", "shared", "https://127.0.0.1:6443");
+        let b = write_kubeconfig(
+            dir.path(),
+            "b.yaml",
+            "shared",
+            "https://remote.example:6443",
+        );
+
+        let joined = std::env::join_paths([&a, &b]).expect("join");
+        // SAFETY: serialized by ENV_LOCK; restored below.
+        unsafe { std::env::set_var("KUBECONFIG", &joined) };
+        let got = resolve_context("shared");
+        unsafe { std::env::remove_var("KUBECONFIG") };
+
+        match got {
+            Err(ContextError::Ambiguous { name, files }) => {
+                assert_eq!(name, "shared");
+                assert_eq!(files.len(), 2, "both declaring files must be named");
+                assert_eq!(
+                    files[0], a,
+                    "the file that would have silently won comes first"
+                );
+            }
+            other => panic!(
+                "an ambiguous context MUST be refused — kube-rs would have \
+                 resolved it first-wins and said nothing. Got: {other:?}"
+            ),
+        }
+    }
+
+    /// The unambiguous case still resolves, and reports the URL — the field
+    /// that makes "the right cluster" checkable rather than a label to trust.
+    #[test]
+    fn a_uniquely_declared_context_resolves_to_its_server() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = Scratch::new("unique");
+        let a = write_kubeconfig(dir.path(), "a.yaml", "only-here", "https://127.0.0.1:6443");
+        let b = write_kubeconfig(dir.path(), "b.yaml", "elsewhere", "https://other:6443");
+
+        let joined = std::env::join_paths([&a, &b]).expect("join");
+        unsafe { std::env::set_var("KUBECONFIG", &joined) };
+        let got = resolve_context("only-here");
+        let missing = resolve_context("nope");
+        unsafe { std::env::remove_var("KUBECONFIG") };
+
+        let r = got.expect("a uniquely-declared context must resolve");
+        assert_eq!(r.server, "https://127.0.0.1:6443");
+        assert_eq!(r.file, a);
+
+        match missing {
+            Err(ContextError::NotFound { available, .. }) => assert!(
+                available.contains(&"elsewhere".to_string()),
+                "the refusal must name what IS available, so it costs a \
+                 keystroke rather than a detour: {available:?}"
+            ),
+            other => panic!("an absent context must be NotFound, got {other:?}"),
+        }
     }
 }
