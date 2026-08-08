@@ -1,2 +1,15 @@
 /target
 **/*.rs.bk
+
+# The DELTA-ONLY spec doctrine (gen `fleet-migrate`): commit the slim
+# `Cargo.gen.lock` delta, retire the full `Cargo.build-spec.json`.
+#
+# Both are IFD-free once committed — substrate's `lockfile-delta.nix`
+# reconstructs a BuildSpec-shaped attrset from the delta plus the lock-owned
+# half derived in PURE NIX from Cargo.lock/Cargo.toml, so the output shape is
+# identical to the full spec and the whole downstream ladder is unchanged.
+# The delta is simply the smaller committed artifact.
+#
+# `gen build` writes BOTH; only the delta is tracked. Same posture as mirante
+# (.gitignore:17) and the rest of the migrated fleet.
+Cargo.build-spec.json
