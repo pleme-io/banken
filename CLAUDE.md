@@ -234,6 +234,47 @@ choosing one of two real clusters.
 > *name* alone, which is precisely the label this correction says not to
 > trust.
 
+## naturalize(kubectl) — DECLINED, and why (2026-08-08)
+
+An operator ask to `/naturalize kubectl` was taken through recon + design +
+an adversarial pass. **The verdict is to decline it as a naturalize**, on the
+skill's own bright line rather than on effort:
+
+1. **It would be a WRAP wearing a citizen's name.** Every illegal state the
+   design closed was closed by handing **kube-rs** a better-constructed
+   `Kubeconfig` — kube-rs's types, kube-rs's resolution, kube-rs's client. The
+   naturalize skill's check 1 asks "would vendoring X's implementation satisfy
+   a consumer?" Here it plainly would: ~90% of kubectl's verb surface already
+   ships in `kube-client` 0.99 (logs, exec, attach, port-forward, evict, scale,
+   ephemeral containers, delete-collection, `await_condition`), and the rest is
+   one aggregated-discovery GET away.
+2. **The fleet already holds the honest posture, and it is NOT a naturalize.**
+   The skill's own waiver names it: *"X is genuinely irreplaceable upstream (a
+   standard we must speak on the wire) → speak the wire, own the executor —
+   that is magma's posture, not a naturalize."* The Kubernetes API **is** that
+   wire standard, and `engenho-kube-client/src/config.rs` already implements
+   the executor half — a hand-written `Kubeconfig`/`ExecConfig` parser with
+   exec-credential support and `resolve_connection`, behind engenho's
+   `KubeClient` trait.
+3. **Two capabilities are genuinely irreducible**, and neither is ours to
+   dissolve: `kubectl describe` has **no server API** — it is per-kind Go
+   presentation logic — and `-o go-template` is Go's `text/template`, which is
+   implementation-defined rather than specified.
+
+**What IS worth doing, and is the real ask underneath:** close the leak. Five
+`:program "kubectl"` forms ship in `banken-spec/specs/bancadas.lisp`, and
+`bancada.rs` enshrines `"kubectl"` in the typed border's own doc comment —
+while `substrate_invariant.rs:49` already lists `kubectl` among
+`FORBIDDEN_SUBSTRINGS` for method names. The repo treats the string as
+contraband in one place and authors it in another.
+
+`pending-banken: bancada-kubectl-argv` — a read pane that runs `kubectl` is a
+foreign-idiom leak in the one surface an operator watches. The destination is a
+pleme-io binary in the pane speaking the API directly (Pillar 8's "no shell
+ships either", one layer over). **NOT closable for the mutating pane**, which
+needs a real TTY on exec — that stays `kubectl` until an owned executor ships
+exec, and saying so is the honest tier.
+
 **A staged command is a typed argv, never a shell string** — `:program` plus
 `(:literal …)` / `(:context …)` args. `CommandArg` has no join arm on
 purpose; the first recipe needing `--field-selector k=v` is the third-use
