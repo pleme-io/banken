@@ -199,15 +199,7 @@ async fn run_live(
     // it), which is what makes the bancada `(:context cluster)` resolution
     // trustworthy rather than merely populated.
     let cluster = env.context_name().unwrap_or_default();
-    let mut label = String::from("source: LIVE ");
-    label.push_str(&cluster);
-    // The strategy is part of the receipt, not a hidden default: which read
-    // path was used decides what a missing table MEANS (a `Streaming` read
-    // against a server that does not negotiate it stalls in `Absorbing` with no
-    // error), so the operator must be able to see it without guessing.
-    label.push_str(" [");
-    label.push_str(strategy.label());
-    label.push(']');
+    let label = banken::absorb::live_source_label(&cluster, env.server(), strategy);
     // The WATCH producer, not the poll. This is the whole M0 payoff: against
     // camelot-eks (191 pods) the poll moved 3,580,862 B every second — 96 GiB
     // per 8-hour day — where a watch over the same 30 s moved 0 bytes, because

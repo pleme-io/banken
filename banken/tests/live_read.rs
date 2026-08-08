@@ -76,6 +76,17 @@ async fn a_named_context_renders_real_pod_rows() {
         .await
         .expect("connecting to the named context (VPN/SSO session live?)");
 
+    // The apiserver URL that was actually dialled, captured before the env is
+    // moved into the app. A context NAME is a label and is not unique across a
+    // KUBECONFIG merge list; this is the value an operator can CHECK.
+    let env_server = env.server().map(str::to_owned);
+    assert!(
+        env_server.is_some(),
+        "a named-context connection must know the server it dialled — that is \
+         the whole point of resolving before connecting",
+    );
+    let strategy = banken::absorb::ListStrategy::default();
+
     // The env reports the context it was CONSTRUCTED with — this is the join
     // that makes a `(defbancada)`'s `(:context cluster)` trustworthy.
     assert_eq!(
@@ -129,9 +140,10 @@ async fn a_named_context_renders_real_pod_rows() {
         UnwiredSessionEnv::new(),
         OperatorId::new("drzzln").expect("a literal witness is non-blank"),
         {
-            let mut label = String::from("source: LIVE ");
-            label.push_str(&context);
-            label
+            // The SAME function main.rs calls. Building a label here by hand
+            // is what previously made this assertion structurally blind to
+            // what the binary actually renders.
+            banken::absorb::live_source_label(&context, env_server.as_deref(), strategy)
         },
     )
     .expect("the app builds over the live env")

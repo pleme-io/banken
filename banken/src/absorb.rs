@@ -678,6 +678,43 @@ pub enum ListStrategy {
     ListWatch,
 }
 
+/// The live source line the operator reads at the top of the table.
+///
+/// # Why this is a function and not two `push_str` runs
+///
+/// It used to be built inline in `main.rs` **and again** in
+/// `tests/live_read.rs`. That is not merely duplication — it made the test
+/// **structurally incapable of catching a drift in what the binary renders**,
+/// because it asserted against a label it had constructed itself. Measured
+/// 2026-08-08: adding the apiserver URL to `main.rs` changed nothing the test
+/// could see, and the test still passed.
+///
+/// One function, both callers (Prime Directive: duplication is a bug).
+///
+/// `server` is `Some` only on the named-context path. A context NAME is a
+/// label and is not unique — `KUBECONFIG` is a merge list — so the URL is the
+/// part an operator can actually check "the right cluster" against. It is
+/// **omitted rather than guessed** when unknown.
+#[must_use]
+pub fn live_source_label(context: &str, server: Option<&str>, strategy: ListStrategy) -> String {
+    let mut label = String::from("source: LIVE ");
+    label.push_str(context);
+    if let Some(server) = server {
+        label.push_str(" (");
+        label.push_str(server);
+        label.push(')');
+    }
+    // The strategy is part of the receipt, not a hidden default: which read
+    // path was used decides what a missing table MEANS (a `Streaming` read
+    // against a server that does not negotiate `sendInitialEvents` stalls in
+    // `Absorbing` with no rows and no error), so the operator must be able to
+    // see it without guessing.
+    label.push_str(" [");
+    label.push_str(strategy.label());
+    label.push(']');
+    label
+}
+
 impl ListStrategy {
     /// Every strategy — the catalog-reflection surface.
     pub const ALL: &'static [ListStrategy] = &[ListStrategy::Streaming, ListStrategy::ListWatch];

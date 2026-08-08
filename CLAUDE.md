@@ -229,10 +229,18 @@ got dialled. Fail-once measured: reverting the `Ambiguous` arm to first-wins
 turns `a_context_declared_by_two_files_is_refused` red, showing it silently
 choosing one of two real clusters.
 
-> **`pending-banken: context-provenance-in-the-status-line`** — `server()`
-> exists and is not yet rendered. The status line still shows the context
-> *name* alone, which is precisely the label this correction says not to
-> trust.
+**`pending-banken: context-provenance-in-the-status-line` — CLOSED
+(2026-08-08), and closing it exposed a blind test.** The status line now
+renders the apiserver URL beside the name:
+`source: LIVE engenho-probe (https://127.0.0.1:6443) [streaming]`.
+
+The first attempt *looked* done and was not. The label was built inline in
+`main.rs` **and again** in `tests/live_read.rs` — so the test asserted against
+a label it had constructed itself, and adding the URL to `main.rs` changed
+nothing the test could see. It stayed green while proving nothing about what
+the binary renders. `absorb::live_source_label` is now the single
+constructor both callers use, so the test finally pins the binary's output
+(Prime Directive: duplication is a bug — here it was also a *vacuous gate*).
 
 ## naturalize(kubectl) — DECLINED, and why (2026-08-08)
 
