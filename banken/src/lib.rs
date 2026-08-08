@@ -77,6 +77,7 @@
 //!   NOT proven. `pending-banken: bancada-app-open-live`; see
 //!   [`tear_session`]'s module docs for the exact three-way split.
 
+pub mod absorb;
 pub mod action;
 pub mod app;
 pub mod cli;

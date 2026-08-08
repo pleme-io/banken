@@ -44,6 +44,12 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"
 # A plain version: izumi 0.1.14 is on crates.io, and a git dep would make
 # banken itself unreleasable (crates.io refuses them).
 izumi = "0.1"
+# The fleet's established lock-free read-hot-path primitive (20 crates declare
+# it). The render path loads the absorbed snapshot every frame; `ArcSwap` makes
+# that one atomic with no contention against the writing task, where an
+# `RwLock` would put the drawer behind the absorber. The published `Snapshot`
+# is immutable, so a frame cannot tear.
+arc-swap = "1"
 
 # ── The live-cluster read path (BANKEN.md §VI M0 destination-tier). ──
 # Gated behind the `live` feature so the default build (the fixture path
@@ -52,7 +58,26 @@ izumi = "0.1"
 # (never a fake `Ok`), but is UNTESTED-LIVE this session (no cluster
 # reachable — rio/camelot VPN-gated, local k3s down). `pending-banken:
 # live-read` — the row lights up the instant a cluster returns.
-kube = { version = "0.99", default-features = false, features = ["client", "rustls-tls"], optional = true }
+# *** `runtime` added 2026-08-08 — the watch informer was never missing upstream. ***
+# BANKEN.md's C-watch ceiling read as "unbuilt substrate banken must build", and
+# that was a fact about this feature list, not about kube-rs. `kube-runtime`
+# 0.99 already ships `InitialListStrategy::StreamingList` + `Config::streaming_lists()`
+# (`watcher.rs:405`), `bookmarks: true` by default (`:287`), `metadata_watcher`
+# (`:823`), and the whole resourceVersion/410-Gone machine. Turning the feature on
+# is the entire acquisition.
+#
+# What it replaces, measured against camelot-eks (191 pods) on 2026-08-08:
+# `Api::list(&ListParams::default())` at 1 Hz moves 3,580,862 B per tick —
+# 3.4 MiB/s decoded, 12 GiB/hour, 96 GiB per 8-hour day, per instance. A 30 s
+# watch on the same cluster at the same moment moved 0 bytes. Delta traffic is
+# proportional to CHANGE; poll traffic is proportional to STATE SIZE.
+#
+# EXP-9 (blocking, per the plan): verified `cargo tree -p banken --features live`
+# carries `ring` and NO `aws-lc-rs` both before and after this change, so the
+# rustls `CryptoProvider` ambiguity that aborted the first live read
+# (`rustls-0.23.42/src/crypto/mod.rs:249`) is not reintroduced. `live.rs`'s
+# explicit `ensure_crypto_provider()` remains the belt to this braces.
+kube = { version = "0.99", default-features = false, features = ["client", "rustls-tls", "runtime"], optional = true }
 k8s-openapi = { version = "0.24", features = ["latest"], optional = true }
 anyhow = { version = "1", optional = true }
 # *** NOT redundant with kube's `rustls-tls`. Measured 2026-07-31. ***
@@ -67,6 +92,10 @@ anyhow = { version = "1", optional = true }
 # ambiguity into a no-op rather than back into a panic.
 # `ring` over `aws-lc-rs`: aws-lc-rs is an FFI binding to the AWS-LC C library,
 # and the fleet's Rust standard is pure-Rust deps without FFI.
+# Stream combinators for the absorb plane's watch loop (`pin_mut!` + `.next()`).
+# kube-runtime's own surface is a `Stream`, so this is the same dependency it
+# already carries transitively — named here because banken uses it directly.
+futures = { version = "0.3", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
 
 # ── The live tear handoff for `(defbancada)` (the bancada bridge). ──
@@ -116,7 +145,7 @@ tear-types = { version = "0.1", optional = true }
 default = ["live", "tear"]
 # Compile the KubeClusterEnv live-read backend. Heavy dep tree (kube +
 # k8s-openapi + rustls).
-live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow", "dep:rustls"]
+live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow", "dep:rustls", "dep:futures"]
 # Compile the TearSessionEnv adapter — the live `(defbancada)` handoff over a
 # running `tear-daemon`. Off by default: the plan is produced and previewed
 # without it, and the dep tree is heavy.

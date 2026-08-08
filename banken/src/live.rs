@@ -50,9 +50,12 @@ use banken_spec::env::{
 use banken_spec::error::SpecError;
 use banken_spec::types::ResourceKind;
 
+use crate::absorb::{Ev, Folded, Publisher, Replica, SyncPhase};
+use futures::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::ListParams;
 use kube::config::{KubeConfigOptions, Kubeconfig};
+use kube::runtime::{WatchStreamExt, watcher};
 use kube::{Api, Client, Config};
 
 /// The kubeconfig's `current-context`, when it can be read.
@@ -227,6 +230,87 @@ impl KubeClusterEnv {
         F: std::future::Future<Output = T>,
     {
         tokio::task::block_in_place(|| self.handle.block_on(fut))
+    }
+
+    /// Start absorbing pods into `publisher` and return the task handle.
+    ///
+    /// This is the watch half of BANKEN.md's C-watch ceiling, and the ceiling
+    /// turned out to be a fact about banken's Cargo feature list rather than
+    /// about kube-rs: `kube-runtime` 0.99 already ships every piece below.
+    ///
+    /// # Why `streaming_lists()`
+    ///
+    /// It collapses the initial LIST and the WATCH into one call
+    /// (`sendInitialEvents=true` + `resourceVersionMatch=NotOlderThan`,
+    /// terminated by an `InitialEventsEnd` bookmark). The apiserver never
+    /// buffers a whole list body, so the first row reaches the operator at the
+    /// first streamed chunk instead of after a 2.0 s full-list round trip.
+    /// Verified serving on `camelot-eks` (v1.33) on 2026-08-08.
+    ///
+    /// # Why `default_backoff()` is not optional
+    ///
+    /// A bare `watcher()` has **no backoff at all** — kube-rs's own comment at
+    /// `watcher.rs:750-752` is *"This will normally happen immediately"*. When
+    /// the AWS SSO *session* expires (8–12 h) every request errors, and an
+    /// un-backed-off loop re-invokes the `aws` exec-credential plugin per
+    /// attempt: a hot loop spawning a subprocess. This is the single mandatory
+    /// line in the function.
+    ///
+    /// # What it deliberately does NOT do
+    ///
+    /// It does not carry identity. A `Row` has no `uid`, so the replica is keyed
+    /// on `(namespace, name)` — unique at an instant, **not** across
+    /// delete-and-recreate. Acting on a row is therefore no safer than before;
+    /// that is `pending-banken: grip`, and pretending otherwise here would be
+    /// the round-up this repo keeps catching.
+    #[must_use]
+    pub fn spawn_pod_absorber(&self, mut publisher: Publisher) -> tokio::task::JoinHandle<()> {
+        let api: Api<Pod> = Api::all(self.client.clone());
+        self.handle.spawn(async move {
+            let mut replica = Replica::default();
+            let config = watcher::Config::default().streaming_lists();
+            let stream = watcher(api, config).default_backoff();
+            futures::pin_mut!(stream);
+
+            while let Some(next) = stream.next().await {
+                match next {
+                    Ok(event) => {
+                        let folded = match event {
+                            watcher::Event::Init => replica.fold(Ev::Init),
+                            watcher::Event::InitApply(p) => {
+                                replica.fold(Ev::InitApply(pod_to_row(p)))
+                            }
+                            watcher::Event::InitDone => replica.fold(Ev::InitDone),
+                            watcher::Event::Apply(p) => replica.fold(Ev::Apply(pod_to_row(p))),
+                            watcher::Event::Delete(p) => replica.fold(Ev::Delete(pod_to_row(p))),
+                        };
+                        // Only a set-changing fold reaches the publisher, and the
+                        // publisher gates again on the content hash. Two gates
+                        // because they catch different things: this one skips the
+                        // work of materialising rows mid-init, that one skips the
+                        // wake when a resourceVersion moved but no visible cell did.
+                        match folded {
+                            Folded::Quiet => {}
+                            Folded::Changed | Folded::InitComplete => {
+                                publisher.publish(replica.rows(), SyncPhase::Synced);
+                            }
+                        }
+                    }
+                    // The rows are KEPT and relabelled, never blanked: a transient
+                    // apiserver failure must not erase a table an operator is
+                    // reading. What changes is the claim banken makes about them.
+                    Err(e) => {
+                        publisher.publish(
+                            replica.rows(),
+                            SyncPhase::Degraded {
+                                cause: e.to_string(),
+                            },
+                        );
+                    }
+                }
+            }
+            publisher.mark_stopped();
+        })
     }
 
     async fn list_pods(&self, ns: Option<&str>) -> Result<Vec<Row>, SpecError> {
