@@ -384,7 +384,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
   selection + sort, alt-screen enter/Drop-restore via `egaku_term::AsyncApp` +
   `run_async`, and the **postigo dispatch wired through the UI** (`l`→OBSERVE logs,
   `s`→DECLARE full-manifest preview, `S`→BREAK-GLASS witnessed record — every path
-  through `banken_spec::apply`, no live-mutate path). Proof: **206 workspace tests**
+  through `banken_spec::apply`, no live-mutate path). Proof: **224 workspace tests**
   green (`cargo test`, and identically under `--features live`)
   incl. a `TestBackend` golden-frame test (asserts via
   `to_lines()`/`cell()`, never `.contains()`) + a postigo-dispatch integration
@@ -599,7 +599,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
   `.default_backoff()`. Measured on `camelot-eks`: **absorbed 83 pods by watch,
   generation 1, matching `kubectl get pods -A` at the same moment (83)**
   (`tests/live_read.rs::the_watch_plane_absorbs_from_a_real_cluster`,
-  `#[ignore]`d, refuses to guess a context). 206 workspace tests green with and
+  `#[ignore]`d, refuses to guess a context). 224 workspace tests green with and
   without `--features live`.
   - **The C-watch ceiling was a fact about this crate's Cargo features, not
     about kube-rs.** BANKEN.md §IX called the informer "unbuilt substrate banken
@@ -623,23 +623,68 @@ proven-live ✗ until a cluster is reachable / known ✓).
     would have been the opposite error — a `Synced → Degraded` transition must
     repaint the status line even though not one row moved, or a dead watch
     renders as a healthy one.
-  - **`pending-banken: grip` — NOT closed, and absorption makes it sharper.** A
-    `Row` has no uid, so the replica keys on `(namespace, name)`: unique at an
-    instant, **not** across delete-and-recreate. Acting on a row is no safer
-    than before, and a cache with a TTL widens the read→keystroke window from
-    the old 1 Hz poll to the TTL. The fix is **not** a carried freshness witness
-    — that was built and broken: rows launder at `app.rs`'s `set_rows` into
-    `egaku::TableView<Row>`, a foreign container that knows nothing about
-    freshness, and a stale reading held beside a live table `cargo check`s
-    clean. The design is to **re-derive at the act** (`ClusterEnv::grip`).
+  - **`pending-banken: grip` — CLOSED (2026-08-08).** `Row` carries a `Uid`
+    (`metadata.uid`) and a `version`; `TableRow::identity()` is the uid, never
+    the name; `Row` lost `Default`; `pod_to_row` is fallible (a uid-less object
+    is a malformed read, not a row). `ClusterEnv::grip(&ObjectId) -> Result<Grip,
+    GripError>` **re-reads at the act**, and `open_bancada` takes a `&Grip`, so
+    staging without a re-verified subject has no argument form.
+    - **The mechanism is the `!Send` marker, not a convention.** `AsyncApp`
+      requires app state to be `Send`, so a `Grip` cannot be stored between the
+      `g` preview and the `enter` confirm — the compiler refuses. Carrying a
+      stale authorisation forward is not a thing an author can write.
+    - **Why not a carried witness** (every earlier design tried it): rows
+      launder at `app.rs`'s `set_rows` into `egaku::TableView<Row>`, a foreign
+      container that knows nothing about freshness, so a stale reading held
+      beside a live table `cargo check`s clean. Re-deriving at the act dissolves
+      the launder point instead of guarding it.
+    - `grip_against` is the ONE place the uid comparison lives; a backend
+      supplies rows and never decides what counts as the same object. A failed
+      read is `Blind`, never `Vanished` — "it is gone" and "I cannot see" must
+      not authorise an act the same way.
+    - **The replica still keys on `(namespace, name)` and that is correct** —
+      k8s guarantees it unique at any instant, and a recycle arrives as an
+      update with NO delete, so uid-keying would strand the dead object. The uid
+      belongs on IDENTITY.
+    - Fail-once, both measured: uid→name compare turns 2 tests red; making
+      `Grip` `Send` fails a `compile_fail` doctest. **The first `!Send` test was
+      VACUOUS** (a method-resolution probe — fully-qualified trait syntax always
+      resolves to the blanket impl and can never become ambiguous), caught by
+      running the fail-once.
+    - `pending-banken: grip-window` — the object can still change between the
+      grip and the act itself. Microseconds rather than think-time, but not
+      zero, and no local type closes it (BANKEN.md C1).
+  - **SHIPPED: a typed `ListStrategy{Streaming, ListWatch}`** — named, never
+    probed, and **no `Auto` variant**: an unannounced downgrade to a weaker read
+    path is the silent-degradation class banken refuses. A typo REFUSES and the
+    refusal names the legal values; `--help`'s list is derived from
+    `ListStrategy::ALL`. This is also what lets banken read a
+    conformance-partial apiserver: `ListWatch` sends zero params a minimal
+    server need not implement (`watcher.rs:412-413`), where `Streaming` against
+    a server that does not negotiate `sendInitialEvents` stalls in `Absorbing`
+    with no rows and no error.
+  - **SHIPPED: `banken-config` is finally wired into the binary**, with a
+    writable overlay tier (`discover_all` + `load_merged`). It was NOT a
+    dependency: `main.rs` hardcoded the interval, so every authored knob was
+    born dead with the config crate's 16 tests green. And 4 of 4 fleet app
+    configs are `/nix/store` symlinks (41 under `~/.config`), so a single-file
+    loader gives an operator no way to change a value short of a rebuild.
+    `pending-banken: manual-refresh-mode` — an authored `0` ("never
+    auto-refresh") is honoured as `DEFAULT_POLL` because the feed has no
+    manual-only mode.
   - `pending-banken: absorb-multi-gvk` — one kind (pods), one watch. Discovery,
     admission bounds and per-kind fidelity are M3/M4.
-  - `pending-banken: absorb-display-fidelity` — the plane still absorbs full
-    `Pod` objects. Measured on the same cluster: `Accept: …as=Table` with
-    `includeObject=None` is **170 B/pod vs 18,747 B** (110×) and its cells carry
-    a server-rendered `Age`, which would close the `AGE renders -` gap above for
-    free. It carries **no uid** (`row.object` is `null`), which is exactly why
-    it composes with `grip`-at-the-act rather than with a carried witness.
+  - **`pending-banken: absorb-display-fidelity` — OPEN, and it now carries a
+    DESIGN CONFLICT this repo created on 2026-08-08.** Measured: `Accept:
+    …as=Table` with `includeObject=None` is **170 B/pod vs 18,747** (110×) and
+    its cells carry a server-rendered `Age` that would close the `AGE renders -`
+    gap for free — but it carries **no uid** (`row.object` is `null`), and uid
+    is now REQUIRED on `Row`. `includeObject=Metadata` carries uid at 5,830
+    B/pod (3.2×) and still ships `managedFields`. So the three fidelities are
+    not a ladder: **Display renders, Metadata identifies, Full describes**, and
+    the table's cursor identity (unique at an instant) is a different question
+    from the act's identity (unique across recreate). Resolve that before
+    building, not during.
 - **DESIGN / next arc (M1→M4):** the watch informer (poll→true watch), the health
   ward's **RENDER** (its `(defward)` vocabulary + the `WardVerdict` evaluator are
   SHIPPED mock-green; no ward panel is drawn yet — do not read the vocabulary as
