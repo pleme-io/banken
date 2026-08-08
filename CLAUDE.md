@@ -196,6 +196,44 @@ every available context name, so it costs one keystroke, not a detour.
 `context_name`, so the string that selected the apiserver and the string a
 `(defbancada)` resolves against **cannot drift**.
 
+**And it happened a THIRD time, one layer over again — the fix above was
+necessary and NOT sufficient (corrected 2026-08-08).** `--context <name>` was
+presented here as what makes "the RIGHT cluster" true. It is not, on its own:
+**`KUBECONFIG` is a `:`-separated MERGE LIST and a context name is not unique
+across it.** kube-rs resolves a duplicate **first-wins and says nothing** —
+`append_new_named` (`kube-client-0.99.0/src/config/file_config.rs`) filters out
+every later entry whose name already exists, with no error and no warning, so
+by the time a caller holds the merged `Kubeconfig` the evidence that the name
+was ambiguous is **gone**. The flag narrowed the hazard from "whatever
+current-context happens to be" to "whichever file sorted first" — the same
+false calm, one layer over.
+
+Measured that day: the operator kubeconfig declares `engenho-local` → a LOCAL
+apiserver, while `~/.kube/config` declares `engenho-local` →
+`engenho-local.quero.cloud`, a **remote** cluster. banken read the remote one
+and rendered a perfectly healthy table doing it. Four protocol-layer
+hypotheses (Ed25519 client certs, ALPN/h2, IPv6, TLS handshake) were chased
+and all were wrong; `lsof` showing `SYN_SENT` to a public IP is what exposed
+it. **The lesson generalizes past this bug: when a cluster-facing result looks
+odd, check the SOCKET before theorising about protocol layers.**
+
+`live::resolve_context` now reads each file in the merge list **separately** —
+the only point at which the question is still answerable — and refuses unless
+exactly one declares the name (`ContextError::Ambiguous`, naming every
+declaring file and which would have silently won). `connect_with_context`
+resolves *before* it connects, so an ambiguous name has no code path past that
+line. Tier: **parse-time-rejected** — the name can still be written, it just
+cannot open a client. `KubeClusterEnv::server()` carries the resolved
+apiserver URL, because a name is a label to trust and the URL is what actually
+got dialled. Fail-once measured: reverting the `Ambiguous` arm to first-wins
+turns `a_context_declared_by_two_files_is_refused` red, showing it silently
+choosing one of two real clusters.
+
+> **`pending-banken: context-provenance-in-the-status-line`** — `server()`
+> exists and is not yet rendered. The status line still shows the context
+> *name* alone, which is precisely the label this correction says not to
+> trust.
+
 **A staged command is a typed argv, never a shell string** — `:program` plus
 `(:literal …)` / `(:context …)` args. `CommandArg` has no join arm on
 purpose; the first recipe needing `--field-selector k=v` is the third-use
