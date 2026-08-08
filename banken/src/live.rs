@@ -264,7 +264,7 @@ impl KubeClusterEnv {
     /// that is `pending-banken: grip`, and pretending otherwise here would be
     /// the round-up this repo keeps catching.
     #[must_use]
-    pub fn spawn_pod_absorber(&self, mut publisher: Publisher) -> tokio::task::JoinHandle<()> {
+    pub fn spawn_pod_absorber(&self, publisher: Publisher) -> tokio::task::JoinHandle<()> {
         let api: Api<Pod> = Api::all(self.client.clone());
         self.handle.spawn(async move {
             let mut replica = Replica::default();

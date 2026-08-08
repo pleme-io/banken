@@ -181,3 +181,76 @@ async fn a_named_context_renders_real_pod_rows() {
         "the status line names the cluster being read, got {status:?}",
     );
 }
+
+/// The WATCH plane against a real apiserver — the M0 gate.
+///
+/// `#[ignore]` for the same reason as every other test in this file: it opens a
+/// real connection through a real exec-credential plugin.
+///
+/// ```text
+/// BANKEN_LIVE_CONTEXT=camelot-eks \
+///   cargo test -p banken --features live --test live_read -- --ignored --nocapture
+/// ```
+///
+/// # What this proves that `list_resources` cannot
+///
+/// That banken's rows arrive by **streamed delta** rather than by re-reading the
+/// world. The distinction is not stylistic: measured against `camelot-eks` on
+/// 2026-08-08, the poll moved 3,580,862 B *per second* (96 GiB per 8-hour day)
+/// while a 30-second watch over the same cluster moved **0 bytes**.
+///
+/// The assertions are staged so a failure says which joint broke:
+///   1. the stream reaches `Synced` at all — the initial streaming list
+///      completed and `InitDone` fired;
+///   2. it produced a non-empty replica — the fold actually applied `InitApply`;
+///   3. the phase is not `Degraded` — no backoff/relist loop is hiding behind
+///      rows that merely *look* fine.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "opens a real apiserver connection; set BANKEN_LIVE_CONTEXT"]
+async fn the_watch_plane_absorbs_from_a_real_cluster() {
+    let ctx = std::env::var("BANKEN_LIVE_CONTEXT")
+        .expect("set BANKEN_LIVE_CONTEXT — this test refuses to guess a context");
+
+    let env = banken::live::KubeClusterEnv::connect_with_context(&ctx)
+        .await
+        .expect("connect to the named context");
+
+    let (despensa, publisher) = banken::absorb::channel();
+    let _task = env.spawn_pod_absorber(publisher);
+
+    // Wait for the initial streaming list to complete. Generous, because a cold
+    // exec-credential plugin invocation is ~0.7 s on its own.
+    let mut synced = false;
+    for _ in 0..200 {
+        if matches!(
+            despensa.snapshot().phase(),
+            banken::absorb::SyncPhase::Synced
+        ) {
+            synced = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    let snap = despensa.snapshot();
+    assert!(
+        synced,
+        "the streaming list must complete and reach Synced; phase was {:?}",
+        snap.phase()
+    );
+    assert!(
+        !snap.rows().is_empty(),
+        "a real cluster must yield rows; the fold applied nothing"
+    );
+    assert!(
+        !matches!(snap.phase(), banken::absorb::SyncPhase::Degraded { .. }),
+        "the watch must be healthy, not backing off behind plausible rows: {:?}",
+        snap.phase()
+    );
+
+    println!(
+        "absorbed {} pods from `{ctx}` by watch, generation {}",
+        snap.rows().len(),
+        snap.generation()
+    );
+}

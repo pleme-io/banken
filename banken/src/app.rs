@@ -50,11 +50,11 @@ use egaku_term::{__re::KeyMap, AsyncApp, Buffer, Result as TermResult, Style};
 
 use banken_spec::bancada::{BancadaSpec, SessionEnv};
 
+use crate::absorb::{Despensa, SyncPhase};
 use crate::action::{
     ActionResult, PendingBancada, RowAction, dispatch, open_bancada, preview_bancada,
     resolve_bancada,
 };
-use crate::feed::PodFeed;
 use crate::render::{draw_pod_table, sort_label};
 use crate::table::PodTable;
 
@@ -222,7 +222,14 @@ pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
     /// `None` is the default and means input-only — which is what every
     /// non-tokio test builds, and what `AsyncApp::wake` lowers to a
     /// `pending()` for. See [`crate::feed`].
-    feed: Option<PodFeed>,
+    absorb: Option<Despensa>,
+    /// Stops the poll absorber when the app is dropped.
+    ///
+    /// `PodFeed` flipped this in its own `Drop`; keeping that behaviour is not
+    /// tidiness — without it an apiserver poll outlives the terminal nobody is
+    /// watching. The watch absorber does not need one: its task ends when the
+    /// stream does.
+    absorb_stop: Option<crate::absorb::PollGuard>,
 }
 
 impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
@@ -292,7 +299,8 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             done: false,
             source_label: source_label.into(),
             legend_parts: key_legend_parts(catalog),
-            feed: None,
+            absorb: None,
+            absorb_stop: None,
         })
     }
 
@@ -363,30 +371,60 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     where
         E: Send + Sync + 'static,
     {
-        self.feed = Some(PodFeed::start(
+        let (despensa, publisher) = crate::absorb::channel();
+        self.absorb_stop = Some(crate::absorb::spawn_poll_absorber(
             Arc::clone(&self.env),
             ResourceKind::Pod,
             interval,
+            publisher,
         ));
+        self.absorb = Some(despensa);
         self
     }
 
-    /// The attached feed, if any — for a test asserting the plane is live,
-    /// and for the renderer to report a faulted one.
+    /// Attach an already-running absorber — the path the live build takes, where
+    /// the producer is a `kube` watch stream rather than a poll.
+    ///
+    /// The app takes a [`Despensa`] and never learns which producer filled it.
+    /// That is the point: a consumer adapts by reading a declared capability,
+    /// never by branching on which backend it happens to have.
     #[must_use]
-    pub fn feed(&self) -> Option<&PodFeed> {
-        self.feed.as_ref()
+    pub fn with_absorber(mut self, despensa: Despensa) -> Self {
+        self.absorb = Some(despensa);
+        self
     }
 
-    /// Pull whatever the feed has absorbed into the table.
+    /// The attached absorber, if any — for a test asserting the plane is live,
+    /// and for the renderer to report its phase.
+    #[must_use]
+    pub fn absorber(&self) -> Option<&Despensa> {
+        self.absorb.as_ref()
+    }
+
+    /// How the absorbed reading currently stands, when there is one.
+    ///
+    /// This is the axis banken has never had: a caller can no longer look at
+    /// rows without being able to ask what claim is being made about them.
+    #[must_use]
+    pub fn sync_phase(&self) -> Option<SyncPhase> {
+        self.absorb.as_ref().map(|d| d.snapshot().phase().clone())
+    }
+
+    /// Pull whatever has been absorbed into the table.
     ///
     /// The `&mut self` apply half of the wakeup. Separate from
     /// [`Self::refresh`] because it performs **no read** — the read already
-    /// happened, off this task. A no-op when there is no feed.
+    /// happened, off this task. A no-op when there is no absorber.
     pub fn apply_feed(&mut self) {
-        if let Some(rows) = self.feed.as_ref().map(PodFeed::rows) {
-            self.set_rows(rows);
+        if let Some(rows) = self.absorb.as_ref().map(|d| d.snapshot().rows()) {
+            self.set_rows(rows.to_vec());
         }
+    }
+
+    /// The stop flag for the poll absorber, if one is running.
+    #[must_use]
+    pub fn absorb_stop(&self) -> Option<&crate::absorb::PollGuard> {
+        self.absorb_stop.as_ref()
     }
 
     /// The current pod table (for tests + the renderer).
@@ -1100,8 +1138,8 @@ impl<E: ClusterEnv + Send + Sync, S: SessionEnv + Send + Sync> AsyncApp for Bank
     /// exactly the pre-feed behaviour, so an app built without one runs
     /// byte-identically to how it ran before this existed.
     async fn wake(&self) {
-        match &self.feed {
-            Some(feed) => feed.changed().await,
+        match &self.absorb {
+            Some(d) => d.changed().await,
             None => std::future::pending().await,
         }
     }

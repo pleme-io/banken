@@ -197,14 +197,21 @@ async fn run_live(operator: OperatorId, context: &str) -> Result<(), String> {
     let cluster = env.context_name().unwrap_or_default();
     let mut label = String::from("source: LIVE ");
     label.push_str(&cluster);
+    // The WATCH producer, not the poll. This is the whole M0 payoff: against
+    // camelot-eks (191 pods) the poll moved 3,580,862 B every second — 96 GiB
+    // per 8-hour day — where a watch over the same 30 s moved 0 bytes, because
+    // delta traffic is proportional to CHANGE and poll traffic to STATE SIZE.
+    //
+    // The app is handed a `Despensa` and never learns which producer filled it;
+    // the fixture path below uses `with_feed`, which drives the SAME reader
+    // through a poll. One reader type, two producers — a consumer adapts by
+    // reading a declared capability, never by branching on its backend.
+    let (despensa, publisher) = banken::absorb::channel();
+    let _absorber = env.spawn_pod_absorber(publisher);
     let mut app = BankenApp::try_new(env, session_env(), operator, label)
         .map_err(|e| e.to_string())?
         .with_cluster(cluster)
-        // The mode this exists for: the table now re-reads the apiserver on
-        // its own cadence, on the blocking pool, so a pod that changes phase
-        // shows up without the operator pressing anything — and a slow or
-        // unreachable apiserver never freezes the keyboard.
-        .with_feed(banken::feed::DEFAULT_POLL);
+        .with_absorber(despensa);
     egaku_term::run_async(&mut app)
         .await
         .map_err(|e| e.to_string())

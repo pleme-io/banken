@@ -194,14 +194,21 @@ pub struct Publisher {
     snap: Arc<ArcSwap<Snapshot>>,
     tx: watch::Sender<u64>,
     stopped: Arc<AtomicU64>,
-    generation: u64,
+    /// Interior mutability so `publish` takes `&self`.
+    ///
+    /// Not a style choice: the poll producer hands its sink to
+    /// `izumi::refresh::spawn_interval_refresh`, whose sink is an `Fn`, so a
+    /// `&mut self` publish could not be called from it at all. One producer
+    /// shape must fit both drivers or the app ends up knowing which one it has,
+    /// which is exactly what this module exists to hide.
+    generation: AtomicU64,
 }
 
 impl Publisher {
     /// Publish a row set, waking subscribers **only if the content changed**.
     ///
     /// Returns whether it woke anyone — the value the wake-gate test asserts on.
-    pub fn publish(&mut self, rows: Vec<Row>, phase: SyncPhase) -> bool {
+    pub fn publish(&self, rows: Vec<Row>, phase: SyncPhase) -> bool {
         let content = content_hash(&rows);
         let prev = self.snap.load();
         // A phase change is a content change for the operator's purposes: going
@@ -213,16 +220,16 @@ impl Publisher {
         if !changed {
             return false;
         }
-        self.generation += 1;
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.snap.store(Arc::new(Snapshot {
             rows: Arc::from(rows),
             phase,
-            generation: self.generation,
+            generation,
             content,
         }));
         // A send error means every receiver is gone, i.e. the app has exited.
         // That is a normal shutdown, not a failure to report.
-        let _ = self.tx.send(self.generation);
+        let _ = self.tx.send(generation);
         true
     }
 
@@ -248,9 +255,79 @@ pub fn channel() -> (Despensa, Publisher) {
             snap,
             tx,
             stopped,
-            generation: 0,
+            generation: AtomicU64::new(0),
         },
     )
+}
+
+/// Absorb by **polling** a [`ClusterEnv`] on a cadence — the producer for a
+/// source that cannot stream.
+///
+/// This is the fixture path, and it exists so the app has exactly ONE reader
+/// type. The alternative — an enum of "watched" and "polled" in the app — would
+/// put the transport in the app's type, and the whole point of the capability
+/// model is that a consumer adapts by *reading a declared capability*, never by
+/// branching on which backend it happens to have.
+///
+/// The read runs on tokio's **blocking pool** via `izumi::refresh`, consumed
+/// rather than re-rolled (QUADRO §T14 names it): `spawn_interval_refresh` owns
+/// the cadence loop, the blocking handoff, and — the detail every hand-rolled
+/// copy forgets — preservation of the last-known value when a refresh panics.
+///
+/// A failed read publishes `Degraded` with the **previous** rows rather than an
+/// empty set: "the apiserver is unreachable" and "there are no pods here" are
+/// different answers and only one of them means stop trusting the screen.
+pub fn spawn_poll_absorber<E>(
+    env: Arc<E>,
+    kind: banken_spec::types::ResourceKind,
+    interval: std::time::Duration,
+    publisher: Publisher,
+) -> PollGuard
+where
+    E: banken_spec::env::ClusterEnv + Send + Sync + 'static,
+{
+    use std::sync::atomic::AtomicBool;
+    let stop: izumi::refresh::StopFlag = Arc::new(AtomicBool::new(false));
+    let publisher = Arc::new(publisher);
+    let panic_pub = Arc::clone(&publisher);
+
+    izumi::refresh::spawn_interval_refresh(
+        interval,
+        Arc::clone(&stop),
+        // `Result`, not `Option`: the sink must be able to tell a failed read
+        // from an empty cluster, and collapsing them is the blind-reads-as-calm
+        // bug one layer down.
+        Arc::new(move || env.list_resources(kind, None).map_err(|e| e.to_string())),
+        move |read: Result<Vec<Row>, String>| match read {
+            Ok(rows) => {
+                publisher.publish(rows, SyncPhase::Synced);
+            }
+            Err(cause) => {
+                let last = publisher.snap.load().rows().to_vec();
+                publisher.publish(last, SyncPhase::Degraded { cause });
+            }
+        },
+        move || panic_pub.mark_stopped(),
+    );
+    PollGuard { stop }
+}
+
+/// Stops a poll absorber when dropped.
+///
+/// A bare `StopFlag` would not: it is an `Arc<AtomicBool>`, so *holding* one
+/// keeps it alive rather than stopping anything. `PodFeed` got this right with
+/// its own `Drop`, and dropping the behaviour on the way past would have left
+/// an apiserver poll running against a terminal nobody is watching — the exact
+/// regression a `#[must_use]` handle makes hard to introduce.
+#[must_use = "dropping this immediately stops the absorber it guards"]
+pub struct PollGuard {
+    stop: izumi::refresh::StopFlag,
+}
+
+impl Drop for PollGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
 }
 
 /// The in-flight replica a watch stream folds into.
@@ -432,7 +509,7 @@ mod tests {
 
     #[test]
     fn an_unchanged_absorption_does_not_wake_the_renderer() {
-        let (d, mut p) = channel();
+        let (d, p) = channel();
         let rows = vec![row("a", "p1", "Running")];
 
         assert!(
@@ -456,7 +533,7 @@ mod tests {
     fn a_phase_change_wakes_even_when_no_row_moved() {
         // Going Synced -> Degraded repaints the status line. Gating on the row
         // hash alone would leave a dead watch rendering as a healthy one.
-        let (d, mut p) = channel();
+        let (d, p) = channel();
         let rows = vec![row("a", "p1", "Running")];
         p.publish(rows.clone(), SyncPhase::Synced);
         let g1 = d.snapshot().generation();

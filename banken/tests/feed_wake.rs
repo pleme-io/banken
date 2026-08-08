@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use banken::absorb::Despensa;
 use banken::app::BankenApp;
-use banken::feed::PodFeed;
 use banken::session::UnwiredSessionEnv;
 use banken_spec::SpecError;
 use banken_spec::env::{
@@ -135,9 +135,9 @@ fn app_counting(reads: Arc<AtomicUsize>) -> BankenApp<TickingEnv, UnwiredSession
 ///
 /// Polls the generation counter rather than sleeping a guessed duration: the
 /// difference between an assertion and a flake. Returns whether it got there.
-async fn feed_reached(feed: &PodFeed, want: u64) -> bool {
+async fn feed_reached(feed: &Despensa, want: u64) -> bool {
     for _ in 0..200 {
-        if feed.generation() >= want {
+        if feed.snapshot().generation() >= want {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -154,11 +154,11 @@ async fn the_pod_table_moves_without_a_keystroke() {
     let before = app.table().view().rows().len();
     assert_eq!(before, 1, "the constructor's inline read seeds one pod");
 
-    let feed = app.feed().expect("with_feed must attach a feed");
+    let feed = app.absorber().expect("with_feed must attach an absorber");
     assert!(
         feed_reached(feed, 3).await,
         "the background feed must publish on its own cadence; it reached generation {}",
-        feed.generation()
+        feed.snapshot().generation()
     );
 
     // The wakeup pair, exactly as `run_async` drives it — and nothing else.
@@ -180,7 +180,7 @@ async fn the_pod_table_moves_without_a_keystroke() {
 #[tokio::test]
 async fn an_app_without_a_feed_never_wakes() {
     let app = app();
-    assert!(app.feed().is_none(), "no feed unless asked for one");
+    assert!(app.absorber().is_none(), "no absorber unless asked for one");
     let r = tokio::time::timeout(Duration::from_millis(80), app.wake()).await;
     assert!(
         r.is_err(),
@@ -196,7 +196,7 @@ async fn dropping_the_app_stops_the_feed() {
     let reads = Arc::new(AtomicUsize::new(0));
     {
         let app = app_counting(Arc::clone(&reads)).with_feed(Duration::from_millis(10));
-        let feed = app.feed().expect("feed attached");
+        let feed = app.absorber().expect("absorber attached");
         assert!(feed_reached(feed, 3).await, "feed must start producing");
     } // app — and with it the feed, and with that the StopFlag — dropped here
 
