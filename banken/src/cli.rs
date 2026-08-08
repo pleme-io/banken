@@ -59,6 +59,13 @@ pub enum Invocation {
         /// [`parse_args`] rejects `--context ""` as
         /// [`CliError::EmptyContext`].
         context: String,
+        /// How the initial object set is obtained.
+        ///
+        /// Defaults to [`ListStrategy::Streaming`] when unnamed. It is carried
+        /// here rather than resolved later so the value that selected the read
+        /// path and the value banken reports are the same one — the same
+        /// reasoning that makes `context` a non-optional `String`.
+        strategy: crate::absorb::ListStrategy,
     },
 }
 
@@ -69,6 +76,14 @@ pub enum Invocation {
 /// a message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliError {
+    /// `--list-strategy <x>` naming something that is not a strategy.
+    ///
+    /// A refusal rather than a fall back to the default: reading via a
+    /// different strategy than the operator named is an unannounced downgrade,
+    /// which is exactly what `ListStrategy` has no `Auto` variant to prevent.
+    UnknownListStrategy(String),
+    /// `--list-strategy` with no value after it.
+    ListStrategyWithoutValue,
     /// `--live` with no `--context`. The wrong-estate hazard; see the module
     /// docs.
     MissingContext,
@@ -105,6 +120,31 @@ impl std::fmt::Display for CliError {
             ),
             CliError::ContextWithoutValue => {
                 f.write_str("--context requires a value: --context <name>")
+            }
+            CliError::ListStrategyWithoutValue => f.write_str(
+                "--list-strategy requires a value: --list-strategy <streaming|list-watch>",
+            ),
+            CliError::UnknownListStrategy(got) => {
+                // The refusal NAMES the legal values, because the cost of this
+                // refusal must be one keystroke rather than a detour — the same
+                // reasoning as the --context refusal listing every context.
+                f.write_str("unknown --list-strategy `")?;
+                f.write_str(got)?;
+                f.write_str("`. Legal values: ")?;
+                let mut first = true;
+                for s in crate::absorb::ListStrategy::ALL {
+                    if !first {
+                        f.write_str(", ")?;
+                    }
+                    f.write_str(s.label())?;
+                    first = false;
+                }
+                f.write_str(
+                    ". There is deliberately no `auto`: falling back to a different read \
+                     path than the one you named is an unannounced downgrade, and a \
+                     conformance-partial apiserver is exactly when you need to know which \
+                     path you got.",
+                )
             }
             CliError::EmptyContext => f.write_str(
                 "--context was given an empty name — an empty context IS the unknown-cluster \
@@ -155,6 +195,7 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
 
     let mut want_live = false;
     let mut context: Option<String> = None;
+    let mut strategy = crate::absorb::ListStrategy::default();
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -174,6 +215,20 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
             _ if arg.starts_with("--context=") => {
                 context = Some(arg["--context=".len()..].to_owned());
             }
+            "--list-strategy" => {
+                let value = args.get(i + 1).ok_or(CliError::ListStrategyWithoutValue)?;
+                if value.starts_with('-') {
+                    return Err(CliError::ListStrategyWithoutValue);
+                }
+                strategy = crate::absorb::ListStrategy::parse(value)
+                    .ok_or_else(|| CliError::UnknownListStrategy(value.clone()))?;
+                i += 1;
+            }
+            _ if arg.starts_with("--list-strategy=") => {
+                let value = &arg["--list-strategy=".len()..];
+                strategy = crate::absorb::ListStrategy::parse(value)
+                    .ok_or_else(|| CliError::UnknownListStrategy(value.to_owned()))?;
+            }
             // A `:view` token — accepted, and currently routed to `:pods`.
             _ if arg.starts_with(':') => {}
             _ if arg.starts_with('-') => return Err(CliError::UnknownFlag(arg.to_owned())),
@@ -185,7 +240,10 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
 
     match (want_live, context) {
         (true, Some(c)) if c.is_empty() => Err(CliError::EmptyContext),
-        (true, Some(c)) => Ok(Invocation::Live { context: c }),
+        (true, Some(c)) => Ok(Invocation::Live {
+            context: c,
+            strategy,
+        }),
         (true, None) => Err(CliError::MissingContext),
         (false, Some(_)) => Err(CliError::ContextWithoutLive),
         (false, None) => Ok(Invocation::Fixture),
@@ -221,20 +279,23 @@ mod tests {
         assert_eq!(
             parse(&["--live", "--context", "camelot-eks"]),
             Ok(Invocation::Live {
-                context: "camelot-eks".into()
+                context: "camelot-eks".into(),
+                strategy: crate::absorb::ListStrategy::Streaming,
             }),
         );
         assert_eq!(
             parse(&["--live", "--context=camelot-eks"]),
             Ok(Invocation::Live {
-                context: "camelot-eks".into()
+                context: "camelot-eks".into(),
+                strategy: crate::absorb::ListStrategy::Streaming,
             }),
         );
         // Order-independent, and a `:view` token does not disturb it.
         assert_eq!(
             parse(&[":pods", "--context", "rio", "--live"]),
             Ok(Invocation::Live {
-                context: "rio".into()
+                context: "rio".into(),
+                strategy: crate::absorb::ListStrategy::Streaming,
             }),
         );
     }
@@ -301,5 +362,90 @@ mod tests {
             Err(CliError::UnknownFlag(f)) => assert_eq!(f, "--contxt"),
             other => panic!("expected UnknownFlag, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod list_strategy_cli_tests {
+    use super::*;
+    use crate::absorb::ListStrategy;
+
+    fn parse(args: &[&str]) -> Result<Invocation, CliError> {
+        parse_args(&args.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn the_strategy_defaults_to_streaming_when_unnamed() {
+        assert_eq!(
+            parse(&["--live", "--context", "camelot-eks"]),
+            Ok(Invocation::Live {
+                context: "camelot-eks".into(),
+                strategy: ListStrategy::Streaming,
+            })
+        );
+    }
+
+    #[test]
+    fn both_spellings_select_the_strategy() {
+        for args in [
+            vec!["--live", "--context", "c", "--list-strategy", "list-watch"],
+            vec!["--live", "--context", "c", "--list-strategy=list-watch"],
+        ] {
+            assert_eq!(
+                parse(&args),
+                Ok(Invocation::Live {
+                    context: "c".into(),
+                    strategy: ListStrategy::ListWatch,
+                }),
+                "{args:?}"
+            );
+        }
+    }
+
+    /// The refusal that carries the design.
+    ///
+    /// A typo must NOT resolve to the default. Reading via a different strategy
+    /// than the operator named is an unannounced downgrade — and a
+    /// conformance-partial apiserver is exactly the situation where knowing
+    /// which read path you got is the whole question. `auto` is refused for the
+    /// same reason: there is no such variant, by design.
+    #[test]
+    fn a_misspelled_strategy_is_refused_and_the_refusal_names_the_legal_values() {
+        let err = parse(&["--live", "--context", "c", "--list-strategy", "streming"])
+            .expect_err("a typo must be refused, never defaulted");
+        assert_eq!(err, CliError::UnknownListStrategy("streming".into()));
+
+        let msg = err.to_string();
+        for legal in ListStrategy::ALL {
+            assert!(
+                msg.contains(legal.label()),
+                "the refusal must name `{}` so the fix is one keystroke; got: {msg}",
+                legal.label()
+            );
+        }
+        assert!(
+            msg.contains("auto"),
+            "the refusal must say why there is no auto"
+        );
+
+        assert_eq!(
+            parse(&["--live", "--context", "c", "--list-strategy", "auto"]),
+            Err(CliError::UnknownListStrategy("auto".into())),
+            "`auto` is not a strategy — the absence is the design"
+        );
+    }
+
+    #[test]
+    fn a_valueless_strategy_flag_is_refused() {
+        assert_eq!(
+            parse(&["--live", "--context", "c", "--list-strategy"]),
+            Err(CliError::ListStrategyWithoutValue)
+        );
+        // A following flag means the value was forgotten — the same shape as
+        // `--context --foo` refusing to read a cluster called "--foo".
+        assert_eq!(
+            parse(&["--live", "--list-strategy", "--context", "c"]),
+            Err(CliError::ListStrategyWithoutValue)
+        );
     }
 }

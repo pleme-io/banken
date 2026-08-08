@@ -216,7 +216,10 @@ async fn the_watch_plane_absorbs_from_a_real_cluster() {
         .expect("connect to the named context");
 
     let (despensa, publisher) = banken::absorb::channel();
-    let _task = env.spawn_pod_absorber(publisher);
+    // Named explicitly rather than defaulted: this test asserts the STREAMING
+    // path specifically (generation 1 for the whole initial set), and a silent
+    // strategy change would make it assert something else while staying green.
+    let _task = env.spawn_pod_absorber(publisher, banken::absorb::ListStrategy::Streaming);
 
     // Wait for the initial streaming list to complete. Generous, because a cold
     // exec-credential plugin invocation is ~0.7 s on its own.

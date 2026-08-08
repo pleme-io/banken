@@ -50,7 +50,7 @@ use banken_spec::env::{
 use banken_spec::error::SpecError;
 use banken_spec::types::ResourceKind;
 
-use crate::absorb::{Ev, Folded, Publisher, Replica, SyncPhase};
+use crate::absorb::{Ev, Folded, ListStrategy, Publisher, Replica, SyncPhase};
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::ListParams;
@@ -264,11 +264,24 @@ impl KubeClusterEnv {
     /// that is `pending-banken: grip`, and pretending otherwise here would be
     /// the round-up this repo keeps catching.
     #[must_use]
-    pub fn spawn_pod_absorber(&self, publisher: Publisher) -> tokio::task::JoinHandle<()> {
+    pub fn spawn_pod_absorber(
+        &self,
+        publisher: Publisher,
+        strategy: ListStrategy,
+    ) -> tokio::task::JoinHandle<()> {
         let api: Api<Pod> = Api::all(self.client.clone());
         self.handle.spawn(async move {
             let mut replica = Replica::default();
-            let config = watcher::Config::default().streaming_lists();
+            // The strategy is NAMED, never probed. `ListWatch` sends no
+            // parameters a minimal apiserver need not implement, which is what
+            // lets banken read a conformance-partial backend; `Streaming`
+            // collapses LIST+WATCH into one call against a server that
+            // negotiates `sendInitialEvents`. There is no third arm that picks
+            // for you — see `ListStrategy`.
+            let config = match strategy {
+                ListStrategy::Streaming => watcher::Config::default().streaming_lists(),
+                ListStrategy::ListWatch => watcher::Config::default(),
+            };
             let stream = watcher(api, config).default_backoff();
             futures::pin_mut!(stream);
 

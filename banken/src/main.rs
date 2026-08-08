@@ -62,7 +62,7 @@ fn main() {
                 Ok(())
             }
             Invocation::Fixture => run_fixture(operator).await,
-            Invocation::Live { context } => run_live(operator, &context).await,
+            Invocation::Live { context, strategy } => run_live(operator, &context, strategy).await,
         }
     });
 
@@ -176,7 +176,11 @@ async fn run_fixture(operator: OperatorId) -> Result<(), String> {
 /// `(:context cluster)` from the same `String` that selected the apiserver, so
 /// the two cannot drift.
 #[cfg(feature = "live")]
-async fn run_live(operator: OperatorId, context: &str) -> Result<(), String> {
+async fn run_live(
+    operator: OperatorId,
+    context: &str,
+    strategy: banken::absorb::ListStrategy,
+) -> Result<(), String> {
     use banken::live::KubeClusterEnv;
     // Printed BEFORE the alt-screen is entered, so it survives on the primary
     // screen after banken exits — the durable receipt of which estate was
@@ -197,6 +201,13 @@ async fn run_live(operator: OperatorId, context: &str) -> Result<(), String> {
     let cluster = env.context_name().unwrap_or_default();
     let mut label = String::from("source: LIVE ");
     label.push_str(&cluster);
+    // The strategy is part of the receipt, not a hidden default: which read
+    // path was used decides what a missing table MEANS (a `Streaming` read
+    // against a server that does not negotiate it stalls in `Absorbing` with no
+    // error), so the operator must be able to see it without guessing.
+    label.push_str(" [");
+    label.push_str(strategy.label());
+    label.push(']');
     // The WATCH producer, not the poll. This is the whole M0 payoff: against
     // camelot-eks (191 pods) the poll moved 3,580,862 B every second — 96 GiB
     // per 8-hour day — where a watch over the same 30 s moved 0 bytes, because
@@ -207,7 +218,7 @@ async fn run_live(operator: OperatorId, context: &str) -> Result<(), String> {
     // through a poll. One reader type, two producers — a consumer adapts by
     // reading a declared capability, never by branching on its backend.
     let (despensa, publisher) = banken::absorb::channel();
-    let _absorber = env.spawn_pod_absorber(publisher);
+    let _absorber = env.spawn_pod_absorber(publisher, strategy);
     let mut app = BankenApp::try_new(env, session_env(), operator, label)
         .map_err(|e| e.to_string())?
         .with_cluster(cluster)
@@ -250,6 +261,29 @@ fn print_usage() {
     println!("                   to be\": a merged KUBECONFIG routinely points at a");
     println!("                   different estate, and a pod table from the wrong cluster");
     println!("                   looks exactly like one from the right cluster.");
+    // Derived from the enum, never a hand-typed list — the same rule the KEYS
+    // block below already follows. A variant added without a help line is the
+    // drift this avoids.
+    print!("  --list-strategy  how the initial set is read: ");
+    let mut first = true;
+    for s in banken::absorb::ListStrategy::ALL {
+        if !first {
+            print!(" | ");
+        }
+        print!("{}", s.label());
+        first = false;
+    }
+    println!();
+    println!(
+        "                   default: {}. There is deliberately no `auto` —",
+        banken::absorb::ListStrategy::default().label()
+    );
+    println!("                   falling back to a different read path than the one you");
+    println!("                   named is an unannounced downgrade, and a conformance-");
+    println!("                   partial apiserver is exactly when you need to know which");
+    println!("                   path you got. `streaming` against a server that does not");
+    println!("                   negotiate it stalls in `absorbing` with no rows and no");
+    println!("                   error; `list-watch` sends nothing a minimal server lacks.");
     println!("  -h, --help       print this help");
     println!();
     println!("KEYS (in the :pods table) — read from the authored vocabulary:");
