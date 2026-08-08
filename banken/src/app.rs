@@ -580,13 +580,28 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                 // deliberate no-op — pressing it on the table is not a
                 // mistake worth an error panel.
                 if let Panel::BancadaPreview(pending) = &self.panel {
-                    // `open_bancada` adds no legality of its own: it calls
-                    // `banken_spec::bancada::open`, which routes each pane
-                    // through the arm its `CommandEffect` admits. A mutating
-                    // pane has no `ObservedCommand` value to take the
-                    // unwitnessed arm with, and a plan with no witness fails
-                    // rather than staging anyway.
-                    let r = open_bancada(pending, &self.session);
+                    // *** RE-GRIP AT THE ACT. ***
+                    //
+                    // The plan is exactly what was previewed — that is what
+                    // makes the preview honest. What is re-established here is
+                    // that the SUBJECT is still the object the operator looked
+                    // at. Between `g` and `enter` sits the operator's think
+                    // time, and the pod may have been deleted, replaced, or had
+                    // its name recycled onto a different uid.
+                    //
+                    // The grip is minted HERE and consumed HERE. It cannot be
+                    // taken at preview time and carried: `Grip` is `!Send`, and
+                    // `AsyncApp` requires the app's state to be `Send`, so
+                    // storing one in `self.panel` does not compile. The
+                    // re-check is not a discipline anyone can forget.
+                    let r = match self.env.grip(&pending.subject) {
+                        Ok(grip) => open_bancada(pending, &grip, &self.session),
+                        // A refusal is the RESULT, rendered like any other —
+                        // the operator learns the object moved instead of
+                        // opening a session onto whatever now answers to that
+                        // name.
+                        Err(e) => ActionResult::Error(e.to_string()),
+                    };
                     self.panel = Panel::ActionOverlay(r);
                 }
             }

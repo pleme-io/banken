@@ -83,6 +83,23 @@ fn fixture_pods() -> Vec<Row> {
 }
 
 impl ClusterEnv for FixtureClusterEnv {
+    /// The fixture never changes, so a grip here always succeeds for a row the
+    /// fixture holds — which is the point: the same code path runs against the
+    /// fixture and against a cluster, so the confirm step is rehearsed rather
+    /// than only exercised when it matters.
+    fn grip(
+        &self,
+        id: &banken_spec::env::ObjectId,
+    ) -> Result<banken_spec::env::Grip, banken_spec::env::GripError> {
+        let rows = self
+            .list_resources(id.kind(), id.namespace())
+            .map_err(|e| banken_spec::env::GripError::Blind {
+                kind: id.kind(),
+                message: e.to_string(),
+            })?;
+        id.grip_against(&rows)
+    }
+
     // ── OBSERVE — canned reads, zero network ──
 
     fn list_resources(&self, kind: ResourceKind, _ns: Option<&str>) -> Result<Vec<Row>, SpecError> {

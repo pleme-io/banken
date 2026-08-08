@@ -318,6 +318,29 @@ pub trait ClusterEnv {
     /// A `SpecError::Interp { phase: "watch" }` on read failure.
     fn watch(&self, kind: ResourceKind, ns: Option<&str>) -> Result<WatchStream, SpecError>;
 
+    /// Re-read `id` **at the moment of the act** and return a [`Grip`] only if
+    /// it is still the same object.
+    ///
+    /// This is an OBSERVE method — it reads and nothing else — and it exists
+    /// because a preview and an act are separated by the operator's think time.
+    /// A `(defbancada)` resolved on `g` and opened on `enter` addresses whatever
+    /// the name resolves to *then*; with an absorbed cache that window is the
+    /// cache's TTL. Re-deriving here is what makes "the object you looked at"
+    /// and "the object you act on" the same claim.
+    ///
+    /// Implementations MUST compare the **uid**, not the name. Returning a grip
+    /// because the name still resolves is precisely the recycle bug
+    /// ([`GripError::Recycled`]).
+    ///
+    /// # Errors
+    ///
+    /// [`GripError::Vanished`] when the object is gone, [`GripError::Recycled`]
+    /// when the name now resolves to a different uid, and [`GripError::Blind`]
+    /// when the backend could not be read — the last is deliberately distinct
+    /// from `Vanished`, because "it is gone" and "I cannot see" must not
+    /// authorise an act the same way.
+    fn grip(&self, id: &ObjectId) -> Result<Grip, GripError>;
+
     // ── DECLARE (the only NON-witnessed write path) ──
     //    Emits a git change, never a live cluster mutation.
 
@@ -390,11 +413,317 @@ impl<T: ClusterEnv + ?Sized> ClusterEnv for std::sync::Arc<T> {
         (**self).watch(kind, ns)
     }
 
+    fn grip(&self, id: &ObjectId) -> Result<Grip, GripError> {
+        (**self).grip(id)
+    }
+
     fn declare(&self, change: DeclareChange) -> Result<ChangeRef, SpecError> {
         (**self).declare(change)
     }
 
     fn break_glass(&self, action: WitnessedAction) -> Result<GlassRecord, SpecError> {
         (**self).break_glass(action)
+    }
+}
+
+// ── Identity at the act: ObjectId + Grip (the postigo × cache seal) ──
+
+/// What a row IS, addressed the way the apiserver addresses it.
+///
+/// Carried by a preview so the act can re-find the same object. Fields are
+/// private and [`ObjectId::of`] is the only constructor, so an id cannot be
+/// assembled from a name an operator typed — it is always derived from
+/// something banken observed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ObjectId {
+    uid: Uid,
+    kind: ResourceKind,
+    namespace: Option<String>,
+    name: String,
+}
+
+impl ObjectId {
+    /// Derive an id from an observed row.
+    #[must_use]
+    pub fn of(kind: ResourceKind, row: &Row) -> Self {
+        Self {
+            uid: row.uid.clone(),
+            kind,
+            namespace: row.namespace.clone(),
+            name: row.name.clone(),
+        }
+    }
+
+    #[must_use]
+    pub fn uid(&self) -> &Uid {
+        &self.uid
+    }
+    #[must_use]
+    pub fn kind(&self) -> ResourceKind {
+        self.kind
+    }
+    #[must_use]
+    pub fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl ObjectId {
+    /// Decide a grip against a freshly-read row set — **the one place the uid
+    /// comparison lives.**
+    ///
+    /// Every `ClusterEnv` implementation routes through this rather than
+    /// comparing for itself. That is deliberate: the comparison IS the seal,
+    /// and four copies of it are four chances for one to compare names. A
+    /// backend supplies rows; it does not get to decide what counts as the
+    /// same object.
+    ///
+    /// # Errors
+    ///
+    /// [`GripError::Recycled`] when the name resolves to a different uid, and
+    /// [`GripError::Vanished`] when it resolves to nothing.
+    pub fn grip_against(&self, rows: &[Row]) -> Result<Grip, GripError> {
+        // uid first: the object may have been renamed-around, and identity is
+        // the uid, not the (namespace, name) it currently answers to.
+        if let Some(row) = rows.iter().find(|r| r.uid == self.uid) {
+            return Ok(Grip::hold(self.clone(), row.clone()));
+        }
+        // The name still resolves, to something else — the recycle case.
+        if let Some(other) = rows
+            .iter()
+            .find(|r| r.name == self.name && r.namespace == self.namespace)
+        {
+            return Err(GripError::Recycled {
+                name: self.name.clone(),
+                expected: self.uid.clone(),
+                found: other.uid.clone(),
+            });
+        }
+        Err(GripError::Vanished {
+            kind: self.kind,
+            name: self.name.clone(),
+        })
+    }
+}
+
+/// Why a grip could not be taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GripError {
+    /// The object is gone. Acting on it would address nothing.
+    Vanished { kind: ResourceKind, name: String },
+    /// **The name still resolves — to a DIFFERENT object.**
+    ///
+    /// The name-recycle case, and the reason this whole type exists.
+    /// client-go's `shared_informer.go` documents it verbatim: delete `X` with
+    /// uid `A`, create `X` with uid `B`, and a watcher sees an *update* from
+    /// the first to the second, never the delete-then-create. Anything keyed on
+    /// the name would act on `B` believing it is `A`.
+    Recycled {
+        name: String,
+        expected: Uid,
+        found: Uid,
+    },
+    /// The backend could not be read, so banken does not KNOW whether the
+    /// object still exists. Distinct from `Vanished` on purpose: "it is gone"
+    /// and "I cannot see" must never collapse, or a blind read authorises an
+    /// act the same way a clean one does.
+    Blind { kind: ResourceKind, message: String },
+}
+
+impl std::fmt::Display for GripError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GripError::Vanished { kind, name } => {
+                f.write_str("`")?;
+                f.write_str(name)?;
+                f.write_str("` (")?;
+                f.write_str(kind.label())?;
+                f.write_str(") no longer exists — refusing to act on it")
+            }
+            GripError::Recycled {
+                name,
+                expected,
+                found,
+            } => {
+                f.write_str("`")?;
+                f.write_str(name)?;
+                f.write_str("` is a DIFFERENT object now (was uid ")?;
+                f.write_str(expected.as_str())?;
+                f.write_str(", is uid ")?;
+                f.write_str(found.as_str())?;
+                f.write_str(") — the name was recycled; refusing to act on it")
+            }
+            GripError::Blind { kind, message } => {
+                f.write_str("cannot re-read the ")?;
+                f.write_str(kind.label())?;
+                f.write_str(" to confirm it is still the object you selected: ")?;
+                f.write_str(message)
+            }
+        }
+    }
+}
+
+/// A re-verified hold on ONE live object, valid only inside the dispatch that
+/// took it.
+///
+/// # This is the postigo × cache seal, and it is a seal by ABSENCE
+///
+/// banken previews a `(defbancada)` on `g` and opens it on `enter`. Between the
+/// two, the selected object can be deleted, replaced, or have its name
+/// recycled — and with an absorbed cache the window is the cache's TTL rather
+/// than a poll interval. The plan the operator saw stays exactly what runs
+/// (that is what makes the preview honest); what must be re-established is that
+/// the SUBJECT is still the thing they looked at.
+///
+/// # Why it is `!Send`, and why that is the mechanism rather than a lint
+///
+/// `PhantomData<*const ()>` makes this type `!Send`. `AsyncApp` requires the
+/// app's state to be `Send`, so a `Grip` **cannot be stored in the app between
+/// preview and confirm** — the compiler refuses. There is no discipline to
+/// forget: carrying a stale authorisation forward is not a thing an author can
+/// write.
+///
+/// Every earlier design in this program tried to carry a freshness *witness*
+/// forward instead, and that was built and broken: rows launder through
+/// `set_rows` into `egaku::TableView<Row>` — a foreign container that knows
+/// nothing about freshness — so a stale reading held beside a live table
+/// `cargo check`s clean. Re-deriving at the act dissolves the launder point
+/// instead of guarding it.
+///
+/// # Honest tier
+///
+/// **Truly-unrepresentable within this authored surface** for *carrying* a grip
+/// across the await, and for staging without one (the argument type). It is
+/// **only-mitigated** that the object does not change between the grip and the
+/// act itself — that window is microseconds rather than the operator's think
+/// time, but it is not zero, and no local type can close it. See BANKEN.md C1.
+///
+/// # The `!Send` seal, asserted
+///
+/// Rust has no stable negative trait bounds, so this cannot be a normal
+/// `#[test]` — an earlier attempt used a method-resolution probe and was
+/// VACUOUS: making `Grip` `Send` left all five grip tests green, because
+/// fully-qualified trait syntax always resolves to the blanket impl and can
+/// never become ambiguous. A `compile_fail` doctest is the real assertion.
+///
+/// ```compile_fail
+/// # use banken_spec::env::Grip;
+/// fn requires_send<T: Send>(_: T) {}
+/// let g: Grip = unimplemented!();
+/// requires_send(g); // Grip is !Send — this must NOT compile
+/// ```
+#[derive(Debug)]
+pub struct Grip {
+    row: Row,
+    id: ObjectId,
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+impl Grip {
+    /// The **sole** constructor, and it is crate-private on purpose: a grip
+    /// exists only because [`ClusterEnv::grip`] re-read the object and the uid
+    /// still matched. Nothing else can mint one.
+    pub(crate) fn hold(id: ObjectId, row: Row) -> Self {
+        Self {
+            row,
+            id,
+            _not_send: std::marker::PhantomData,
+        }
+    }
+
+    /// The object as re-read AT THE ACT — not as previewed.
+    #[must_use]
+    pub fn row(&self) -> &Row {
+        &self.row
+    }
+
+    /// What was gripped.
+    #[must_use]
+    pub fn id(&self) -> &ObjectId {
+        &self.id
+    }
+}
+
+#[cfg(test)]
+mod grip_tests {
+    use super::*;
+
+    fn row(uid: &str, ns: &str, name: &str) -> Row {
+        Row {
+            uid: Uid::new(uid).expect("non-blank"),
+            name: name.to_owned(),
+            namespace: Some(ns.to_owned()),
+            version: Some("1".to_owned()),
+            cells: Vec::new(),
+        }
+    }
+
+    fn id_of(uid: &str, ns: &str, name: &str) -> ObjectId {
+        ObjectId::of(ResourceKind::Pod, &row(uid, ns, name))
+    }
+
+    #[test]
+    fn a_grip_is_taken_when_the_uid_still_matches() {
+        let id = id_of("A", "catch", "api");
+        let g = id
+            .grip_against(&[row("A", "catch", "api")])
+            .expect("same object");
+        assert_eq!(g.id().uid().as_str(), "A");
+        assert_eq!(g.row().name, "api");
+    }
+
+    /// THE case this whole type exists for.
+    ///
+    /// The name still resolves — to a different object. Anything keyed on the
+    /// name would act on `B` believing it is `A`, which is exactly what
+    /// client-go documents a watcher cannot tell you.
+    #[test]
+    fn a_recycled_name_refuses_and_names_both_uids() {
+        let id = id_of("A", "catch", "api");
+        let err = id
+            .grip_against(&[row("B", "catch", "api")])
+            .expect_err("a recycled name must refuse");
+
+        match &err {
+            GripError::Recycled {
+                name,
+                expected,
+                found,
+            } => {
+                assert_eq!(name, "api");
+                assert_eq!(expected.as_str(), "A");
+                assert_eq!(found.as_str(), "B");
+            }
+            other => panic!("expected Recycled, got {other:?}"),
+        }
+        // The message must carry BOTH uids: an operator who is refused needs to
+        // see that the name is the same and the object is not.
+        let msg = err.to_string();
+        assert!(msg.contains("A") && msg.contains("B"), "got: {msg}");
+    }
+
+    #[test]
+    fn a_vanished_object_refuses() {
+        let id = id_of("A", "catch", "api");
+        let err = id
+            .grip_against(&[row("C", "catch", "other")])
+            .expect_err("gone means gone");
+        assert!(matches!(err, GripError::Vanished { .. }), "got {err:?}");
+    }
+
+    /// A rename is NOT a recycle: same object, different name. Identity is the
+    /// uid, so the grip holds — and the row it returns carries the NEW name,
+    /// because the act must address the object as it is now.
+    #[test]
+    fn a_renamed_object_still_grips_and_reports_its_current_name() {
+        let id = id_of("A", "catch", "api");
+        let g = id
+            .grip_against(&[row("A", "catch", "api-v2")])
+            .expect("same uid, same object");
+        assert_eq!(g.row().name, "api-v2");
     }
 }

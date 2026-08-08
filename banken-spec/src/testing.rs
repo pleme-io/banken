@@ -64,6 +64,19 @@ impl MockClusterEnv {
 }
 
 impl ClusterEnv for MockClusterEnv {
+    /// Grips against whatever the mock currently reports for the id's kind, so
+    /// a test can stage a vanish or a recycle by changing the mock's rows and
+    /// nothing else.
+    fn grip(&self, id: &crate::env::ObjectId) -> Result<crate::env::Grip, crate::env::GripError> {
+        let rows = self
+            .list_resources(id.kind(), id.namespace())
+            .map_err(|e| crate::env::GripError::Blind {
+                kind: id.kind(),
+                message: e.to_string(),
+            })?;
+        id.grip_against(&rows)
+    }
+
     // ── OBSERVE — canned reads, zero network ──
 
     fn list_resources(&self, kind: ResourceKind, _ns: Option<&str>) -> Result<Vec<Row>, SpecError> {

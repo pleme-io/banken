@@ -426,6 +426,32 @@ fn pod_to_row(pod: Pod) -> Option<Row> {
 }
 
 impl ClusterEnv for KubeClusterEnv {
+    /// A REAL re-read, at the instant of the act.
+    ///
+    /// This is the only method on the live backend that runs on the operator's
+    /// keystroke rather than on the absorb task, and that is deliberate: the
+    /// absorbed snapshot is what the operator LOOKED at, and a cache is exactly
+    /// what cannot answer "is this still the same object". One apiserver round
+    /// trip per BREAK-GLASS or DECLARE is a price worth paying precisely
+    /// because it is per-ACT, not per-tick.
+    fn grip(
+        &self,
+        id: &banken_spec::env::ObjectId,
+    ) -> Result<banken_spec::env::Grip, banken_spec::env::GripError> {
+        let rows = self
+            .list_resources(id.kind(), id.namespace())
+            .map_err(|e| {
+                // A failed read is `Blind`, never `Vanished`. "It is gone" and "I
+                // cannot see" must not authorise an act the same way — collapsing
+                // them is the false-calm class this whole seam exists to refuse.
+                banken_spec::env::GripError::Blind {
+                    kind: id.kind(),
+                    message: e.to_string(),
+                }
+            })?;
+        id.grip_against(&rows)
+    }
+
     fn list_resources(&self, kind: ResourceKind, ns: Option<&str>) -> Result<Vec<Row>, SpecError> {
         match kind {
             ResourceKind::Pod => self.block(self.list_pods(ns)),

@@ -32,6 +32,10 @@ const ALLOWED_METHODS: &[&str] = &[
     "topology",
     "health_signals",
     "watch",
+    // Re-reads ONE object at the moment of the act and returns a `Grip` only
+    // if the uid still matches. A read — the narrowest one in the trait — and
+    // it exists so a preview and an act cannot address different objects.
+    "grip",
     // DECLARE — writes git, never the live cluster
     "declare",
     // BREAK-GLASS — the one witnessed live-effect arm

@@ -64,6 +64,19 @@ impl TickingEnv {
 }
 
 impl ClusterEnv for TickingEnv {
+    fn grip(
+        &self,
+        id: &banken_spec::env::ObjectId,
+    ) -> Result<banken_spec::env::Grip, banken_spec::env::GripError> {
+        let rows = self
+            .list_resources(id.kind(), id.namespace())
+            .map_err(|e| banken_spec::env::GripError::Blind {
+                kind: id.kind(),
+                message: e.to_string(),
+            })?;
+        id.grip_against(&rows)
+    }
+
     /// Read N returns N pods, so "did the feed run again" is answerable from
     /// the table contents alone rather than from a spy counter.
     fn list_resources(&self, kind: ResourceKind, _ns: Option<&str>) -> Result<Vec<Row>, SpecError> {

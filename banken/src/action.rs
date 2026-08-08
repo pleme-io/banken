@@ -259,6 +259,10 @@ pub fn dispatch<E: ClusterEnv>(
 pub struct PendingBancada {
     /// The authored recipe's name.
     pub recipe: String,
+    /// **What the plan was resolved against** — carried so the act can re-find
+    /// it. Not the row: a row is a snapshot, and the whole point of the confirm
+    /// step is that the snapshot may be stale by then.
+    pub subject: banken_spec::env::ObjectId,
     /// The resolved plan. Its fields are private and
     /// [`banken_spec::bancada::plan`] is its only constructor, so its
     /// `legality` cannot disagree with its panes.
@@ -298,6 +302,14 @@ pub fn resolve_bancada(
     let Some(selection) = current_selection(table) else {
         return Err(ActionResult::Error("no row selected".into()));
     };
+    // Capture WHAT was selected, by uid, at preview time. The plan below is
+    // resolved from a row snapshot; this is the handle the act re-finds it
+    // with, and the two answer different questions — "what will run" versus
+    // "is it still the same object".
+    let Some(row) = table.view().selected_row() else {
+        return Err(ActionResult::Error("no row selected".into()));
+    };
+    let subject = banken_spec::env::ObjectId::of(table.kind(), row);
     let ctx = BancadaContext {
         cluster: cluster.to_owned(),
         selection,
@@ -309,6 +321,7 @@ pub fn resolve_bancada(
     match banken_spec::bancada::plan(spec, &ctx) {
         Ok(plan) => Ok(PendingBancada {
             recipe: spec.name.clone(),
+            subject,
             plan,
         }),
         Err(e) => Err(ActionResult::Error(e.to_string())),
@@ -337,7 +350,20 @@ pub fn preview_bancada(pending: &PendingBancada) -> ActionResult {
 /// the command anyway. The derived-legality discipline is enforced by the
 /// seam, not re-implemented here — which is the point of having a seam.
 #[must_use]
-pub fn open_bancada<S: SessionEnv>(pending: &PendingBancada, session: &S) -> ActionResult {
+pub fn open_bancada<S: SessionEnv>(
+    pending: &PendingBancada,
+    grip: &banken_spec::env::Grip,
+    session: &S,
+) -> ActionResult {
+    // The grip is not read here, and that is the design: its VALUE is that it
+    // exists. Holding one means `ClusterEnv::grip` re-read the object at this
+    // instant and the uid still matched, so there is no way to reach this
+    // function having skipped that check — the argument has no other producer.
+    debug_assert_eq!(
+        grip.id().uid(),
+        pending.subject.uid(),
+        "a grip for a different object than the plan was resolved against"
+    );
     match banken_spec::bancada::open(&pending.plan, session) {
         Ok(refs) => ActionResult::BancadaOpened {
             recipe: pending.recipe.clone(),
