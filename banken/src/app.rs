@@ -653,6 +653,18 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         let table_top = 2;
         let table_height = height.saturating_sub(table_top + 1);
         draw_pod_table(buf, 0, table_top, width, table_height, &self.table);
+        // An empty table is not self-explanatory, and the three reasons it can
+        // be empty call for three different operator responses. Saying nothing
+        // makes "still reading" look identical to "nothing there".
+        if self.table.view().is_empty() {
+            draw_empty_state(
+                buf,
+                table_top + 2,
+                width,
+                table_height.saturating_sub(2),
+                self.sync_phase().as_ref(),
+            );
+        }
 
         // ── Status line (last row) ──
         self.draw_status_line(buf, width, height);
@@ -670,13 +682,22 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
 
     fn draw_status_line(&self, buf: &mut Buffer, width: u16, height: u16) {
         let y = height - 1;
-        let bar = Style::default().fg(Color::Black).bg(Color::DarkGrey);
+        let phase = self.sync_phase();
+        // A dead feed must not render like a live one. The bar is the only
+        // always-visible surface, so a degraded replica takes it over: the
+        // rows are the last good set and still worth reading, but the claim
+        // being made about them has changed and must LOOK changed.
+        let bar = if matches!(phase, Some(SyncPhase::Degraded { .. })) {
+            Style::default().fg(Color::White).bg(Color::Red)
+        } else {
+            Style::default().fg(Color::Black).bg(Color::DarkGrey)
+        };
         buf.blank(0, y, width, bar);
 
         let mut left = String::new();
         left.push_str(&self.source_label);
         left.push_str("  ");
-        left.push_str(&pod_count_label(self.table.view().len()));
+        left.push_str(&pod_count_label(self.table.view().len(), phase.as_ref()));
         left.push_str("  ");
         left.push_str(&sort_label(&self.table));
         buf.set_stringn(0, y, &left, width, bar);
@@ -696,13 +717,79 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     }
 }
 
-/// A `"N pods"` label without `format!()` of a full styled string (the
-/// digits go through a typed integer render, then a plain concat — no VT).
-fn pod_count_label(n: usize) -> String {
+/// A `"N pods"` label **carrying the claim being made about the N**, without
+/// `format!()` of a full styled string (the digits go through a typed integer
+/// render, then a plain concat — no VT).
+///
+/// # Why the phase belongs in the count and not beside it
+///
+/// It used to read `"0 pods"` for the whole of the initial absorb — one to
+/// three seconds on a real cluster, longer on a slow link — which is
+/// indistinguishable from an empty cluster and is a claim banken had not
+/// earned. [`SyncPhase`] existed to prevent exactly that (`Absorbing` is "I
+/// have not finished looking", not "there is nothing"), and **nothing
+/// rendered it**: the type was carried all the way to the app and dropped one
+/// step short of the operator's eye. A freshness axis nobody can see is not a
+/// freshness axis.
+///
+/// `None` — no absorber attached — prints the bare count, which is honest:
+/// there is no stream to make a claim about.
+fn pod_count_label(n: usize, phase: Option<&SyncPhase>) -> String {
     let mut s = String::new();
+    match phase {
+        // Before anything has arrived, the count is not the news.
+        Some(SyncPhase::Absorbing) if n == 0 => {
+            s.push_str("absorbing…");
+            return s;
+        }
+        _ => {}
+    }
     s.push_str(&n.to_string());
     s.push_str(" pods");
+    match phase {
+        Some(SyncPhase::Absorbing) => s.push_str(" (absorbing…)"),
+        // The cause, not just the fact: "the watch stopped" and "the watch
+        // stopped because your token expired" lead to different next actions.
+        Some(SyncPhase::Degraded { cause }) => {
+            s.push_str(" · STALE — ");
+            s.push_str(cause);
+        }
+        // `Synced` is the unmarked case on purpose. Labelling the healthy
+        // state trains the eye to skip the label, which is precisely when the
+        // unhealthy one stops being read.
+        Some(SyncPhase::Synced) | None => {}
+    }
     s
+}
+
+/// Say why the table is empty, in the table's own space.
+///
+/// The three reasons an empty table can be empty call for three different
+/// responses — keep waiting, look elsewhere, fix the connection — and an
+/// empty grid says none of them. This is the same rule the status line
+/// follows one row down, applied where the operator is actually looking.
+fn draw_empty_state(buf: &mut Buffer, y: u16, width: u16, height: u16, phase: Option<&SyncPhase>) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let (text, style) = match phase {
+        Some(SyncPhase::Absorbing) => (
+            "  absorbing — waiting for the initial set…".to_owned(),
+            Style::default().fg(Color::Yellow),
+        ),
+        Some(SyncPhase::Degraded { cause }) => {
+            let mut s = String::from("  the watch stopped: ");
+            s.push_str(cause);
+            (s, Style::default().fg(Color::Red))
+        }
+        // Distinct from `Absorbing` on purpose: this one IS an answer.
+        Some(SyncPhase::Synced) => (
+            "  no pods in this cluster".to_owned(),
+            Style::default().fg(Color::DarkGrey),
+        ),
+        None => ("  no rows".to_owned(), Style::default().fg(Color::DarkGrey)),
+    };
+    buf.set_stringn(0, y, &text, width, style);
 }
 
 /// Draw the action-result overlay as a bordered panel across the lower
@@ -1718,6 +1805,95 @@ mod tests {
             !a.dispatch_action_at(Action::OpenBancada(0), t0 + Duration::from_millis(35)),
             "a repeat tick must not plan a second session"
         );
+    }
+
+    // ── the freshness claim must reach the screen ────────────────────
+
+    /// An app whose absorber is in `phase` with `rows` published, rendered to
+    /// a frame. The whole point is to drive the *published* plane, not the
+    /// table directly: the claim under test is what the operator sees about
+    /// rows they did not get.
+    fn frame_with(rows: Vec<banken_spec::env::Row>, phase: crate::absorb::SyncPhase) -> String {
+        let (despensa, publisher) = crate::absorb::channel();
+        publisher.publish(rows, phase);
+        let mut a = app().with_absorber(despensa);
+        a.apply_feed();
+        let mut backend = egaku_term::TestBackend::new(120, 12);
+        backend.draw(|buf| a.render(buf));
+        backend.to_lines().join("\n")
+    }
+
+    /// **THE FALSE-CALM GATE.** During the initial absorb — one to three
+    /// seconds against a real cluster — the status line read `0 pods`, which
+    /// is indistinguishable from an empty cluster and is a claim banken had
+    /// not earned. `SyncPhase::Absorbing` existed the whole time and **nothing
+    /// rendered it**: the axis was carried to the app and dropped one step
+    /// short of the operator's eye.
+    #[test]
+    fn an_absorbing_table_never_claims_zero_pods() {
+        let frame = frame_with(Vec::new(), crate::absorb::SyncPhase::Absorbing);
+        assert!(
+            frame.contains("absorbing"),
+            "the operator must be told banken is still looking: {frame}",
+        );
+        assert!(
+            !frame.contains("0 pods"),
+            "\"0 pods\" while absorbing is a claim banken has not earned: {frame}",
+        );
+    }
+
+    /// The other half, and the reason `Absorbing` and `Synced`-with-no-rows
+    /// are separate variants: this one IS an answer, and the operator should
+    /// stop waiting for it.
+    #[test]
+    fn a_synced_empty_table_says_the_cluster_is_empty() {
+        let frame = frame_with(Vec::new(), crate::absorb::SyncPhase::Synced);
+        assert!(frame.contains("no pods"), "{frame}");
+        assert!(
+            !frame.contains("absorbing"),
+            "a finished read must not read as an unfinished one: {frame}",
+        );
+    }
+
+    /// A dead watch must not render like a live one. The rows are kept — a
+    /// transient apiserver failure must not erase a table someone is reading —
+    /// so it is the *claim* that has to change, and visibly.
+    #[test]
+    fn a_degraded_feed_shows_the_cause_beside_the_stale_rows() {
+        let frame = frame_with(
+            crate::fixture::FixtureClusterEnv::new()
+                .list_resources(ResourceKind::Pod, None)
+                .expect("the fixture reads"),
+            crate::absorb::SyncPhase::Degraded {
+                cause: "token expired".into(),
+            },
+        );
+        assert!(frame.contains("STALE"), "{frame}");
+        assert!(
+            frame.contains("token expired"),
+            "the cause, not just the fact — they lead to different fixes: {frame}",
+        );
+        assert!(
+            frame.contains("catch-api-7d9f"),
+            "the last good rows stay readable: {frame}",
+        );
+    }
+
+    /// `Synced` is deliberately the unmarked case: labelling the healthy state
+    /// trains the eye to skip the label, which is exactly when the unhealthy
+    /// one stops being read.
+    #[test]
+    fn a_healthy_feed_adds_no_noise_to_the_count() {
+        let rows = crate::fixture::FixtureClusterEnv::new()
+            .list_resources(ResourceKind::Pod, None)
+            .expect("the fixture reads");
+        let n = rows.len();
+        let frame = frame_with(rows, crate::absorb::SyncPhase::Synced);
+        let mut expected = n.to_string();
+        expected.push_str(" pods");
+        assert!(frame.contains(&expected), "{frame}");
+        assert!(!frame.contains("STALE"), "{frame}");
+        assert!(!frame.contains("absorbing"), "{frame}");
     }
 
     // ── the legend must not vanish when it does not fit ──────────────
