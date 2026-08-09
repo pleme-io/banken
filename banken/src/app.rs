@@ -92,6 +92,8 @@ pub enum Action {
     /// rather than an error: pressing `enter` on the table is not a mistake
     /// worth an error panel.
     Confirm,
+    /// Open the help page — the authored vocabulary, rendered (`h` / `f1`).
+    Help,
     /// Dismiss the action-result overlay (`esc`).
     Dismiss,
     /// Quit (`q`).
@@ -150,6 +152,17 @@ enum Panel {
     /// [`Panel::ActionOverlay`] so "confirmable" is a property of the screen
     /// state rather than something the confirm handler has to infer.
     BancadaPreview(PendingBancada),
+    /// The help page, with how far it is scrolled.
+    ///
+    /// The scroll offset lives on the PANEL rather than on the app, so it
+    /// cannot survive a close: reopening help always lands at the top, which
+    /// is where an operator expects a page they just asked for to start. A
+    /// field on `BankenApp` would have made "where the help was scrolled to"
+    /// a property of the session instead of of the screen.
+    Help {
+        /// First visible line index.
+        scroll: usize,
+    },
 }
 
 /// The banken TUI app.
@@ -201,6 +214,8 @@ pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
     /// A short label describing where the pod rows came from (fixture vs
     /// live), rendered in the status line — tier-honesty in the UI itself.
     source_label: String,
+    /// The help page, derived from the authored catalog at construction.
+    help: banken_spec::help::HelpPage,
     /// The key legend entries drawn in the status line, DERIVED from the
     /// authored catalog by [`key_legend_parts`], **most important first**.
     ///
@@ -304,6 +319,17 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             done: false,
             source_label: source_label.into(),
             legend_parts: key_legend_parts(catalog),
+            // Built once, at construction. The page is a pure function of the
+            // catalog and the app's wiring, neither of which changes while
+            // banken runs — so rebuilding it per keystroke would be work that
+            // can only ever produce the same value.
+            help: banken_spec::help::HelpPage::build(
+                catalog,
+                banken_spec::help::Wiring {
+                    unbound_actions: &unbound_action_names(catalog),
+                    unbound_bancadas: &unbound_bancada_names(catalog),
+                },
+            ),
             absorb: None,
             absorb_stop: None,
             applied_generation: 0,
@@ -521,7 +547,43 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     pub fn apply_action(&mut self, action: Action) {
         // Any navigation/action dismisses a stale overlay first, except the
         // explicit Dismiss/Quit which are handled below.
+        // While help is up it OWNS the navigation keys: `j`/`k` scroll the
+        // page rather than moving a cursor the operator cannot see. Handled
+        // before the ordinary arms so the table's own reaction is not the
+        // fall-through — a help screen whose scroll keys also moved the
+        // selection underneath would leave the operator somewhere else when
+        // they closed it.
+        if let Panel::Help { scroll } = self.panel {
+            match action {
+                Action::SelectNext => {
+                    self.panel = Panel::Help {
+                        scroll: scroll.saturating_add(1),
+                    };
+                    return;
+                }
+                Action::SelectPrev => {
+                    self.panel = Panel::Help {
+                        scroll: scroll.saturating_sub(1),
+                    };
+                    return;
+                }
+                // `h` again closes it — the same key in and out, which is what
+                // an operator tries first.
+                Action::Help | Action::Dismiss => {
+                    self.panel = Panel::Table;
+                    return;
+                }
+                // Everything else falls through and therefore closes help by
+                // acting: pressing `l` from the help page should view logs,
+                // not be swallowed.
+                _ => {}
+            }
+        }
+
         match action {
+            Action::Help => {
+                self.panel = Panel::Help { scroll: 0 };
+            }
             Action::SelectNext => {
                 self.panel = Panel::Table;
                 self.table.view_mut().select_next();
@@ -616,7 +678,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     pub fn pending_bancada(&self) -> Option<&PendingBancada> {
         match &self.panel {
             Panel::BancadaPreview(p) => Some(p),
-            Panel::Table | Panel::ActionOverlay(_) => None,
+            Panel::Table | Panel::ActionOverlay(_) | Panel::Help { .. } => None,
         }
     }
 
@@ -632,7 +694,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         match &self.panel {
             Panel::ActionOverlay(r) => Some(r.clone()),
             Panel::BancadaPreview(p) => Some(preview_bancada(p)),
-            Panel::Table => None,
+            Panel::Table | Panel::Help { .. } => None,
         }
     }
 
@@ -675,6 +737,12 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             // The one screen with a confirm affordance — the footer says so.
             Panel::BancadaPreview(pending) => {
                 draw_overlay(buf, width, height, &preview_bancada(pending), true);
+            }
+            // Help owns the WHOLE frame while it is up: the page is longer
+            // than any half-screen panel can hold, and a table showing
+            // through underneath makes two screens read as one.
+            Panel::Help { scroll } => {
+                crate::help::draw_help(buf, width, height, &self.help, *scroll);
             }
             Panel::Table => {}
         }
@@ -983,6 +1051,7 @@ impl From<NavIntent> for Action {
             NavIntent::SelectPrev => Action::SelectPrev,
             NavIntent::ToggleSort => Action::ToggleSort,
             NavIntent::Confirm => Action::Confirm,
+            NavIntent::Help => Action::Help,
             NavIntent::Dismiss => Action::Dismiss,
             NavIntent::Quit => Action::Quit,
         }
@@ -1111,6 +1180,20 @@ fn bind(
 /// operator can see there are more chords than shown, instead of the legend
 /// quietly disappearing (which is what the previous `if legend_w < width`
 /// did the moment the bancada chords landed).
+///
+/// **The packing is GREEDY, not a priority prefix** — corrected 2026-08-09,
+/// because this doc used to say "the most important entries survive" and the
+/// loop has never done that. It walks the parts in order and keeps each one
+/// that still fits, so a later, *shorter* entry can appear while an earlier,
+/// longer one is dropped. Measured at 63 columns:
+/// `l:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  g:OBSERVE  h:help …` — where
+/// `shift+g:BREAK-GLASS` is gone and the shorter `h:help` behind it is not.
+///
+/// That is the better behaviour and is kept: nothing is dropped *because of*
+/// a later entry (it only fills room the longer one could not use), and the
+/// alternative — stopping at the first entry that does not fit — would blank
+/// the rest of the legend to preserve a rule nobody benefits from. Order
+/// still matters, it is just a tiebreak rather than a guarantee.
 #[must_use]
 pub fn fit_legend(parts: &[String], available: usize) -> String {
     const SEP: &str = "  ";
@@ -1176,7 +1259,7 @@ pub fn key_legend_parts(catalog: &Catalog) -> Vec<String> {
         if let Some(spec) = catalog.actions().iter().find(|a| a.name == *name) {
             let mut p = spec.keys.canonical();
             p.push(':');
-            p.push_str(&spec.legality.class().label().to_uppercase());
+            p.push_str(spec.legality.class().label_upper());
             parts.push(p);
         }
     }
@@ -1188,15 +1271,24 @@ pub fn key_legend_parts(catalog: &Catalog) -> Vec<String> {
     for g in catalog.bancadas_from(VIEW_NAME) {
         let mut p = g.keys.canonical();
         p.push(':');
-        p.push_str(
-            &g.legality()
-                .map(|l| l.class().label().to_uppercase())
-                .unwrap_or_else(|_| "INVALID".to_owned()),
-        );
+        p.push_str(g.legality().map_or("INVALID", |l| l.class().label_upper()));
         parts.push(p);
     }
 
-    for (intent, label) in [(NavIntent::ToggleSort, "sort"), (NavIntent::Quit, "quit")] {
+    // `help` goes ahead of `sort`/`quit`, and being SHORT is what actually
+    // keeps it on a narrow screen: `fit_legend` packs greedily (see its doc),
+    // so `h:help` at six characters survives widths that drop
+    // `shift+g:BREAK-GLASS`. Both properties point the same way here, which
+    // is the point — an operator who cannot see `h:help` has no way in to the
+    // page that documents every other chord, so it is the one entry whose
+    // discoverability is not optional.
+    // Measured at 63 columns:
+    //   `l:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  g:OBSERVE  h:help …`
+    for (intent, label) in [
+        (NavIntent::Help, "help"),
+        (NavIntent::ToggleSort, "sort"),
+        (NavIntent::Quit, "quit"),
+    ] {
         if let Some(nav) = catalog.nav_keys().iter().find(|n| n.intent == intent) {
             let mut p = nav.keys.canonical();
             p.push(':');
@@ -1804,6 +1896,131 @@ mod tests {
         assert!(
             !a.dispatch_action_at(Action::OpenBancada(0), t0 + Duration::from_millis(35)),
             "a repeat tick must not plan a second session"
+        );
+    }
+
+    // ── the help page ────────────────────────────────────────────────
+
+    fn help_frame(a: &BankenApp<FixtureClusterEnv, MockSessionEnv>) -> String {
+        let mut backend = egaku_term::TestBackend::new(110, 30);
+        backend.draw(|buf| a.render(buf));
+        backend.to_lines().join("\n")
+    }
+
+    /// **THE GATE.** The authored help chord opens the page, and the page
+    /// shows the authored vocabulary. A help key that opened a hand-written
+    /// blurb would be the rot this whole derivation exists to prevent.
+    #[test]
+    fn the_authored_help_chord_opens_the_derived_page() {
+        let mut a = app();
+        assert!(!help_frame(&a).contains("NAVIGATION"), "closed at rest");
+
+        // Through the KEYMAP, not by constructing the action — so this also
+        // proves the authored `h` reaches `Action::Help`.
+        let action = *a
+            .keymap()
+            .find_binding(
+                &awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::H),
+                &awase::MatchContext::default(),
+            )
+            .map(|b| &b.action)
+            .expect("`h` is bound");
+        assert_eq!(action, Action::Help);
+        a.apply_action(action);
+
+        let frame = help_frame(&a);
+        for expected in ["NAVIGATION", "ACTIONS", "BREAK-GLASS", "view-logs"] {
+            assert!(frame.contains(expected), "missing `{expected}`:\n{frame}");
+        }
+    }
+
+    /// `f1` is the second authored chord for the same intent — the `down`/`j`
+    /// shape. It exists because `?` (the k9s idiom) is not authorable on the
+    /// pinned awase; see `specs/navkeys.lisp`.
+    #[test]
+    fn the_second_authored_help_chord_opens_it_too() {
+        let mut a = app();
+        let action = *a
+            .keymap()
+            .find_binding(
+                &awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::F1),
+                &awase::MatchContext::default(),
+            )
+            .map(|b| &b.action)
+            .expect("`f1` is bound");
+        a.apply_action(action);
+        assert!(help_frame(&a).contains("NAVIGATION"));
+    }
+
+    /// Help OWNS the navigation keys while it is up. Without this, `j` would
+    /// scroll nothing and silently move a cursor the operator cannot see —
+    /// so closing help would leave them somewhere else in the table.
+    #[test]
+    fn navigation_scrolls_the_help_page_and_leaves_the_cursor_alone() {
+        let mut a = app();
+        a.apply_action(Action::SelectNext); // move the table cursor first
+        let cursor = a.table().view().selected_index();
+        assert_eq!(cursor, 1);
+
+        a.apply_action(Action::Help);
+        let top = help_frame(&a);
+        for _ in 0..6 {
+            a.apply_action(Action::SelectNext);
+        }
+        let scrolled = help_frame(&a);
+        assert_ne!(top, scrolled, "`j` must scroll the page");
+        assert_eq!(
+            a.table().view().selected_index(),
+            cursor,
+            "and must NOT move the table cursor underneath",
+        );
+    }
+
+    /// The same key in and out — what an operator tries first — and `esc`
+    /// too, since that is what closes every other overlay.
+    #[test]
+    fn help_closes_on_the_help_chord_and_on_dismiss() {
+        for closer in [Action::Help, Action::Dismiss] {
+            let mut a = app();
+            a.apply_action(Action::Help);
+            assert!(help_frame(&a).contains("NAVIGATION"));
+            a.apply_action(closer);
+            assert!(
+                !help_frame(&a).contains("NAVIGATION"),
+                "{closer:?} must close the page",
+            );
+        }
+    }
+
+    /// An action pressed from the help page ACTS rather than being swallowed.
+    /// A modal that eats every key is a modal an operator has to escape from
+    /// before doing the thing they already decided to do.
+    #[test]
+    fn a_postigo_chord_from_the_help_page_acts_and_closes_it() {
+        let mut a = app();
+        a.apply_action(Action::Help);
+        a.apply_action(Action::ObserveLogs);
+        let frame = help_frame(&a);
+        assert!(!frame.contains("NAVIGATION"), "help closed:\n{frame}");
+        assert!(a.overlay().is_some(), "the OBSERVE result is showing");
+    }
+
+    /// The status line advertises the help chord. A help page nothing points
+    /// at is a page nobody opens — and this is the ONE chord whose
+    /// discoverability is not optional, because it is the way in to all the
+    /// others.
+    #[test]
+    fn the_status_line_advertises_the_help_chord() {
+        let a = app();
+        let catalog = banken_spec::load_catalog().expect("the shipped vocabulary resolves");
+        let legend = key_legend(&catalog);
+        assert!(legend.contains("h:help"), "got: {legend}");
+        // And it survives a narrow terminal, where the legend drops entries
+        // from the END — which is why `help` is ordered before `sort`/`quit`.
+        let narrow = fit_legend(&a.legend_parts, 40);
+        assert!(
+            narrow.contains("h:help") || !narrow.contains("o:sort"),
+            "`help` must not be dropped before `sort`: {narrow}",
         );
     }
 

@@ -39,5 +39,27 @@
 ;; MEASURED translation.
 (defnavkey :name "confirm-preview"   :keys "return" :intent confirm)
 
+;; Help — the authored vocabulary, rendered back to the operator.
+;;
+;; TWO chords, one intent, the same shape as `down`/`j`: `h` is the one an
+;; operator reaches for, `f1` is the one that works on any keyboard layout.
+;;
+;; `?` — the k9s/vim idiom, and what was authored first — is NOT here, and the
+;; reason is measured rather than aesthetic. `awase 0.1.6` (what banken pins)
+;; has no `?` in `Key::from_name`, so `(defnavkey :keys "?")` fails to compile
+;; the catalog outright: `invalid hotkey: unknown key: ?`. Worse, egaku-term's
+;; `to_hotkey` resolves a delivered `Char('?')` through that same function, so
+;; even a version that PARSED `?` would be delivering it as `Key::Slash` with
+;; no modifier — awase models one `Slash` key and cannot distinguish the
+;; shifted glyph — making `?` and `/` literally the same chord and burning the
+;; k9s filter key to buy the k9s help key.
+;;
+;; `pending-banken: help-question-chord` — `?` becomes authorable when awase
+;; models a shifted glyph distinctly from its unshifted key. Until then the
+;; status-line legend carries `h:help`, so the chord is discoverable rather
+;; than merely documented.
+(defnavkey :name "help"              :keys "h"      :intent help)
+(defnavkey :name "help-f1"           :keys "f1"     :intent help)
+
 ;; Quit.
 (defnavkey :name "quit"              :keys "q"      :intent quit)

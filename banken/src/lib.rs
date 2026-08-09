@@ -83,6 +83,8 @@ pub mod app;
 pub mod cli;
 pub mod feed;
 pub mod fixture;
+/// The help overlay — the terminal FACE of `banken_spec::help::HelpPage`.
+pub mod help;
 pub mod render;
 pub mod session;
 pub mod table;

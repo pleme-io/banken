@@ -273,7 +273,7 @@ impl PendingBancada {
     /// The derived `postigo` class label, uppercased.
     #[must_use]
     pub fn legality_label(&self) -> String {
-        self.plan.legality().class().label().to_uppercase()
+        self.plan.legality().class().label_upper().to_owned()
     }
 }
 

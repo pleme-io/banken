@@ -26,6 +26,7 @@
 use crate::{
     bancada::{CommandEffect, ContextField, PanePlacement, PaneRole, SessionLayout},
     drill::DrillLevel,
+    help::HelpTopic,
     nav::NavIntent,
     pathology::{EvidenceKind, RemedyKind, Severity, Verdict},
     types::{DeclareTargetKind, LegalityClass, ResourceKind, ViewKind},
@@ -149,6 +150,12 @@ pub fn catalog() -> Vec<CatalogRow> {
         ContextField::ALL,
         ContextField::label,
     );
+    // The help page's own axis. It belongs here rather than being a private
+    // detail of `crate::help` because it answers the same question the roster
+    // does — "which authored domains exist" — and putting it on the roster is
+    // what makes a new domain shipping without an operator-facing section a
+    // RED TEST rather than a silently shorter help page.
+    push_axis(&mut rows, "help-topic", HelpTopic::ALL, HelpTopic::label);
     rows
 }
 
@@ -185,6 +192,8 @@ pub const REQUIRED_AXES: &[&str] = &[
     "session-layout",
     "command-effect",
     "context-field",
+    // the help page (crate::help) — one topic per authored domain
+    "help-topic",
 ];
 
 #[cfg(test)]
@@ -320,7 +329,8 @@ mod tests {
             + PanePlacement::ALL.len()
             + SessionLayout::ALL.len()
             + CommandEffect::ALL.len()
-            + ContextField::ALL.len();
+            + ContextField::ALL.len()
+            + HelpTopic::ALL.len();
         assert_eq!(rows.len(), expected);
     }
 

@@ -161,6 +161,58 @@ upstream: `project` should prefer `row.cell(field)` and fall back to
 this repo** (QUADRO T1), so the local fix is the honest floor and this row is the
 destination.
 
+## The help page — the authored vocabulary, rendered back (2026-08-09)
+
+`h` (or `f1`) in the pod table opens a full-screen, scrollable help page; the
+status-line legend carries `h:help` so it is discoverable rather than merely
+documented. **It is DERIVED, and that is the whole design** — a hand-written
+help screen is a second copy of the vocabulary that rots in the one direction
+nobody notices: the app grows a chord, the help does not, and the feature is
+invisible forever.
+
+`banken_spec::help::HelpPage` is typed data built from the resolved `Catalog`;
+`banken::help` is one terminal FACE of it and `--help` is the other, so the two
+**render the same value**. `main.rs` used to build its own KEYS block by walking
+the catalog a second time — which is exactly how `--help` came to advertise `S`
+for a chord the runtime bound as `shift+s`.
+
+Three mechanisms keep it current, at three different tiers — do not collapse them:
+
+| what changes | what happens | tier |
+|---|---|---|
+| a new `(defk8saction)` / `(defbancada)` / … form | appears on the page with no code change | **truly-unrepresentable** (sections iterate the catalog) |
+| a new authored DOMAIN | `error[E0004]` until it has a section — `HelpTopic` is a `closed_catalog!` enum and `HelpPage::section` matches it exhaustively; `help-topic` is also on `REQUIRED_AXES`, so `catalog_covers_every_axis` gates it both ways | **compile-error + CI-caught** |
+| a chord the running app cannot dispatch | listed but MARKED `(declared, not wired in this view)`, via a `Wiring` the app supplies | **CI-caught** (`every_authored_chord_is_on_the_help_page`); nothing stops a caller passing an empty `Wiring` |
+
+The load-bearing test is `every_authored_chord_is_on_the_help_page`: the union
+of nav + action + bancada chords must each appear in the rendered page. A chord
+an operator can press and cannot look up is an undiscoverable feature.
+
+**Help owns the navigation keys while it is up.** `j`/`k` scroll the page and
+deliberately do *not* move the table cursor underneath — otherwise closing help
+would leave the operator somewhere else. A postigo chord pressed from the page
+still ACTS and closes it: a modal that eats every key is one you have to escape
+before doing the thing you already decided to do.
+
+**`?` is NOT the help chord, and the reason is measured.** `awase 0.1.6` (what
+banken pins) has no `?` in `Key::from_name`, so `(defnavkey :keys "?")` fails to
+compile the catalog: `invalid hotkey: unknown key: ?`. And egaku-term's
+`to_hotkey` resolves a delivered `Char('?')` through that same function, so even
+a version that *parsed* `?` would deliver it as `Key::Slash` with no modifier —
+awase models one `Slash` key and cannot distinguish the shifted glyph — making
+`?` and `/` literally the same chord and burning the k9s filter key to buy the
+k9s help key. `pending-banken: help-question-chord`.
+
+- **`LegalityClass::label_upper()`** replaced five `.label().to_uppercase()`
+  sites (legend, action overlay, `--help`, both help sections). Past the
+  third-use test, and each one allocated a `String` to say a fixed word.
+- **Corrected: `fit_legend` packs GREEDILY, not by priority prefix.** Its doc
+  claimed "the most important entries survive"; the loop has never done that —
+  it keeps each entry that still fits, so a later, shorter one can appear while
+  an earlier, longer one is dropped. Measured at 63 columns:
+  `l:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  g:OBSERVE  h:help …`. The
+  behaviour is better than the claim and is kept; the doc now describes it.
+
 ## The two app seams — `BankenApp<E: ClusterEnv, S: SessionEnv>`
 
 The app is generic over **two** mockable traits, for the same reason each time:

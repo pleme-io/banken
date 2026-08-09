@@ -74,6 +74,15 @@ closed_catalog! {
         /// `postigo` class. Typing the confirm key itself as `Observe` would
         /// misdescribe the BREAK-GLASS case.
         Confirm => "confirm",
+        /// Open the help page — the authored vocabulary, rendered.
+        ///
+        /// An *intent*, not a `(defk8saction)`, for the usual reason: it
+        /// touches local UI state and reads nothing from a cluster, so it
+        /// carries no `postigo` class. What makes it worth a variant rather
+        /// than a hardcoded chord in the app is that the page it opens is
+        /// itself derived from this catalog — so the key that shows the
+        /// vocabulary is part of the vocabulary it shows.
+        Help => "help",
         /// Quit banken.
         Quit => "quit",
     }
@@ -126,7 +135,7 @@ mod tests {
 
     #[test]
     fn every_intent_has_a_label_and_a_wire_name_that_agree() {
-        assert_eq!(NavIntent::ALL.len(), 6);
+        assert_eq!(NavIntent::ALL.len(), 7);
         for i in NavIntent::ALL {
             let wire = serde_json::to_string(i).expect("serializes");
             let mut expected = String::from("\"");

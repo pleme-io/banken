@@ -92,6 +92,8 @@ pub mod discovery;
 pub mod drill;
 pub mod env;
 pub mod error;
+/// The help page — the authored vocabulary rendered back to the operator.
+pub mod help;
 pub mod interp;
 pub mod loader;
 pub mod nav;

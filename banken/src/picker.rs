@@ -634,6 +634,10 @@ fn keymap_from_catalog(catalog: &Catalog) -> (awase::KeyMode<PickerAction>, Adve
 ///
 /// - `ToggleSort` — the picker's order is the fuzzy ranking, which is a
 ///   function of the query. A sort toggle would have to fight it.
+/// - `Help` — the picker's entire vocabulary is four chords and the footer
+///   names all four. A help overlay here would document less than the screen
+///   already shows, and its chord (`h`) is a letter an operator needs for
+///   typing `helm-controller` into the filter.
 /// - `Dismiss` and `Quit` both mean "leave", and both are already `Cancel`;
 ///   `Quit`'s authored chord is `q`, which is filtered out as typable, so in
 ///   practice `escape` carries it.
@@ -643,7 +647,7 @@ fn picker_action(intent: NavIntent) -> Option<PickerAction> {
         NavIntent::SelectPrev => Some(PickerAction::Up),
         NavIntent::Confirm => Some(PickerAction::Accept),
         NavIntent::Dismiss | NavIntent::Quit => Some(PickerAction::Cancel),
-        NavIntent::ToggleSort => None,
+        NavIntent::ToggleSort | NavIntent::Help => None,
     }
 }
 

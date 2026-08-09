@@ -345,65 +345,25 @@ fn print_usage() {
     println!("                   error; `list-watch` sends nothing a minimal server lacks.");
     println!("  -h, --help       print this help");
     println!();
-    println!("KEYS (in the :pods table) — read from the authored vocabulary:");
+    // ── The vocabulary — the SAME `HelpPage` the in-app `h` overlay draws ──
+    //
+    // This block used to build its own text: it walked the catalog here, and
+    // `banken::app` walked it again for the status-line legend. Two faces
+    // that build their own text are two things that can disagree, and they
+    // did — `--help` advertised `S` for a chord the runtime bound as
+    // `shift+s`. There is now one derivation, in `banken_spec::help`, and
+    // this is one of its two renderers.
     match banken_spec::load_catalog() {
         Ok(catalog) => {
-            // The nav keys, grouped by intent so `down`/`j` read as one row.
-            for intent in banken_spec::nav::NavIntent::ALL {
-                let chords: Vec<String> = catalog
-                    .nav_keys()
-                    .iter()
-                    .filter(|n| n.intent == *intent)
-                    .map(|n| n.keys.canonical())
-                    .collect();
-                if !chords.is_empty() {
-                    println!("  {:<16} {}", chords.join(" / "), intent.label());
-                }
-            }
-            // The postigo actions, each with the gate its keystroke crosses.
-            for a in catalog.actions() {
-                let unbound = banken::app::unbound_action_names(&catalog).contains(&a.name);
-                let note = if unbound { "  (not wired yet)" } else { "" };
-                println!(
-                    "  {:<16} {} — {}{}",
-                    a.keys.canonical(),
-                    a.legality.class().label().to_uppercase(),
-                    a.name,
-                    note,
-                );
-            }
-            // The bancadas — pre-warmed tear sessions. The class printed is
-            // the DERIVED one (from the recipe's panes), so a recipe staging a
-            // live effect cannot be advertised here as a convenience.
-            if !catalog.bancadas().is_empty() {
-                println!();
-                println!("BANCADAS (pre-warmed tear/mado troubleshooting sessions):");
-                let unbound = banken::app::unbound_bancada_names(&catalog);
-                for g in catalog.bancadas() {
-                    let class = g
-                        .legality()
-                        .map(|l| l.class().label().to_uppercase())
-                        .unwrap_or_else(|_| "INVALID".to_owned());
-                    let note = if unbound.contains(&g.name) {
-                        "  (launches from another view)"
-                    } else {
-                        ""
-                    };
-                    println!(
-                        "  {:<16} {} — {} ({} panes, from :{}){}",
-                        g.keys.canonical(),
-                        class,
-                        g.name,
-                        g.panes.len(),
-                        g.from,
-                        note,
-                    );
-                }
-                println!("  The chord RESOLVES and previews the plan; `enter` confirms it and");
-                println!("  opens it through the SessionEnv seam. The gap is deliberate: you see");
-                println!("  the resolved argv and the cluster it names before anything opens.");
-                println!("  Opening for real needs `--features tear` and a running tear-daemon;");
-                println!("  without them `enter` says so rather than reporting a session.");
+            let page = banken_spec::help::HelpPage::build(
+                &catalog,
+                banken_spec::help::Wiring {
+                    unbound_actions: &banken::app::unbound_action_names(&catalog),
+                    unbound_bancadas: &banken::app::unbound_bancada_names(&catalog),
+                },
+            );
+            for line in page.plain_lines() {
+                println!("{line}");
             }
         }
         // Honest: if the vocabulary does not load, say so rather than print a

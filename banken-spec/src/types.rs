@@ -165,6 +165,24 @@ impl LegalityClass {
             LegalityClass::BreakGlass => "break-glass",
         }
     }
+
+    /// The **operator-facing** label — the gate an operator reads before
+    /// pressing a key.
+    ///
+    /// Five call sites wrote `.label().to_uppercase()` (the status-line
+    /// legend, the action overlay, `--help`, and both help-page sections),
+    /// which is past the third-use test — and each of them allocated a
+    /// `String` to say a fixed word. This returns `&'static str`, so the
+    /// uppercase form is one list rather than five expressions that could
+    /// disagree about how `break-glass` is shouted.
+    #[must_use]
+    pub fn label_upper(self) -> &'static str {
+        match self {
+            LegalityClass::Observe => "OBSERVE",
+            LegalityClass::Declare => "DECLARE",
+            LegalityClass::BreakGlass => "BREAK-GLASS",
+        }
+    }
 }
 
 impl ActionLegality {
