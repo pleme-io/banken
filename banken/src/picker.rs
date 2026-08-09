@@ -131,6 +131,14 @@ pub struct ContextPicker {
     keys: awase::KeyMode<PickerAction>,
     /// The chords the footer advertises, authored-first — see [`chord_for`].
     advertised: Advertised,
+    /// The modal editor over the query, and the query itself.
+    ///
+    /// banken holds the text because `FuzzyPicker` cannot express editing it —
+    /// seven event arms, `Type(char)` and `Backspace` and nothing else. The
+    /// authoritative copy lives here; egaku 0.1.12's `query_mut()` guard is
+    /// how it is written back, refiltering on drop.
+    vim: crate::vim::Vim,
+    query: crate::vim::QueryLine,
     /// The kubeconfig's `current-context`, annotated on its row.
     ///
     /// Shown, never pre-selected. Pre-selecting it would rebuild "whatever
@@ -204,6 +212,8 @@ impl ContextPicker {
             total,
             keys,
             advertised,
+            vim: crate::vim::Vim::for_filter(),
+            query: crate::vim::QueryLine::default(),
             current: kubeconfig_current_context(),
             refusal: None,
             notice: None,
@@ -259,6 +269,17 @@ impl ContextPicker {
         self.refusal = None;
         self.notice = None;
 
+        // Backspace and escape are STANCE-DEPENDENT — in Insert backspace
+        // deletes, in Normal it moves left; escape cancels a pending operator
+        // before it cancels the screen. So they go through the modal layer
+        // rather than straight to an event, while the arrows stay direct
+        // (an arrow is not a vim key and has one meaning in both stances).
+        match action {
+            PickerAction::Erase => return self.stroke(crate::vim::Stroke::Backspace),
+            PickerAction::Cancel => return self.stroke(crate::vim::Stroke::Escape),
+            _ => {}
+        }
+
         let event = match action {
             PickerAction::Up => PickerEvent::NavUp,
             PickerAction::Down => PickerEvent::NavDown,
@@ -300,11 +321,113 @@ impl ContextPicker {
         changed
     }
 
-    /// Type one character into the filter query.
-    pub fn type_char(&mut self, c: char) {
+    /// Feed one keystroke to the modal editor.
+    ///
+    /// Every printable arrives here, because the picker's keymap binds only
+    /// chords that cannot be typed. In Insert the character lands in the
+    /// query; in Normal it is a command, and an unbound one is INERT rather
+    /// than typed — which is the property the whole layer trades for.
+    pub fn stroke(&mut self, s: crate::vim::Stroke) -> bool {
         self.refusal = None;
         self.notice = None;
-        let _effects = self.picker.on_event(PickerEvent::Type(c));
+        let effect = self.vim.stroke(s, &mut self.query);
+        self.apply(effect)
+    }
+
+    /// Type one character — the [`Stroke::Char`] path, kept as a name because
+    /// `AsyncApp::on_text` hands over a `char`.
+    pub fn type_char(&mut self, c: char) {
+        let _changed = self.stroke(crate::vim::Stroke::Char(c));
+    }
+
+    /// Route one [`crate::vim::Effect`] onto the picker.
+    ///
+    /// This is where the picker's TWO cursors are kept apart: a text effect
+    /// writes the query back through egaku's guard, a row effect drives the
+    /// selection, and neither can be mistaken for the other.
+    fn apply(&mut self, effect: crate::vim::Effect) -> bool {
+        use crate::vim::Effect;
+        match effect {
+            Effect::Inert => false,
+            Effect::Moved => true,
+            Effect::Edited => {
+                // egaku 0.1.12: the guard refilters on drop, so the view can
+                // never fall out of step with the text banken just wrote.
+                let mut q = self.picker.query_mut();
+                q.select_all();
+                q.delete_selection();
+                for c in self.query.text().chars() {
+                    q.insert_char(c);
+                }
+                true
+            }
+            Effect::Rows(n) => {
+                for _ in 0..n.unsigned_abs() {
+                    let _ = self.picker.on_event(if n < 0 {
+                        PickerEvent::NavUp
+                    } else {
+                        PickerEvent::NavDown
+                    });
+                }
+                true
+            }
+            Effect::RowEdge { last } => {
+                // `PickerEvent` has no absolute-row arm, so `gg`/`G` walk —
+                // but they walk an EXACT distance read from the view, never a
+                // full lap. `move_up`/`move_down` wrap, so a lap would return
+                // to where it started and `gg` would silently do nothing.
+                let at = self.picker.view().selected;
+                let n = self.picker.visible_count();
+                let (event, steps) = if last {
+                    (PickerEvent::NavDown, n.saturating_sub(1).saturating_sub(at))
+                } else {
+                    (PickerEvent::NavUp, at)
+                };
+                for _ in 0..steps {
+                    let _ = self.picker.on_event(event.clone());
+                }
+                true
+            }
+            // Straight to the event, NEVER back through `dispatch` — that
+            // path routes Cancel into `stroke(Escape)`, which produced
+            // `Effect::Cancel` again and overflowed the stack on the first
+            // `esc`. Caught by escape_leaves_without_choosing.
+            Effect::Accept => self.emit(PickerEvent::Accept),
+            Effect::Cancel => self.emit(PickerEvent::Cancel),
+        }
+    }
+
+    /// Feed one event straight to the picker, collecting its effects.
+    ///
+    /// The single non-re-entrant path into `FuzzyPicker`, so a keystroke can
+    /// never route back into the layer that produced it.
+    fn emit(&mut self, event: PickerEvent) -> bool {
+        let effects = self.picker.on_event(event);
+        let changed = !effects.is_empty();
+        for effect in effects {
+            match effect {
+                PickerEffect::Accepted { key } => {
+                    self.chosen = Some(key);
+                    self.quit = true;
+                }
+                PickerEffect::Cancelled => self.quit = true,
+                PickerEffect::Opened
+                | PickerEffect::Filtered { .. }
+                | PickerEffect::Moved { .. } => {}
+            }
+        }
+        changed
+    }
+
+    /// The stance badge and any pending sequence, for the status line.
+    #[must_use]
+    pub fn stance_badge(&self) -> String {
+        let mut s = String::from(self.vim.stance().label());
+        if let Some(p) = self.vim.pending_label() {
+            s.push_str("  ");
+            s.push_str(&p);
+        }
+        s
     }
 
     /// Paint the screen. Public so a `TestBackend` can assert the frame
@@ -343,7 +466,14 @@ impl ContextPicker {
             buf.set_stringn(2, 1, view.query, width.saturating_sub(3), Style::default());
             // A block caret, so an empty query still reads as "type here"
             // rather than as a dead line.
-            let caret = 2 + u16::try_from(view.query.chars().count()).unwrap_or(0);
+            //
+            // Drawn from the REAL caret, converted to a character column.
+            // This used to be `view.query.chars().count()` — the query
+            // LENGTH — which was invisibly correct only because an
+            // append-only caret is always at the end. The moment `h` works it
+            // is wrong on every keystroke, and wrong by a whole character on
+            // every multi-byte name.
+            let caret = 2 + u16::try_from(self.query.caret_col()).unwrap_or(0);
             if caret < width {
                 buf.set_char(caret, 1, '▏', Style::default().fg(Color::Cyan));
             }
@@ -378,6 +508,26 @@ impl ContextPicker {
                     &item.key,
                     first_visible + offset == view.selected,
                 );
+            }
+        }
+
+        // ── Stance badge ──
+        //
+        // Load-bearing, not decoration. In Insert an unrecognised key costs "a
+        // character you can delete"; in Normal it costs `q` leaving the screen
+        // or `dw` eating a word. The badge is what re-buys the property the
+        // modal layer trades away, so it is drawn where the eye already is —
+        // on the query line — and in a colour that differs per stance, because
+        // a badge read as a word is read too late.
+        if height > 1 {
+            let badge = self.stance_badge();
+            let w = u16::try_from(badge.chars().count()).unwrap_or(0);
+            let style = match self.vim.stance() {
+                unsoku::Stance::Insert => Style::default().fg(Color::Black).bg(Color::Green),
+                unsoku::Stance::Normal => Style::default().fg(Color::Black).bg(Color::Cyan),
+            };
+            if w + 1 < width {
+                buf.set_stringn(width - w - 1, 1, &badge, w + 1, style);
             }
         }
 
@@ -468,16 +618,33 @@ impl ContextPicker {
     /// runtime does not bind is the defect
     /// [`crate::app::key_legend_parts`] exists to prevent, and this screen is
     /// no different.
+    /// **Per stance**, because the same key does different things in each and
+    /// a fixed hint would be wrong in one of them. It advertised
+    /// `type: filter` in NORMAL, where typing does not filter — the footer is
+    /// the surface an operator reads to learn the screen, so a hint that is
+    /// wrong half the time is worse than no hint.
     fn hint(&self) -> String {
         let mut s = String::new();
         s.push_str(&chord_for(&self.advertised, PickerAction::Up));
         s.push('/');
         s.push_str(&chord_for(&self.advertised, PickerAction::Down));
-        s.push_str(": move  ·  type: filter  ·  ");
-        s.push_str(&chord_for(&self.advertised, PickerAction::Accept));
-        s.push_str(": open  ·  ");
-        s.push_str(&chord_for(&self.advertised, PickerAction::Cancel));
-        s.push_str(": quit");
+        s.push_str(": move  ·  ");
+        match self.vim.stance() {
+            unsoku::Stance::Insert => {
+                s.push_str("type: filter  ·  ");
+                s.push_str(&chord_for(&self.advertised, PickerAction::Cancel));
+                s.push_str(": NORMAL  ·  ");
+                s.push_str(&chord_for(&self.advertised, PickerAction::Accept));
+                s.push_str(": open");
+            }
+            unsoku::Stance::Normal => {
+                s.push_str("hjkl0$wbe: move  ·  d/c/y + x D C: edit  ·  i/a: INSERT  ·  ");
+                s.push_str(&chord_for(&self.advertised, PickerAction::Accept));
+                s.push_str(": open  ·  ");
+                s.push_str(&chord_for(&self.advertised, PickerAction::Cancel));
+                s.push_str(": quit");
+            }
+        }
         s
     }
 }
@@ -948,11 +1115,25 @@ mod tests {
         assert!(!p.should_quit());
     }
 
+    /// **`esc` now has two jobs, and the order is vim's.** The picker opens in
+    /// Insert, so the first `esc` leaves Insert for Normal; only a *resting*
+    /// `esc` leaves the screen. That is what makes Normal reachable at all —
+    /// and it is why an operator can no longer close the picker by reflex
+    /// mid-word.
     #[test]
-    fn escape_leaves_without_choosing() {
+    fn escape_reaches_normal_first_and_only_then_leaves() {
         let mut p = three();
+        assert_eq!(p.stance_badge(), "INSERT", "a filter box opens typing");
+
         assert!(p.dispatch(PickerAction::Cancel));
-        assert!(p.should_quit());
+        assert!(
+            !p.should_quit(),
+            "the first esc leaves INSERT, not the screen"
+        );
+        assert_eq!(p.stance_badge(), "NORMAL");
+
+        assert!(p.dispatch(PickerAction::Cancel));
+        assert!(p.should_quit(), "a resting esc DOES leave");
         assert!(
             p.chosen().is_none(),
             "leaving is not choosing — `main` must exit quietly, not connect",
@@ -1021,6 +1202,28 @@ mod tests {
                 "the footer's `{chord}` must actually do what it says",
             );
         }
+    }
+
+    /// The footer must describe the stance it is in. It advertised
+    /// `type: filter` in NORMAL, where typing does not filter — and the footer
+    /// is what an operator reads to learn a screen they have just met.
+    #[test]
+    fn the_hint_describes_the_stance_it_is_in() {
+        let mut p = three();
+        let insert = p.hint();
+        assert!(insert.contains("type: filter"), "INSERT: {insert}");
+
+        p.dispatch(PickerAction::Cancel); // esc -> NORMAL
+        let normal = p.hint();
+        assert!(
+            !normal.contains("type: filter"),
+            "NORMAL must not: {normal}"
+        );
+        assert!(
+            normal.contains("d/c/y"),
+            "and must name the verbs: {normal}"
+        );
+        assert_ne!(insert, normal);
     }
 
     /// **A non-determinism gate.** `escape` and `ctrl+c` both cancel, and

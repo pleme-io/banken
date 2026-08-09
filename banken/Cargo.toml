@@ -51,6 +51,19 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"
 # A plain version: izumi 0.1.14 is on crates.io, and a git dep would make
 # banken itself unreleasable (crates.io refuses them).
 izumi = "0.1"
+# unsoku (運足, "footwork") — vim motions, operators and text objects resolved
+# against a single line. The picker's query is exactly that: one line, and it
+# was append-only because `egaku::FuzzyPicker`'s seven event arms carry
+# `Type(char)` and `Backspace` and nothing else.
+#
+# It declares no vocabulary of its own — `escriba_core::{Motion, Operator,
+# TextObject}` are published pure enums and `escriba-mode` owns the
+# operator-pending FSM — so this one dependency buys the whole model without
+# dragging an editor in behind it. Registry, never git: a git dep on a sibling
+# pleme-io crate is the crate2nix-vs-fetchgit drift class this crate already
+# paid for once.
+unsoku = "0.1"
+
 # The fleet's established lock-free read-hot-path primitive (20 crates declare
 # it). The render path loads the absorbed snapshot every frame; `ArcSwap` makes
 # that one atomic with no contention against the writing task, where an

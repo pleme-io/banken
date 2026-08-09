@@ -88,6 +88,8 @@ pub mod help;
 pub mod render;
 pub mod session;
 pub mod table;
+/// The picker's modal editing — `unsoku` wired to the query line.
+pub mod vim;
 
 #[cfg(feature = "live")]
 pub mod live;

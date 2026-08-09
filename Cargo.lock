@@ -224,6 +224,7 @@ dependencies = [
  "tear-client",
  "tear-types",
  "tokio",
+ "unsoku",
 ]
 
 [[package]]
@@ -534,6 +535,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
 name = "educe"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -547,9 +554,9 @@ dependencies = [
 
 [[package]]
 name = "egaku"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "303306ced4abddc91c82af7327368ed92a7b1122f939ee148fe8f168f40caad8"
+checksum = "e63eab84c59ae1118c0e091cd0e11a3bf6d5ab5affa78c4f0ce3a9e0a2d5e418"
 dependencies = [
  "awase",
  "serde",
@@ -561,9 +568,9 @@ dependencies = [
 
 [[package]]
 name = "egaku-term"
-version = "0.3.7"
+version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5587445adedf2038ef773d7c4fdbc5adaedb25de183b8e64d1b7c280ffe9520e"
+checksum = "6938a2d7c0a198c81a8c3d4795ac9eb44f1d6928309e26baf51f4389e4ef7906"
 dependencies = [
  "awase",
  "crossterm",
@@ -615,6 +622,55 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "escriba-core"
+version = "0.1.71"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ceb6e1c64f015811b9bc9a69a730f145ca5ebfb7d7ddb85aac397579773a298"
+dependencies = [
+ "escriba-memori",
+ "escriba-search",
+ "schemars",
+ "serde",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "escriba-memori"
+version = "0.1.71"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8100f7b6b043e569d4f7417bd93bb9cadcfb6263aef4a29dcce484c5ab986a9"
+dependencies = [
+ "schemars",
+ "serde",
+]
+
+[[package]]
+name = "escriba-mode"
+version = "0.1.71"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15f6c93e669676a121e417942ed1df3bb03f37d87707b70a9a17afa6e55604fd"
+dependencies = [
+ "escriba-core",
+ "escriba-memori",
+ "schemars",
+ "serde",
+ "zenmai",
+]
+
+[[package]]
+name = "escriba-search"
+version = "0.1.71"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86212933d3528d9015ab22437063634291519f6502fb3916247993fa95a096f7"
+dependencies = [
+ "escriba-memori",
+ "regex",
+ "schemars",
+ "serde",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1904,7 +1960,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2011,6 +2067,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "schemars"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
+dependencies = [
+ "chrono",
+ "dyn-clone",
+ "schemars_derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2086,6 +2167,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.0",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2639,6 +2731,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
+name = "unsoku"
+version = "0.1.71"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37b9ab02389207882f38e2ee27eadb624c565d11e2e9f1e92b1c406928504b98"
+dependencies = [
+ "escriba-core",
+ "escriba-mode",
+]
+
+[[package]]
 name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2776,7 +2878,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -2858,15 +2960,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]
@@ -3124,6 +3217,12 @@ dependencies = [
  "syn 2.0.119",
  "synstructure",
 ]
+
+[[package]]
+name = "zenmai"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9469befd9bd01237c3683fa5647baa96c115d8e971290d0f4666cc741a1005d0"
 
 [[package]]
 name = "zerocopy"

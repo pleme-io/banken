@@ -235,6 +235,60 @@ k9s help key. `pending-banken: help-question-chord`.
   `l:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  g:OBSERVE  h:help …`. The
   behaviour is better than the claim and is kept; the doc now describes it.
 
+## Vim in the context selector — `unsoku` (2026-08-09)
+
+The cluster picker's query was **append-only**: `egaku::FuzzyPicker`'s seven
+event arms carry `Type(char)` and `Backspace` and nothing else, so an operator
+could type and backspace and could not move a cursor, delete a word, or change
+inside quotes. `banken/src/vim.rs` closes that.
+
+**banken owns almost none of it.** What a keystroke *means* is
+[`unsoku`](https://crates.io/crates/unsoku) (運足, *footwork*) — motions,
+operators, objects, the register, and the eight vim rules it tests. unsoku in
+turn declares no vocabulary: `escriba_core::{Motion, Operator, TextObject}`
+are published pure enums and `escriba-mode` owns the operator-pending FSM.
+banken owns only the **stroke→intent** reading, which is genuinely local: a
+picker has TWO cursors on one keyboard, and `j`/`k`/`gg`/`G` address the ROW
+LIST while `h`/`l`/`w`/`b` address the text. No editor has an opinion on that.
+
+| stance | keys |
+|---|---|
+| **INSERT** (the landing) | everything types; `esc` → NORMAL |
+| **NORMAL** | `h l 0 ^ $ w b e` · `d c y` + motion/object · `x D C` · `iw aw i" i(` · counts (`3w`, `d2w`) · `p P` · `i a I A` · `j k gg G` (rows) |
+
+**A filter box opens in INSERT**, and `unsoku::Stance::default()` stays Normal.
+An editor is not a filter box: the picker's primary act is typing, and an
+operator who must press `i` first has been handed a worse chooser than the one
+they had. `Vim::for_filter()` is that decision, in one place.
+
+**The stance badge is load-bearing, not decoration.** In INSERT an unrecognised
+key costs "a character you can delete"; in NORMAL it costs `q` leaving the
+screen or `dw` eating a word. The badge re-buys that property, so it is drawn
+on the query line where the eye already is, colour-coded per stance — a badge
+read as a word is read too late. The footer is per-stance for the same reason:
+it advertised `type: filter` in NORMAL, where typing does not filter.
+
+**Strokes, not chords, and it is forced.** awase's punctuation set is the
+unshifted US keycaps only, so `$` and `^` return `None` from `Key::from_name`
+and can never be `Hotkey`s. Routing vim through chords would have dropped two
+motions from v1 and collided `G` with the authored `shift+g` (pod-break-glass).
+Same root cause as `pending-banken: help-question-chord`.
+
+- **Fixed on the way, both caught by the first wire-up.** `esc` recursed —
+  `dispatch(Cancel)` → `stroke(Escape)` → `Effect::Cancel` → `dispatch(Cancel)`
+  — and overflowed the stack; `apply` now emits the picker event directly and
+  never re-enters. And `ci"` did nothing from outside the quotes: vim searches
+  FORWARD for a quoted string when the caret is not inside one (`:h v_i"`),
+  which for a filter box is the common case, not an edge one. Fixed in unsoku,
+  not worked around here.
+- **The caret bug is closed.** It was drawn from `query.chars().count()` — the
+  query LENGTH — which was invisibly correct only while the caret was always at
+  the end. `QueryLine::caret_col()` converts the real byte caret to a character
+  column, once.
+- `pending-banken: vim-on-the-pods-table` — the table still binds only its
+  authored chords. The layer is view-agnostic; wiring it there is a separate
+  decision about what `d` should mean over a pod.
+
 ## The two app seams — `BankenApp<E: ClusterEnv, S: SessionEnv>`
 
 The app is generic over **two** mockable traits, for the same reason each time:
