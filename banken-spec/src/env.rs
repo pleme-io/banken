@@ -127,6 +127,56 @@ pub struct Row {
 /// an absent key rather than `""` — which is exactly what the association-list
 /// `find` already yields, and why the reserved identity field is handled by
 /// the view rather than synthesised into `cells`.
+#[cfg(test)]
+mod table_row_identity_tests {
+    use super::*;
+    use egaku::TableRow;
+
+    /// The NAME column renders the NAME; `identity()` returns the UID.
+    ///
+    /// These are different questions and were briefly collapsed: `identity()`
+    /// correctly moved to the uid for the `Grip` work, and because nothing
+    /// populated the identity FIELD the drawer fell back to it, so the NAME
+    /// column rendered `uid-v1-v1-Pod-demo-web-217ffebd52-0-14` — measured
+    /// live against engenho on 2026-08-09.
+    ///
+    /// The live test in place at the time could NOT catch it: it asserted
+    /// `line.contains(&row.name)`, and engenho's uid EMBEDS the pod name, so a
+    /// uid-rendering column satisfied it. This asserts equality on the cell
+    /// instead, which no substring coincidence can satisfy.
+    #[test]
+    fn the_name_column_renders_the_name_and_identity_stays_the_uid() {
+        let row = Row {
+            uid: Uid::new("uid-v1-v1-Pod-demo-web-217ffebd52-0-14").expect("non-blank"),
+            name: "web-217ffebd52-0".to_owned(),
+            namespace: Some("demo".to_owned()),
+            version: None,
+            cells: vec![("phase".to_owned(), "Running".to_owned())],
+        };
+
+        assert_eq!(
+            row.cell(egaku::IDENTITY_FIELD),
+            Some("web-217ffebd52-0"),
+            "the identity FIELD is what the NAME column draws — it must be the \
+             name, never the uid",
+        );
+        assert_eq!(
+            row.identity(),
+            "uid-v1-v1-Pod-demo-web-217ffebd52-0-14",
+            "act identity must remain the uid so a recreate is not mistaken \
+             for the same object",
+        );
+        assert_ne!(
+            row.cell(egaku::IDENTITY_FIELD).unwrap(),
+            row.identity(),
+            "display identity and act identity are different questions",
+        );
+        // Ordinary cells are unaffected.
+        assert_eq!(row.cell("phase"), Some("Running"));
+        assert_eq!(row.cell("nope"), None);
+    }
+}
+
 impl egaku::TableRow for Row {
     /// The **uid**, never the name — see [`Uid`] for why the name was wrong.
     fn identity(&self) -> &str {
@@ -134,6 +184,20 @@ impl egaku::TableRow for Row {
     }
 
     fn cell(&self, field: &str) -> Option<&str> {
+        // The identity FIELD renders the NAME, while `identity()` returns the
+        // UID. Those are two different questions and collapsing them was a
+        // real regression: when `identity()` moved from name to uid (for the
+        // `Grip` work — an act must address an object across recreate), the
+        // NAME column started rendering `uid-v1-v1-Pod-demo-web-…` because
+        // nothing populated the identity field and the drawer fell back to
+        // `identity()`.
+        //
+        // Display identity ("which row am I looking at") and act identity
+        // ("which object am I about to touch") are answered separately, here
+        // and in `identity()` respectively.
+        if field == egaku::IDENTITY_FIELD {
+            return Some(self.name.as_str());
+        }
         self.cells
             .iter()
             .find(|(k, _)| k == field)
