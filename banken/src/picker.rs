@@ -141,6 +141,11 @@ pub struct ContextPicker {
     /// Set when the operator tried to accept a row that cannot be honoured.
     /// Cleared by the next keystroke.
     refusal: Option<String>,
+    /// A message carried IN from the previous screen — a connect that failed,
+    /// so the operator lands back on the list with the reason rather than on a
+    /// shell prompt. Rendered exactly like a refusal, because it is one: the
+    /// difference is only which screen produced it.
+    notice: Option<String>,
     chosen: Option<ContextChoice>,
     quit: bool,
 }
@@ -201,6 +206,7 @@ impl ContextPicker {
             advertised,
             current: kubeconfig_current_context(),
             refusal: None,
+            notice: None,
             chosen: None,
             quit: false,
         }
@@ -222,6 +228,18 @@ impl ContextPicker {
         self.refusal.as_deref()
     }
 
+    /// Re-open the picker carrying a message from the screen that just closed.
+    ///
+    /// The failed-connect path: an operator who picks a cluster the VPN cannot
+    /// reach used to be dropped at a shell prompt with an error, having lost
+    /// the list they were choosing from. Now they land back on it, with the
+    /// reason on screen and the other seventeen contexts still there.
+    #[must_use]
+    pub fn with_notice(mut self, notice: impl Into<String>) -> Self {
+        self.notice = Some(notice.into());
+        self
+    }
+
     /// The typed keymap — exposed inherently as well as through [`AsyncApp`]
     /// so a test can ask "which action does this chord bind" without owning a
     /// terminal (the same reason [`crate::app::BankenApp`] does it).
@@ -236,8 +254,10 @@ impl ContextPicker {
     pub fn dispatch(&mut self, action: PickerAction) -> bool {
         // Any keystroke clears a stale refusal: it described the previous
         // attempt, and leaving it up would make it look like it described
-        // this one.
+        // this one. The carried-in notice goes the same way and for the same
+        // reason — it described the screen before this one.
         self.refusal = None;
+        self.notice = None;
 
         let event = match action {
             PickerAction::Up => PickerEvent::NavUp,
@@ -283,6 +303,7 @@ impl ContextPicker {
     /// Type one character into the filter query.
     pub fn type_char(&mut self, c: char) {
         self.refusal = None;
+        self.notice = None;
         let _effects = self.picker.on_event(PickerEvent::Type(c));
     }
 
@@ -419,7 +440,7 @@ impl ContextPicker {
         // A refusal owns the footer while it is up: it is the answer to the
         // key just pressed, and a hint line beside it would read as though the
         // keystroke had worked.
-        let Some(refusal) = &self.refusal else {
+        let Some(refusal) = self.refusal.as_ref().or(self.notice.as_ref()) else {
             let style = Style::default().fg(Color::Black).bg(Color::DarkGrey);
             let y = height - 1;
             buf.blank(0, y, width, style);
@@ -869,6 +890,38 @@ mod tests {
         for file in ["/home/op/.kube/configs/local", "/home/op/.kube/config"] {
             assert!(frame.contains(file), "`{file}` must be on screen: {frame}");
         }
+    }
+
+    /// **`pending-banken: reconnect-on-failed-pick`.** A connect that fails —
+    /// VPN down, expired credentials — used to print an error and exit,
+    /// throwing away the list the operator was choosing from. The notice is
+    /// what lets `main` re-enter the picker with the reason on screen and the
+    /// other contexts still there.
+    #[test]
+    fn a_carried_notice_is_shown_on_re_entry() {
+        let p = three().with_notice("live connect failed (VPN/kubeconfig?): timed out");
+        let mut backend = TestBackend::new(100, 12);
+        backend.draw(|buf| p.render(buf));
+        let frame = backend.to_lines().join("\n");
+        assert!(
+            frame.contains("VPN/kubeconfig"),
+            "the reason must be on the screen the operator lands on:\n{frame}",
+        );
+        assert!(
+            frame.contains("camelot-eks"),
+            "and the list must still be there — that is the whole point:\n{frame}",
+        );
+    }
+
+    /// It describes the screen BEFORE this one, so the first keystroke here
+    /// clears it — the same rule a refusal follows.
+    #[test]
+    fn the_first_keystroke_clears_a_carried_notice() {
+        let mut p = three().with_notice("connect failed");
+        p.type_char('c');
+        let mut backend = TestBackend::new(100, 12);
+        backend.draw(|buf| p.render(buf));
+        assert!(!backend.to_lines().join("\n").contains("connect failed"));
     }
 
     /// A refusal describes the keystroke that produced it. Leaving it up after

@@ -87,20 +87,44 @@ fn main() {
 ///
 /// Leaving the picker without choosing is **not** an error: `esc` is a
 /// decision, and exiting 0 in silence is the honest response to it.
+///
+/// # A failed connect returns to the LIST, not to a shell
+///
+/// `pending-banken: reconnect-on-failed-pick` — CLOSED. Picking a cluster the
+/// VPN cannot reach used to print an error and exit, having thrown away the
+/// list the operator was choosing from; the next attempt started with
+/// `banken` again from a cold prompt. The loop below re-enters the picker
+/// carrying the reason, so the other seventeen contexts are still on screen
+/// and the retry costs one keystroke.
+///
+/// The loop terminates because it advances only on a *successful* connect
+/// (which returns) or on the operator declining to choose (which returns) —
+/// a failure re-enters exactly once per failure, driven by a keystroke.
 #[cfg(feature = "live")]
 async fn run_pick(
     operator: OperatorId,
     strategy: banken::absorb::ListStrategy,
 ) -> Result<(), String> {
     let catalog = banken_spec::load_catalog().map_err(|e| e.to_string())?;
-    let mut picker = banken::picker::ContextPicker::try_new(&catalog).map_err(|e| e.to_string())?;
-    egaku_term::run_async(&mut picker)
-        .await
-        .map_err(|e| e.to_string())?;
-    let Some(choice) = picker.chosen().cloned() else {
-        return Ok(());
-    };
-    run_live(operator, &choice.name, strategy).await
+    let mut notice: Option<String> = None;
+    loop {
+        let mut picker =
+            banken::picker::ContextPicker::try_new(&catalog).map_err(|e| e.to_string())?;
+        if let Some(n) = notice.take() {
+            picker = picker.with_notice(n);
+        }
+        egaku_term::run_async(&mut picker)
+            .await
+            .map_err(|e| e.to_string())?;
+        let Some(choice) = picker.chosen().cloned() else {
+            return Ok(());
+        };
+        match run_live(operator.clone(), &choice.name, strategy).await {
+            Ok(()) => return Ok(()),
+            // Back to the list with the reason, rather than out to a prompt.
+            Err(e) => notice = Some(e),
+        }
+    }
 }
 
 /// Without the `live` feature there are no clusters to choose between, so the

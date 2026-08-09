@@ -107,11 +107,23 @@ stashing this work (`E0061` at `main.rs:65`); now green, 68 tests.
   one-line footer cut the ambiguity message mid-path, dropping the second
   declaring file — the half that says which one to remove.
 - `pending-banken: pick-on-quit` — `q` in the pod table exits to the shell
-  rather than back to the picker. Not a defect, but the k9s-shaped answer is to
-  return to the chooser.
-- `pending-banken: reconnect-on-failed-pick` — a connect that fails after
-  picking (VPN down) drops to the shell with the error instead of back to the
-  list.
+  rather than back to the picker. Deliberately NOT done with the reconnect loop
+  above, and the reason is the legend: `q` is advertised as `q:quit` by a
+  status line derived from the authored vocabulary, so re-pointing `q` at
+  "back" would make the one surface that tells an operator what a key does
+  start lying. Closing it properly means a new authored nav intent (a `back`
+  chord) so the legend moves with the behaviour — a vocabulary change, not a
+  main-loop change.
+- **`pending-banken: reconnect-on-failed-pick` — CLOSED (2026-08-09).** A
+  connect that fails after picking used to print the error and exit, throwing
+  away the list the operator was choosing from — the retry started from a cold
+  prompt. `run_pick` now loops: the failure re-enters the picker carrying the
+  reason as a `notice`, so the other seventeen contexts are still on screen and
+  the retry costs one keystroke. The notice renders through the refusal path
+  because it *is* one; only the screen that produced it differs, and the first
+  keystroke clears it for the same reason a refusal is cleared. The loop
+  advances only on a successful connect or on the operator declining, so it
+  terminates.
 
 ## Freshness reaches the operator's eye (2026-08-09)
 
