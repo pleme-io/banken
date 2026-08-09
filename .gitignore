@@ -13,3 +13,4 @@
 # `gen build` writes BOTH; only the delta is tracked. Same posture as mirante
 # (.gitignore:17) and the rest of the migrated fleet.
 Cargo.build-spec.json
+result
