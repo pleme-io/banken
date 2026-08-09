@@ -154,12 +154,22 @@ file, since a decorative `:field` is the join hazard this repo already fixed
 once. Fail-once measured: reverting `pod_columns` to `IDENTITY_FIELD` turns 4
 tests red including `the_name_column_draws_the_name_never_the_uid`.
 
-`pending-banken: egaku-identity-field-projection` — the load-bearing fix is
-upstream: `project` should prefer `row.cell(field)` and fall back to
-`identity()`, after which a NAME column on the reserved field would resolve and
-`DISPLAY_NAME_FIELD` could retire. **banken must not make that egaku change from
-this repo** (QUADRO T1), so the local fix is the honest floor and this row is the
-destination.
+**`pending-banken: egaku-identity-field-projection` — CLOSED UPSTREAM
+(2026-08-09), in exactly the shape this row named.** egaku `be62a30` changed
+`project` to `row.cell(field).unwrap_or_else(|| row.identity())` and released it
+as **0.1.11**; banken now resolves that version.
+
+Measured rather than assumed: reverting `pod_columns` to `IDENTITY_FIELD`
+against 0.1.11 leaves all 12 render tests green, including
+`the_name_column_draws_the_name_never_the_uid` — so the reserved field now
+projects the name correctly and the local workaround is no longer load-bearing.
+
+`DISPLAY_NAME_FIELD` **stays anyway**, and not from inertia: it says on the
+authored row that the NAME column shows a *display* name rather than an
+identity, which is the distinction the whole bug was about. It is now
+defence-in-depth over a fixed upstream instead of a workaround for a broken one,
+and retiring it would trade a self-describing field for a silent dependence on
+someone else's fallback.
 
 ## The help page — the authored vocabulary, rendered back (2026-08-09)
 

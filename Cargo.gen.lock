@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "4c1ffca348a2cfe5ef414bdcd8bd0c2d15c9ca7b0de53f6e0a5af07465c4eaaf",
+  "cargo_lock_sha256": "cfc060d4bd2c8a50c6fc044e202d74e8a45f8d1a01ace4ce97a738875d758ee8",
   "manifest_sha256": {
     "Cargo.toml": "4de83f5f5646789eb88643eca1e4f2ff2a1f99b82147361419d274fd9aa21462",
     "banken-config/Cargo.toml": "ad2de374a20edfaf584decc7ef42646b90e39a09fedbba54f24fd5aff8d2c4df",
@@ -537,7 +537,7 @@
           },
           {
             "name": "egaku",
-            "package_key": "egaku-0.1.5",
+            "package_key": "egaku-0.1.11",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -760,7 +760,7 @@
           },
           {
             "name": "egaku",
-            "package_key": "egaku-0.1.5",
+            "package_key": "egaku-0.1.11",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1463,8 +1463,18 @@
           "PartialEq"
         ]
       },
-      "egaku-0.1.5": {
+      "egaku-0.1.11": {
         "runtime_dependencies": [
+          {
+            "name": "awase",
+            "package_key": "awase-0.1.6",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
           {
             "name": "serde",
             "package_key": "serde-1.0.229",
@@ -1545,7 +1555,7 @@
           },
           {
             "name": "egaku",
-            "package_key": "egaku-0.1.5",
+            "package_key": "egaku-0.1.11",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -12656,7 +12666,7 @@
       "edition": "2021",
       "proc_macro": true
     },
-    "egaku-0.1.5": {
+    "egaku-0.1.11": {
       "edition": "2024"
     },
     "egaku-term-0.3.7": {

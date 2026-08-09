@@ -547,10 +547,11 @@ dependencies = [
 
 [[package]]
 name = "egaku"
-version = "0.1.5"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bf4b8d5befada1853bda262a06d20fbf57b5658577d73b9e66602659103ab61"
+checksum = "303306ced4abddc91c82af7327368ed92a7b1122f939ee148fe8f168f40caad8"
 dependencies = [
+ "awase",
  "serde",
  "thiserror 2.0.19",
  "tracing",
