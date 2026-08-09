@@ -1,6 +1,23 @@
 //! The typed CLI surface — argv in, an [`Invocation`] out, or a typed
 //! [`CliError`].
 //!
+//! # The landing: banken opens on a chooser, not on data
+//!
+//! With no arguments banken lands on [`Invocation::Pick`] — the cluster picker
+//! ([`crate::picker`]). It used to land on the fixture, i.e. on five invented
+//! pods that look exactly like a cluster, which is not a defensible default
+//! for a navigator. The fixture is still reachable, and now says so out loud:
+//! `banken --fixture` (★★ MODULARIZE, DON'T DELETE — the capability is
+//! retired from the *default*, not removed).
+//!
+//! `--live` with no `--context` is [`Invocation::Pick`] as well. That was
+//! previously a refusal that printed every context name and exited, which is
+//! the shape of a tool that knows the answer and declines to act on it. **The
+//! invariant below is unchanged by that**: picking produces the same
+//! non-optional `String` typing it does, and does so from a list that shows
+//! each name's apiserver and refuses the ambiguous ones — see
+//! [`crate::picker`].
+//!
 //! # Why this is a module and not an inline scan in `main`
 //!
 //! The flag it exists for is [`Invocation::Live`]'s `context`, and that field
@@ -31,12 +48,12 @@
 //! in-cluster / explicit-caller constructor), so the *library* can still do
 //! it. The CLI cannot.
 //!
-//! # The refusal is a one-keystroke fix, not a wall
+//! # A refusal is a one-keystroke fix, not a wall
 //!
-//! [`CliError::MissingContext`] renders the base message here; `main` enriches
-//! it with the kubeconfig's current-context and the available context names,
-//! because those live behind the `live` feature. A refusal that does not tell
-//! the operator what to type instead is just friction.
+//! Every [`CliError`] below names what to type instead — the legal strategy
+//! values, the flag that was misspelled. The one refusal that could not do
+//! that usefully (a `--live` with no context, which needed a list of eighteen
+//! names) is no longer a refusal at all: it is the picker.
 
 /// What the operator asked banken to do.
 ///
@@ -46,8 +63,22 @@
 pub enum Invocation {
     /// `--help` / `-h`.
     Help,
-    /// The default: the `:pods` navigator over the fixture source.
+    /// `--fixture`: the `:pods` navigator over the canned fixture source.
+    ///
+    /// Explicit since it stopped being the default. The rows are invented, and
+    /// a flag the operator typed is the honest way to ask for that.
     Fixture,
+    /// The default, and `--live` with no `--context`: open the cluster picker,
+    /// then run live against whatever the operator chooses.
+    ///
+    /// Carries the strategy so `banken --list-strategy list-watch` selects the
+    /// read path for the run the picker is about to start — the flag describes
+    /// the session, not the argv shape.
+    Pick {
+        /// How the initial object set will be obtained once a context is
+        /// chosen. See [`Invocation::Live::strategy`].
+        strategy: crate::absorb::ListStrategy,
+    },
     /// `--live --context <name>`: the `:pods` navigator over the named
     /// kubeconfig context.
     ///
@@ -84,14 +115,13 @@ pub enum CliError {
     UnknownListStrategy(String),
     /// `--list-strategy` with no value after it.
     ListStrategyWithoutValue,
-    /// `--live` with no `--context`. The wrong-estate hazard; see the module
-    /// docs.
-    MissingContext,
-    /// `--context` without `--live`. Naming a cluster banken is not going to
-    /// read would put a real context name in the status line and in every
-    /// `(defbancada)` plan while the rows came from the fixture — a lie with
-    /// a plausible shape, so it is refused rather than ignored.
-    ContextWithoutLive,
+    /// `--fixture` alongside `--live` or `--context`.
+    ///
+    /// Two sources named at once. Refused rather than ranked: silently
+    /// preferring one would mean the operator who typed both cannot tell from
+    /// the argv which rows they are about to look at, and "are these rows
+    /// real" is the one question banken must never leave ambiguous.
+    ConflictingSources,
     /// `--context` as the last argument, with nothing after it.
     ContextWithoutValue,
     /// `--context ""` / `--context=`. An empty context is exactly the
@@ -106,17 +136,10 @@ pub enum CliError {
 impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CliError::MissingContext => f.write_str(
-                "--live requires an explicit --context <name>. banken refuses to read \
-                 \"whatever the kubeconfig's current-context happens to be\": a merged \
-                 KUBECONFIG routinely points at a different estate than the one you mean \
-                 to look at, and a pod table from the wrong cluster looks exactly like a \
-                 pod table from the right one.",
-            ),
-            CliError::ContextWithoutLive => f.write_str(
-                "--context <name> only applies with --live. Without --live the rows come \
-                 from the fixture source, and naming a real cluster would put that name in \
-                 the status line and in every (defbancada) plan while nothing had read it.",
+            CliError::ConflictingSources => f.write_str(
+                "--fixture names the canned source and --live/--context names a real \
+                 cluster; banken will not pick one for you. \"Are these rows real\" is the \
+                 one question the argv must answer unambiguously.",
             ),
             CliError::ContextWithoutValue => {
                 f.write_str("--context requires a value: --context <name>")
@@ -170,29 +193,36 @@ impl std::error::Error for CliError {}
 /// Accepted shapes:
 ///
 /// ```text
-/// banken                            → Invocation::Fixture
-/// banken :pods                      → Invocation::Fixture
+/// banken                            → Invocation::Pick     (the cluster picker)
+/// banken :pods                      → Invocation::Pick
+/// banken --live                     → Invocation::Pick
+/// banken --context <name>           → Invocation::Live { context }
 /// banken --live --context <name>    → Invocation::Live { context }
 /// banken --live --context=<name>    → Invocation::Live { context }
+/// banken --fixture                  → Invocation::Fixture
 /// banken --help | -h                → Invocation::Help
 /// ```
+///
+/// `--live` is now optional in front of `--context`: naming a cluster **is**
+/// asking to read it, and there is no longer a fixture default for the name
+/// to be misattached to. It is still accepted, because operators have it in
+/// their shell history.
 ///
 /// `--help` wins over everything else — asking for help must never be
 /// refused for an unrelated flag error.
 ///
 /// A leading `:view` token is accepted and currently ignored (the only M0
-/// view is `:pods`; the FuzzyPicker command bar is M1), matching the
-/// pre-existing behaviour.
+/// view is `:pods`), matching the pre-existing behaviour.
 ///
 /// # Errors
 ///
-/// Any [`CliError`]; in particular [`CliError::MissingContext`] for a
-/// `--live` with no `--context`.
+/// Any [`CliError`].
 pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         return Ok(Invocation::Help);
     }
 
+    let mut want_fixture = false;
     let mut want_live = false;
     let mut context: Option<String> = None;
     let mut strategy = crate::absorb::ListStrategy::default();
@@ -201,6 +231,7 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
         let arg = args[i].as_str();
         match arg {
             "--live" => want_live = true,
+            "--fixture" => want_fixture = true,
             "--context" => {
                 let value = args.get(i + 1).ok_or(CliError::ContextWithoutValue)?;
                 // A value that is itself a flag means the name was forgotten:
@@ -238,16 +269,39 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
         i += 1;
     }
 
-    match (want_live, context) {
-        (true, Some(c)) if c.is_empty() => Err(CliError::EmptyContext),
-        (true, Some(c)) => Ok(Invocation::Live {
-            context: c,
-            strategy,
-        }),
-        (true, None) => Err(CliError::MissingContext),
-        (false, Some(_)) => Err(CliError::ContextWithoutLive),
-        (false, None) => Ok(Invocation::Fixture),
+    if want_fixture && (want_live || context.is_some()) {
+        return Err(CliError::ConflictingSources);
     }
+    if want_fixture {
+        return Ok(Invocation::Fixture);
+    }
+    match context {
+        Some(c) if c.is_empty() => Err(CliError::EmptyContext),
+        Some(context) => Ok(Invocation::Live { context, strategy }),
+        // No name given — including for a bare `--live`. The picker asks,
+        // rather than guessing at a `current-context` or refusing with a list
+        // the operator would then have to retype from.
+        None if want_live => Ok(Invocation::Pick { strategy }),
+        None => Ok(default_landing(strategy)),
+    }
+}
+
+/// Where a bare `banken` lands, DERIVED from whether a live backend is
+/// compiled in rather than asserted.
+///
+/// The two `#[cfg]` arms below **are** the derivation, the same shape
+/// `main`'s `live_availability()` uses: a build with no kube client cannot
+/// offer a chooser over clusters it could not then read, and must land on the
+/// only source it has. Neither arm can go stale, because there is no third
+/// place stating what the default is.
+#[cfg(feature = "live")]
+fn default_landing(strategy: crate::absorb::ListStrategy) -> Invocation {
+    Invocation::Pick { strategy }
+}
+
+#[cfg(not(feature = "live"))]
+fn default_landing(_strategy: crate::absorb::ListStrategy) -> Invocation {
+    Invocation::Fixture
 }
 
 #[cfg(test)]
@@ -259,10 +313,48 @@ mod tests {
         parse_args(&owned)
     }
 
+    /// **THE LANDING GATE.** Bare `banken` must not open on invented rows.
+    /// It did — five fixture pods, labelled in the status line and otherwise
+    /// indistinguishable from a cluster — and a navigator whose default screen
+    /// is fabricated data is the defect the picker exists to fix.
+    #[cfg(feature = "live")]
     #[test]
-    fn the_default_is_the_fixture_source() {
+    fn the_default_landing_is_the_cluster_picker() {
+        let pick = Invocation::Pick {
+            strategy: crate::absorb::ListStrategy::default(),
+        };
+        assert_eq!(parse(&[]), Ok(pick.clone()));
+        assert_eq!(parse(&[":pods"]), Ok(pick));
+    }
+
+    /// The fixture is retired from the default, not removed — it is now one
+    /// explicit flag away (★★ MODULARIZE, DON'T DELETE).
+    #[test]
+    fn the_fixture_is_still_reachable_by_name() {
+        assert_eq!(parse(&["--fixture"]), Ok(Invocation::Fixture));
+    }
+
+    /// Naming both sources is refused, never ranked: an operator who typed
+    /// both cannot otherwise tell which rows they are about to look at.
+    #[test]
+    fn naming_two_sources_is_refused() {
+        assert_eq!(
+            parse(&["--fixture", "--live"]),
+            Err(CliError::ConflictingSources),
+        );
+        assert_eq!(
+            parse(&["--fixture", "--context", "camelot-eks"]),
+            Err(CliError::ConflictingSources),
+        );
+    }
+
+    /// A build with no kube client has no chooser to offer, so it lands on the
+    /// only source it has — stated once, in `default_landing`'s two `#[cfg]`
+    /// arms, and asserted here rather than left to the reader.
+    #[cfg(not(feature = "live"))]
+    #[test]
+    fn without_the_live_backend_the_default_landing_is_the_fixture() {
         assert_eq!(parse(&[]), Ok(Invocation::Fixture));
-        assert_eq!(parse(&[":pods"]), Ok(Invocation::Fixture));
     }
 
     #[test]
@@ -300,29 +392,52 @@ mod tests {
         );
     }
 
-    /// **THE GATE.** This is the whole reason the module exists. `--live`
-    /// alone used to mean "read whatever the kubeconfig's current-context
-    /// happens to be", which on this machine was an entirely different estate
+    /// **THE GATE, and it is unchanged in substance.** `--live` alone used to
+    /// mean "read whatever the kubeconfig's current-context happens to be",
+    /// which on this machine was an entirely different estate
     /// (`us-east-2-staging-eks`) than the one under inspection
-    /// (`camelot-eks`). banken refuses rather than guesses.
+    /// (`camelot-eks`). banken still never guesses — it now *asks*, which is
+    /// strictly more than the old refusal did and still produces a name the
+    /// operator chose.
+    ///
+    /// What must remain true is the type-level half: no accepted argv yields a
+    /// live run whose context is absent. `Invocation::Live` carries a
+    /// non-optional `String`, so that is enforced by construction; this
+    /// asserts the parser never reaches it without one.
     #[test]
-    fn live_without_a_context_is_refused() {
-        assert_eq!(parse(&["--live"]), Err(CliError::MissingContext));
-        let msg = CliError::MissingContext.to_string();
-        assert!(
-            msg.contains("current-context"),
-            "the refusal must name what it would otherwise have used: {msg}"
+    fn live_without_a_context_asks_instead_of_guessing() {
+        assert_eq!(
+            parse(&["--live"]),
+            Ok(Invocation::Pick {
+                strategy: crate::absorb::ListStrategy::default()
+            }),
         );
+        // The gate itself: every parse that DOES yield a live run names a
+        // non-empty context.
+        for args in [
+            vec!["--live"],
+            vec![],
+            vec!["--live", "--context", "camelot-eks"],
+            vec!["--context", "rio"],
+            vec!["--fixture"],
+        ] {
+            if let Ok(Invocation::Live { context, .. }) = parse(&args) {
+                assert!(!context.is_empty(), "{args:?} produced an unnamed live run");
+            }
+        }
     }
 
-    /// The converse: naming a cluster banken is not going to read is also a
-    /// lie — the status line and every bancada plan would carry a real
-    /// context name over fixture rows.
+    /// Naming a context no longer needs `--live` in front of it: with no
+    /// fixture default left for the name to be misattached to, naming a
+    /// cluster IS asking to read it.
     #[test]
-    fn a_context_without_live_is_refused() {
+    fn a_context_alone_selects_the_live_source() {
         assert_eq!(
             parse(&["--context", "camelot-eks"]),
-            Err(CliError::ContextWithoutLive),
+            Ok(Invocation::Live {
+                context: "camelot-eks".into(),
+                strategy: crate::absorb::ListStrategy::Streaming,
+            }),
         );
     }
 

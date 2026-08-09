@@ -104,10 +104,15 @@ fn ensure_crypto_provider() {
 /// Empty means the kubeconfig could not be read at all — which is different
 /// from "declares no contexts", and both are honest outcomes to report rather
 /// than defaults to paper over.
+///
+/// Derived from [`enumerate_contexts`] rather than from `Kubeconfig::read()`,
+/// so the names a refusal lists and the rows the picker offers come from one
+/// read of one set of files. They were two separate reads, and the merged one
+/// could not see an ambiguous name at all.
 #[must_use]
 pub fn kubeconfig_context_names() -> Vec<String> {
-    Kubeconfig::read()
-        .map(|kc| kc.contexts.into_iter().map(|c| c.name).collect())
+    enumerate_contexts()
+        .map(|cs| cs.into_iter().map(|c| c.name).collect())
         .unwrap_or_default()
 }
 
@@ -234,39 +239,12 @@ pub fn resolve_context(name: &str) -> Result<ResolvedContext, ContextError> {
     let mut declaring: Vec<(PathBuf, Option<String>)> = Vec::new();
     let mut available: Vec<String> = Vec::new();
 
-    for file in kubeconfig_files() {
-        let kc = match Kubeconfig::read_from(&file) {
-            Ok(kc) => kc,
-            // A missing entry in a merge list is normal (client-go tolerates
-            // it); an unreadable one that EXISTS is not.
-            Err(e) if !file.exists() => {
-                let _absent = e;
-                continue;
+    for (file, declarations) in read_unmerged()? {
+        for (ctx_name, server) in declarations {
+            if !available.contains(&ctx_name) {
+                available.push(ctx_name.clone());
             }
-            Err(e) => {
-                return Err(ContextError::Unreadable {
-                    file,
-                    message: e.to_string(),
-                });
-            }
-        };
-
-        for ctx in &kc.contexts {
-            if !available.contains(&ctx.name) {
-                available.push(ctx.name.clone());
-            }
-            if ctx.name == name {
-                // Resolve the cluster this context points at, within THIS file
-                // — a context and its cluster entry can be split across files,
-                // but the common case is co-located and a missing server is
-                // reported rather than invented.
-                let server = ctx.context.as_ref().and_then(|c| {
-                    kc.clusters
-                        .iter()
-                        .find(|cl| cl.name == c.cluster)
-                        .and_then(|cl| cl.cluster.as_ref())
-                        .and_then(|cl| cl.server.clone())
-                });
+            if ctx_name == name {
                 declaring.push((file.clone(), server));
             }
         }
@@ -290,6 +268,133 @@ pub fn resolve_context(name: &str) -> Result<ResolvedContext, ContextError> {
             files: declaring.into_iter().map(|(f, _)| f).collect(),
         }),
     }
+}
+
+/// One kubeconfig file's context declarations: `(context name, its cluster's
+/// server URL)` pairs, in file order.
+type Declarations = Vec<(PathBuf, Vec<(String, Option<String>)>)>;
+
+/// Every kubeconfig file's context declarations, **file by file, unmerged**.
+///
+/// The one place the pre-merge question is answerable, and therefore the one
+/// place either [`resolve_context`] or [`enumerate_contexts`] may read from.
+/// They used to carry a copy each of this loop; the copies are what let the
+/// picker's list and the resolver's verdict disagree about what a kubeconfig
+/// says, which is the exact class of bug the resolver exists to close.
+///
+/// Each entry is `(file, [(context name, its cluster's server URL)])`. A
+/// context whose cluster entry lives in a *different* file resolves to `None`
+/// rather than to an invented URL — the common case is co-located, and a
+/// missing server is reported, never guessed.
+///
+/// # Errors
+///
+/// [`ContextError::Unreadable`] when a file that EXISTS cannot be parsed. A
+/// file merely absent from disk is skipped, which is what client-go does.
+fn read_unmerged() -> Result<Declarations, ContextError> {
+    let mut out: Declarations = Vec::new();
+    for file in kubeconfig_files() {
+        let kc = match Kubeconfig::read_from(&file) {
+            Ok(kc) => kc,
+            // A missing entry in a merge list is normal (client-go tolerates
+            // it); an unreadable one that EXISTS is not.
+            Err(e) if !file.exists() => {
+                let _absent = e;
+                continue;
+            }
+            Err(e) => {
+                return Err(ContextError::Unreadable {
+                    file,
+                    message: e.to_string(),
+                });
+            }
+        };
+
+        let declarations = kc
+            .contexts
+            .iter()
+            .map(|ctx| {
+                let server = ctx.context.as_ref().and_then(|c| {
+                    kc.clusters
+                        .iter()
+                        .find(|cl| cl.name == c.cluster)
+                        .and_then(|cl| cl.cluster.as_ref())
+                        .and_then(|cl| cl.server.clone())
+                });
+                (ctx.name.clone(), server)
+            })
+            .collect();
+        out.push((file, declarations));
+    }
+    Ok(out)
+}
+
+/// One kubeconfig context, as something an operator can be asked to CHOOSE.
+///
+/// The point of the type is the third field. A context *name* is what an
+/// operator recognises and is what `--context` takes, but the name is not
+/// unique across a merged `KUBECONFIG` — so a chooser that offers names alone
+/// offers a choice it cannot honour. Carrying every declaring file makes the
+/// ambiguity a visible property of the row at the moment of choosing, instead
+/// of a refusal that arrives after the operator has already decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextChoice {
+    /// The context name, exactly as `--context` would take it.
+    pub name: String,
+    /// The apiserver the **first** declaration names — i.e. the one kube-rs
+    /// would silently have won with. `None` when no declaration names a
+    /// server, which is reported rather than papered over.
+    pub server: Option<String>,
+    /// Every kubeconfig file declaring this name, in merge order. Length 1 is
+    /// the healthy case; more is [`ContextError::Ambiguous`] waiting to happen.
+    pub files: Vec<PathBuf>,
+}
+
+impl ContextChoice {
+    /// Whether more than one kubeconfig file declares this name.
+    ///
+    /// An ambiguous choice is **not selectable**: [`resolve_context`] refuses
+    /// it, so offering it as though it were pickable would be an affordance
+    /// that cannot be honoured.
+    #[must_use]
+    pub fn is_ambiguous(&self) -> bool {
+        self.files.len() > 1
+    }
+}
+
+/// Every context the kubeconfig merge list declares, first-seen order, each
+/// carrying its apiserver and its declaring files.
+///
+/// This is the picker's source, and it deliberately does **not** go through
+/// `Kubeconfig::read()`: that merges first, and the merge drops a duplicate
+/// name without a word (`append_new_named`), so a merged read cannot tell an
+/// unambiguous context from an ambiguous one. Reading unmerged is what lets a
+/// row say "two files declare this".
+///
+/// # Errors
+///
+/// [`ContextError::Unreadable`] when a kubeconfig file that exists cannot be
+/// parsed. An empty `Ok` result means the files parsed and declare nothing —
+/// a different answer from "could not read", and both are reported honestly.
+pub fn enumerate_contexts() -> Result<Vec<ContextChoice>, ContextError> {
+    let mut out: Vec<ContextChoice> = Vec::new();
+    for (file, declarations) in read_unmerged()? {
+        for (name, server) in declarations {
+            if let Some(existing) = out.iter_mut().find(|c| c.name == name) {
+                // A second declaration does NOT overwrite the server: the
+                // first one is what kube-rs resolves to, so showing a later
+                // file's URL would describe a cluster banken would not dial.
+                existing.files.push(file.clone());
+            } else {
+                out.push(ContextChoice {
+                    name,
+                    server,
+                    files: vec![file.clone()],
+                });
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// A live cluster env reading through the typed `kube` client against the

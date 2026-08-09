@@ -42,6 +42,125 @@ mutation is `E0599` within the authored surface (the re-add case is CI-caught,
 per `substrate_invariant.rs`, graded only-mitigated → CI-caught, never rounded up
 to truly-unrepresentable).
 
+## The landing — banken opens on a CHOOSER, not on data (2026-08-09)
+
+Bare `banken` opens the **cluster picker** (`banken/src/picker.rs`): every
+kubeconfig context, each beside the apiserver URL it resolves to, fuzzy-filtered
+by name **or** by estate, `enter` to open. It used to land on the fixture — five
+invented pods, labelled `source: fixture` in the status line and otherwise
+indistinguishable from a cluster — and the label does not fix that, because the
+eye goes to the rows. The fixture is retired from the default, not removed:
+`banken --fixture` (★★ MODULARIZE, DON'T DELETE).
+
+`banken --live` with no context used to print eighteen context names and exit 2.
+banken knew what the operator wanted, held the exact list, and made them retype
+one entry of it; it now opens the picker instead.
+
+**The wrong-estate invariant is not weakened — it is enforced EARLIER and more
+strongly.** `Invocation::Live` still carries a non-optional `String`, so an
+unnamed live run has no representation past the parser; picking produces that
+same value. And picking beats typing on two counts the CLI never could:
+
+1. the row shows the **apiserver URL** before it is dialled — a name is a label
+   to trust, a URL is what actually gets connected to;
+2. an **ambiguous** name (declared by >1 file in the `KUBECONFIG` merge list —
+   the 2026-08-08 `engenho-local` hazard) is marked `⚠ declared by N kubeconfig
+   files` and **cannot be chosen**. Typing it was accepted at the CLI and
+   refused later by `ContextError::Ambiguous`, i.e. after the operator had
+   already committed. Measured with two synthetic kubeconfigs declaring `twin`.
+
+`--context <name>` no longer needs `--live` in front of it: with no fixture
+default left for a name to be misattached to, naming a cluster IS asking to read
+it. `--fixture` alongside either is `ConflictingSources` — refused, never ranked,
+because "are these rows real" is the one question the argv must answer.
+
+**The picker's keys are a DERIVATION of the one authored vocabulary, filtered to
+the chords that cannot be typed.** A picker's keyboard belongs to its query, so
+`up`/`down`/`return`/`escape` bind and `j`/`k`/`o`/`q` deliberately do not —
+otherwise filtering for `jaeger` moves the cursor and quits. `is_control_chord`
+mirrors egaku-term's own `text_char` rule and is conservative in the direction of
+*not* binding. `backspace` is structural and deliberately not a `(defnavkey)`: it
+edits a text query, not a selection. The state is `egaku::FuzzyPicker` — banken
+adds no widget (QUADRO T1); only the drawer is local, for the same per-row
+semantics reason `render.rs` keeps its own.
+
+Two `run_async` calls in sequence, not one app with a stage flag: `BankenApp` is
+generic over its `ClusterEnv`, so the env must exist before the app does. One app
+spanning both screens would hold an `Option<E>` and answer "which cluster am I
+reading" with `None` for the whole first screen.
+
+**`--no-default-features` did not compile, and had not for some time.** The
+`#[cfg(not(feature = "live"))] run_live` stub took two parameters against a
+three-argument call — added when `--list-strategy` landed and never built, because
+`default = ["live", "tear"]` means no ordinary invocation exercises that arm. A
+`#[cfg]`-gated arm nothing builds is a claim nothing checks. Verified broken by
+stashing this work (`E0061` at `main.rs:65`); now green, 68 tests.
+
+- **Fail-once measured:** the footer read its chords out of `KeyMode::bindings`,
+  a `HashMap`, so with `escape` and `ctrl+c` both bound to Cancel it advertised
+  a different chord run to run (`ctrl+c: quit` on the first run of
+  `the_footer_advertises_the_bound_chords`). Fixed by ordering authored chords
+  before structural ones — a *meaning*, not a tie-break. A length tie-break was
+  tried first and silently advertised the escape hatch, since `escape` and
+  `ctrl+c` are both six characters.
+- **A refusal wraps rather than clips.** Measured in a 120-column PTY: the
+  one-line footer cut the ambiguity message mid-path, dropping the second
+  declaring file — the half that says which one to remove.
+- `pending-banken: pick-on-quit` — `q` in the pod table exits to the shell
+  rather than back to the picker. Not a defect, but the k9s-shaped answer is to
+  return to the chooser.
+- `pending-banken: reconnect-on-failed-pick` — a connect that fails after
+  picking (VPN down) drops to the shell with the error instead of back to the
+  list.
+
+## Freshness reaches the operator's eye (2026-08-09)
+
+`SyncPhase` was carried all the way to the app and **dropped one step short of
+the renderer**: during the initial absorb — one to three seconds on a real
+cluster — the status line read `0 pods`, which is indistinguishable from an
+empty cluster and is a claim banken had not earned. The type existed precisely
+to prevent that (`Absorbing` is "I have not finished looking", not "there is
+nothing"). A freshness axis nobody can see is not a freshness axis.
+
+Now: the count carries its claim (`absorbing…` / `83 pods` / `83 pods · STALE —
+<cause>`), a `Degraded` replica turns the whole status bar red, and an empty
+table says which of the three empties it is in the table's own space. `Synced` is
+the unmarked case on purpose — labelling the healthy state trains the eye to skip
+the label, which is exactly when the unhealthy one stops being read.
+
+## The NAME column was drawing UIDs — measured live, hidden by three vacuous tests
+
+**69 of 69 rows on `camelot-eks` rendered `10a69bf6-b039-4731-8cce-28ed6e55c534`
+under `NAME`.** Cause: the authored column pointed at `egaku::IDENTITY_FIELD`,
+and `egaku::TableView::project` short-circuits that field to
+`TableRow::identity()` **without ever calling `TableRow::cell`**
+(`egaku-0.1.5/src/table.rs:398-404`). banken's `identity()` is the object UID —
+correct and load-bearing for `Grip` — so the NAME column drew a uid.
+
+The commit `f2bda73 row: separate display identity from act identity` had made
+`Row::cell(IDENTITY_FIELD)` return the name. **That fix was dead code on the
+render path**, because nothing calls `cell` for that field. It is the shape of
+fix that looks done and is not.
+
+Why three render tests stayed green: every fixture uid was `fixture-{name}` /
+`t-{name}`, so `frame.contains("catch-api-7d9f")` passed whether the drawer drew
+the name or the uid. **A fixture value that embeds another field cannot
+distinguish the two.** Fixture uids are now opaque and name-free.
+
+The fix is `banken_spec::env::DISPLAY_NAME_FIELD` (`"object-name"`) — an ordinary
+field, so it projects through `cell`. The authored `:field name` in
+`specs/views.lisp` became `:field object-name` with the reason stated in the
+file, since a decorative `:field` is the join hazard this repo already fixed
+once. Fail-once measured: reverting `pod_columns` to `IDENTITY_FIELD` turns 4
+tests red including `the_name_column_draws_the_name_never_the_uid`.
+
+`pending-banken: egaku-identity-field-projection` — the load-bearing fix is
+upstream: `project` should prefer `row.cell(field)` and fall back to
+`identity()`, after which a NAME column on the reserved field would resolve and
+`DISPLAY_NAME_FIELD` could retire. **banken must not make that egaku change from
+this repo** (QUADRO T1), so the local fix is the honest floor and this row is the
+destination.
+
 ## The two app seams — `BankenApp<E: ClusterEnv, S: SessionEnv>`
 
 The app is generic over **two** mockable traits, for the same reason each time:

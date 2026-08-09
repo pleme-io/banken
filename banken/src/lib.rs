@@ -90,5 +90,11 @@ pub mod table;
 #[cfg(feature = "live")]
 pub mod live;
 
+/// The landing screen — choose a cluster. Behind `live` because a chooser over
+/// contexts banken could not then read would be an affordance with nothing
+/// behind it.
+#[cfg(feature = "live")]
+pub mod picker;
+
 #[cfg(feature = "tear")]
 pub mod tear_session;

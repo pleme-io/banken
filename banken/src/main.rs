@@ -1,27 +1,36 @@
 //! banken — the entry point.
 //!
-//! Runs the `:pods` navigator over a [`ClusterEnv`] source. The default
-//! source is the fixture ([`banken::fixture::FixtureClusterEnv`]).
-//! `--live --context <name>` selects the live kube backend
-//! ([`banken::live::KubeClusterEnv`], feature `live`) against an
-//! **explicitly named** kubeconfig context.
+//! # The landing
 //!
-//! `--context` is required for `--live`, and that is a measured decision, not
-//! a style: riding the kubeconfig's `current-context` reads whichever estate
-//! the operator's merged `KUBECONFIG` happens to point at, and a pod table
-//! from the wrong cluster is indistinguishable from a pod table from the right
-//! one. See [`banken::cli`] for the full reasoning and the measurement.
+//! Bare `banken` opens the **cluster picker** ([`banken::picker`]): every
+//! kubeconfig context, each with the apiserver it resolves to, fuzzy-filtered,
+//! and the ambiguous ones marked unchoosable. Pick one and the `:pods`
+//! navigator opens on it.
+//!
+//! It used to open on the fixture — five invented pods that look exactly like
+//! a cluster — and `--live` alone used to print eighteen context names and
+//! exit, leaving the operator to retype one of them. Neither is a defensible
+//! first screen for a navigator.
+//!
+//! **The wrong-estate invariant is unchanged.** A live run still requires a
+//! named context: riding the kubeconfig's `current-context` reads whichever
+//! estate the merged `KUBECONFIG` happens to point at, and a pod table from
+//! the wrong cluster is indistinguishable from one from the right cluster.
+//! Picking *is* naming — [`banken::cli::Invocation::Live`] carries the same
+//! non-optional `String` either way — and it names from a list that shows the
+//! URL and refuses a name two files declare. See [`banken::cli`] and
+//! [`banken::picker`] for the measurements.
 //!
 //! Usage:
 //! ```text
-//! banken                                  # :pods over the fixture source (default)
-//! banken :pods                            # same, explicit view
-//! banken --live --context camelot-eks     # :pods over that cluster (feature `live`)
+//! banken                                  # choose a cluster, then :pods
+//! banken --context camelot-eks            # :pods on that cluster directly
+//! banken --fixture                        # the canned source, explicitly
 //! banken --help                           # usage
 //! ```
 
 use banken::app::BankenApp;
-use banken::cli::{CliError, Invocation, parse_args};
+use banken::cli::{Invocation, parse_args};
 use banken::fixture::FixtureClusterEnv;
 use banken_spec::types::OperatorId;
 
@@ -37,13 +46,6 @@ fn main() {
         Ok(inv) => inv,
         Err(e) => {
             eprintln!("banken: {e}");
-            // The one refusal with useful runtime data to add: name the
-            // context banken would otherwise have silently used, and list
-            // what is available, so the fix is one keystroke rather than a
-            // trip to `kubectl config get-contexts`.
-            if e == CliError::MissingContext {
-                eprint!("{}", missing_context_hint());
-            }
             std::process::exit(2);
         }
     };
@@ -62,6 +64,7 @@ fn main() {
                 Ok(())
             }
             Invocation::Fixture => run_fixture(operator).await,
+            Invocation::Pick { strategy } => run_pick(operator, strategy).await,
             Invocation::Live { context, strategy } => run_live(operator, &context, strategy).await,
         }
     });
@@ -72,35 +75,47 @@ fn main() {
     }
 }
 
-/// The kubeconfig half of the `--live`-without-`--context` refusal.
+/// The landing: choose a cluster, then open `:pods` on it.
 ///
-/// Behind the `live` feature because reading the kubeconfig is that feature's
-/// dependency. Without it the refusal is still correct — `--live` itself is
-/// unavailable — it simply has nothing extra to say.
+/// Two `run_async` calls in sequence rather than one app with a stage flag,
+/// and that is structural rather than stylistic. [`BankenApp`] is generic over
+/// its [`ClusterEnv`](banken_spec::env::ClusterEnv), so the env must exist
+/// before the app does — a single app spanning both screens would have to hold
+/// an `Option<E>` and answer "which cluster am I reading" with `None` for the
+/// whole first screen, which is exactly the unresolved-source state the type
+/// parameter exists to make impossible.
+///
+/// Leaving the picker without choosing is **not** an error: `esc` is a
+/// decision, and exiting 0 in silence is the honest response to it.
 #[cfg(feature = "live")]
-fn missing_context_hint() -> String {
-    let mut s = String::new();
-    if let Some(current) = banken::live::kubeconfig_current_context() {
-        s.push_str("  the current-context banken would have read: ");
-        s.push_str(&current);
-        s.push('\n');
-    }
-    let names = banken::live::kubeconfig_context_names();
-    if names.is_empty() {
-        return s;
-    }
-    s.push_str("  available contexts:\n");
-    for name in names {
-        s.push_str("    ");
-        s.push_str(&name);
-        s.push('\n');
-    }
-    s
+async fn run_pick(
+    operator: OperatorId,
+    strategy: banken::absorb::ListStrategy,
+) -> Result<(), String> {
+    let catalog = banken_spec::load_catalog().map_err(|e| e.to_string())?;
+    let mut picker = banken::picker::ContextPicker::try_new(&catalog).map_err(|e| e.to_string())?;
+    egaku_term::run_async(&mut picker)
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(choice) = picker.chosen().cloned() else {
+        return Ok(());
+    };
+    run_live(operator, &choice.name, strategy).await
 }
 
+/// Without the `live` feature there are no clusters to choose between, so the
+/// picker is a typed error rather than a silent fall-through to the fixture —
+/// which would answer "show me my clusters" with invented rows.
 #[cfg(not(feature = "live"))]
-fn missing_context_hint() -> String {
-    String::new()
+async fn run_pick(
+    _operator: OperatorId,
+    _strategy: banken::absorb::ListStrategy,
+) -> Result<(), String> {
+    Err(
+        "choosing a cluster requires building with `--features live` (kube backend); \
+         this binary ships the fixture source only — run `banken --fixture`"
+            .into(),
+    )
 }
 
 /// What `--help` says about `--live`, DERIVED from whether the backend is
@@ -119,7 +134,7 @@ fn live_availability() -> &'static str {
 
 #[cfg(not(feature = "live"))]
 fn live_availability() -> &'static str {
-    " (unavailable — rebuild with `--features live`)"
+    "  (unavailable — rebuild with `--features live`)"
 }
 
 /// The [`SessionEnv`](banken_spec::bancada::SessionEnv) a confirmed
@@ -185,7 +200,13 @@ async fn run_live(
     // Printed BEFORE the alt-screen is entered, so it survives on the primary
     // screen after banken exits — the durable receipt of which estate was
     // read. The status line carries it live while banken is running.
-    eprintln!("banken: reading kubeconfig context `{context}`");
+    //
+    // It is also the only thing on screen during the connect, which is not
+    // instant: an EKS context runs an exec-credential helper (an AWS SSO
+    // round-trip) before the first byte moves. A bare terminal for several
+    // seconds reads as a hang, so the line names the step rather than the
+    // intent — "connecting" is what is actually happening.
+    eprintln!("banken: connecting to `{context}` (kubeconfig → auth → apiserver)…");
 
     let env = KubeClusterEnv::connect_with_context(context)
         .await
@@ -249,8 +270,17 @@ fn refresh_interval() -> std::time::Duration {
 
 /// Without the `live` feature, `--live` is an explicit typed error — never
 /// a silent fall-through to the fixture (which would be a rounded-up claim).
+///
+/// The signature tracks the live one exactly (2026-08-09): it had drifted to
+/// two parameters against a three-argument call, so `--no-default-features`
+/// did not compile at all. A `#[cfg]`-gated arm nothing builds is a claim
+/// nothing checks.
 #[cfg(not(feature = "live"))]
-async fn run_live(_operator: OperatorId, _context: &str) -> Result<(), String> {
+async fn run_live(
+    _operator: OperatorId,
+    _context: &str,
+    _strategy: banken::absorb::ListStrategy,
+) -> Result<(), String> {
     Err(
         "--live requires building with `--features live` (kube backend); \
          the default binary ships the fixture source only"
@@ -263,23 +293,33 @@ fn print_usage() {
     // typed emission surface (stdout of a CLI, not VT into the grid).
     println!("banken 番犬 — the pleme-io-native k9s (observe-first, GitOps-native)");
     println!();
+    println!("Every action is typed into one of three classes and there is no unwitnessed");
+    println!("live-mutate path: OBSERVE reads, DECLARE lowers to a full-manifest GitOps");
+    println!("change a reconciler applies, BREAK-GLASS is witnessed and logged.");
+    println!();
     println!("USAGE:");
-    println!("  banken [:view]");
-    println!("  banken --live --context <name>");
+    println!(
+        "  banken                        choose a cluster, then open :pods on it{}",
+        live_availability()
+    );
+    println!("  banken --context <name>       open :pods on that cluster directly");
+    println!("  banken --fixture              explore the interface on canned rows");
+    println!("  banken --help");
     println!();
     println!("VIEWS:");
     println!("  :pods            the pod table (default; the only M0 view)");
     println!();
     println!("FLAGS:");
-    println!(
-        "  --live           read from the live cluster{}",
-        live_availability()
-    );
-    println!("  --context <name> the kubeconfig context to read — REQUIRED with --live.");
-    println!("                   banken will not read \"whatever current-context happens");
-    println!("                   to be\": a merged KUBECONFIG routinely points at a");
-    println!("                   different estate, and a pod table from the wrong cluster");
-    println!("                   looks exactly like one from the right cluster.");
+    println!("  --context <name> the kubeconfig context to read. banken never reads");
+    println!("                   \"whatever current-context happens to be\": a merged");
+    println!("                   KUBECONFIG routinely points at a different estate, and a");
+    println!("                   pod table from the wrong cluster looks exactly like one");
+    println!("                   from the right cluster. With no name, banken asks.");
+    println!("  --fixture        the canned source — invented rows, no cluster read.");
+    println!("                   Explicit since it stopped being the default: a navigator");
+    println!("                   whose first screen is fabricated data is not a navigator.");
+    println!("  --live           accepted for compatibility. Implied by --context; on its");
+    println!("                   own it opens the chooser.");
     // Derived from the enum, never a hand-typed list — the same rule the KEYS
     // block below already follows. A variant added without a help line is the
     // drift this avoids.
