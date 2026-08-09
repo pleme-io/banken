@@ -73,6 +73,14 @@ pub enum Action {
     ToggleSort,
     /// OBSERVE the selected pod's logs (`l`).
     ObserveLogs,
+    /// OBSERVE the selected pod's fields (`d`).
+    ///
+    /// `d` is vim's delete everywhere else. Here it is a READ, and that is the
+    /// postigo model working rather than a collision to resolve: a row is a
+    /// projection of remote state, deleting one is an unwitnessed live
+    /// mutation, and `ClusterEnv` has no method for that. The authored
+    /// vocabulary claimed `d` for `describe`; the legal reading wins.
+    ObserveDescribe,
     /// DECLARE a scale change on the selected pod (`s`).
     DeclareScale,
     /// BREAK-GLASS shell into the selected pod (`shift+s`).
@@ -120,6 +128,7 @@ impl Action {
         matches!(
             self,
             Action::ObserveLogs
+                | Action::ObserveDescribe
                 | Action::DeclareScale
                 | Action::BreakGlass
                 // A bancada resolves a whole recipe against the cluster. A
@@ -600,6 +609,10 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                 let r = dispatch(&self.table, RowAction::ViewLogs, &self.operator, &self.env);
                 self.panel = Panel::ActionOverlay(r);
             }
+            Action::ObserveDescribe => {
+                let r = dispatch(&self.table, RowAction::Describe, &self.operator, &self.env);
+                self.panel = Panel::ActionOverlay(r);
+            }
             Action::DeclareScale => {
                 let r = dispatch(
                     &self.table,
@@ -1070,11 +1083,9 @@ impl From<NavIntent> for Action {
 /// than a chord that silently does nothing.
 const DISPATCHABLE_ACTIONS: &[(&str, Action)] = &[
     ("view-logs", Action::ObserveLogs),
+    ("describe", Action::ObserveDescribe),
     ("scale", Action::DeclareScale),
     ("shell", Action::BreakGlass),
-    // `describe` is authored OBSERVE but the app has no describe panel yet —
-    // it is deliberately absent, and `keymap_from_catalog` reports it as
-    // UNBOUND rather than pretending the chord works.
 ];
 
 /// Build the app keymap from the authored vocabulary.

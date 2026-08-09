@@ -193,16 +193,46 @@ fn a_duplicate_authored_chord_is_refused_by_name() {
     }
 }
 
-/// An authored action the app cannot dispatch is reported, not silently
-/// bound to nothing. `describe` is authored OBSERVE with no describe panel
-/// yet; pinning the set makes growing it deliberate.
+/// An authored action the app cannot dispatch is reported, not silently bound
+/// to nothing.
+///
+/// **Every authored action is now wired** — `describe` was the last one, and
+/// it landed when `d` got its answer (see `pending-banken:
+/// vim-on-the-pods-table`). That makes the obvious assertion —
+/// `unbound_action_names(&c) == []` — VACUOUS on its own: an
+/// `unbound_action_names` that always returned empty would pass it. So the
+/// emptiness is asserted alongside a positive control: a catalog carrying an
+/// action the app does NOT dispatch must still report it.
 #[test]
 fn unbound_authored_actions_are_reported_rather_than_silent() {
     let c = catalog();
     assert_eq!(
         unbound_action_names(&c),
-        vec!["describe".to_owned()],
-        "the ONE authored action with no app handler"
+        Vec::<String>::new(),
+        "every authored action has an app handler",
+    );
+
+    // The positive control. Author one the app cannot dispatch and the
+    // reporter must name it — otherwise the empty result above proves nothing.
+    let extra = banken_spec::CANONICAL_ACTIONS_LISP.to_owned()
+        + "\n(defk8saction :name \"nowhere\" :keys \"n\" \
+           :legality (:class observe) :manifest-scope full)\n";
+    let actions = banken_spec::loader::load_all::<banken_spec::types::K8sActionSpec>(&extra)
+        .expect("the synthetic action compiles");
+    let with_ghost = Catalog::resolve(
+        banken_spec::load_views().unwrap(),
+        actions,
+        banken_spec::load_pathologies().unwrap(),
+        banken_spec::load_wards().unwrap(),
+        banken_spec::load_drills().unwrap(),
+        banken_spec::load_nav_keys().unwrap(),
+        banken_spec::load_bancadas().unwrap(),
+    )
+    .expect("it cross-resolves");
+    assert_eq!(
+        unbound_action_names(&with_ghost),
+        vec!["nowhere".to_owned()],
+        "an action with no handler MUST be reported",
     );
 }
 
@@ -216,7 +246,7 @@ fn the_legend_states_the_authored_chords_and_their_legality_classes() {
     let legend = key_legend(&c);
     assert_eq!(
         legend,
-        "l:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  \
+        "l:OBSERVE  d:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  \
          g:OBSERVE  shift+g:BREAK-GLASS  h:help  o:sort  q:quit",
         "the legend is derived from the authored chords + typed legality \
          classes — INCLUDING the bancada chords, whose class is derived from \

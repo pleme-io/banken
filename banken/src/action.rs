@@ -45,6 +45,15 @@ use crate::table::PodTable;
 pub enum RowAction {
     /// `l` → OBSERVE the logs.
     ViewLogs,
+    /// `d` → OBSERVE the selected object's fields.
+    ///
+    /// **This is what `d` means over a pod, and the answer is a READ.** vim's
+    /// `d` is delete; a row is not a buffer you own but a projection of remote
+    /// state, and deleting one is an unwitnessed live mutation — which
+    /// [`ClusterEnv`] has no method for. So vim's verb has no path here, the
+    /// authored vocabulary already claimed `d` for `describe`, and the legal
+    /// reading wins. See `pending-banken: vim-on-the-pods-table`.
+    Describe,
     /// `s` → DECLARE a scale change (full-manifest GitOps preview).
     DeclareScale,
     /// `S` → BREAK-GLASS shell (witnessed, RUNBOOK-logged).
@@ -57,7 +66,7 @@ impl RowAction {
     #[must_use]
     pub fn class_label(self) -> &'static str {
         match self {
-            RowAction::ViewLogs => "OBSERVE",
+            RowAction::ViewLogs | RowAction::Describe => "OBSERVE",
             RowAction::DeclareScale => "DECLARE",
             RowAction::BreakGlassShell => "BREAK-GLASS",
         }
@@ -73,6 +82,12 @@ impl RowAction {
             RowAction::ViewLogs => K8sActionSpec {
                 name: "view-logs".into(),
                 keys: ActionChord::plain(Key::L),
+                legality: ActionLegality::Observe,
+                manifest_scope: ManifestScope::Full,
+            },
+            RowAction::Describe => K8sActionSpec {
+                name: "describe".into(),
+                keys: ActionChord::plain(Key::D),
                 legality: ActionLegality::Observe,
                 manifest_scope: ManifestScope::Full,
             },
@@ -208,6 +223,9 @@ pub fn dispatch<E: ClusterEnv>(
     // `apply` so the shipped gate + lowering are exercised verbatim.
     if action == RowAction::ViewLogs {
         return observe_logs(&sel, env);
+    }
+    if action == RowAction::Describe {
+        return observe_describe(&sel, env);
     }
 
     let spec = action.spec(operator);
@@ -405,6 +423,52 @@ fn observe_logs<E: ClusterEnv>(sel: &Selection, env: &E) -> ActionResult {
                 t
             },
             lines: stream.lines,
+        },
+        Err(e) => ActionResult::Error(e.to_string()),
+    }
+}
+
+/// `d` — OBSERVE the selected object's fields.
+///
+/// Routes to `get_resource` rather than the interpreter's generic `Observe`
+/// arm for the same reason `observe_logs` does: the legality class is
+/// identical (a read) and the operator wants *this* object, not the list it
+/// came from.
+///
+/// A describe is deliberately the row's own cells rather than a `kubectl
+/// describe` transcript. That transcript has no server API — it is per-kind Go
+/// presentation logic — and shelling out for it would put `kubectl` back in a
+/// path the NO-SHELL rule keeps clear. `pending-banken: describe-fidelity`
+/// records the gap honestly: this shows what banken observed, not everything
+/// `kubectl describe` would print.
+fn observe_describe<E: ClusterEnv>(sel: &Selection, env: &E) -> ActionResult {
+    match env.get_resource(
+        banken_spec::types::ResourceKind::Pod,
+        &sel.name,
+        sel.namespace.as_deref(),
+    ) {
+        Ok(row) => ActionResult::Observed {
+            title: {
+                let mut t = String::from("describe: ");
+                t.push_str(&row.name);
+                t
+            },
+            lines: {
+                let mut lines = Vec::with_capacity(row.cells.len() + 2);
+                let mut ns = String::from("namespace: ");
+                ns.push_str(row.namespace.as_deref().unwrap_or("<none>"));
+                lines.push(ns);
+                let mut uid = String::from("uid:       ");
+                uid.push_str(row.uid.as_str());
+                lines.push(uid);
+                for (k, v) in &row.cells {
+                    let mut l = k.clone();
+                    l.push_str(": ");
+                    l.push_str(v);
+                    lines.push(l);
+                }
+                lines
+            },
         },
         Err(e) => ActionResult::Error(e.to_string()),
     }

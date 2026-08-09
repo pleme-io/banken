@@ -285,9 +285,50 @@ Same root cause as `pending-banken: help-question-chord`.
   query LENGTH — which was invisibly correct only while the caret was always at
   the end. `QueryLine::caret_col()` converts the real byte caret to a character
   column, once.
-- `pending-banken: vim-on-the-pods-table` — the table still binds only its
-  authored chords. The layer is view-agnostic; wiring it there is a separate
-  decision about what `d` should mean over a pod.
+### What `d` means over a pod — `pending-banken: vim-on-the-pods-table`, ANSWERED
+
+The question looked like a keybinding conflict and is actually the postigo
+model doing its job.
+
+**vim's operators do not carry over to the table, and cannot.** `d{motion}`
+deletes a range of *text in a buffer you own*, where the act is local and undo
+exists. A row is a **projection of remote state you do not own**, and deleting
+one is a live, irreversible act on someone else's system. `ClusterEnv` has no
+unwitnessed-mutate method — so vim's `d` has **no method to call**. That is not
+a limitation to work around; it is the seal, working, at the exact moment
+something tried to bring a mutating verb in through a side door.
+
+**Motions carry over completely**, and for the mirror-image reason: they change
+*where you are looking*, which is local UI state. That is already what
+`(defnavkey)` models, with no legality class — banken's own note says typing
+"move the cursor" as `Observe` would make the class stop meaning "this
+performed a cluster read".
+
+So the split is: **motions are navigation, operators are acts, and an act needs
+a class.** The one vim operator with a clean reading is `y` — but only over the
+*rendered* row, where it is a local copy and therefore nav-class, not OBSERVE;
+a `y` that fetched the manifest would be a real read and would need the class.
+
+And the vocabulary had already answered: **`d` was authored as `describe`,
+OBSERVE, and was the last unwired action.** The legal reading already owned the
+key. It is now wired (`Action::ObserveDescribe` → `RowAction::Describe` →
+`ClusterEnv::get_resource`), which closes the "(not wired yet)" note the help
+page and `--help` were both honestly printing.
+
+- **The describe is the row's own fields, not a `kubectl describe` transcript**,
+  and that is deliberate: the transcript has no server API — it is per-kind Go
+  presentation logic — so producing it means shelling out to `kubectl`, which
+  the NO-SHELL rule keeps out of this path. `pending-banken: describe-fidelity`
+  records the gap rather than hiding it.
+- `unbound_authored_actions_are_reported_rather_than_silent` would have gone
+  **vacuous** the moment the set emptied — an `unbound_action_names` that always
+  returned `[]` passes `== []`. It now asserts the emptiness *alongside a
+  positive control*: a synthetic catalog carrying an undispatchable action must
+  still name it.
+- Still open, and now precisely: `pending-banken: vim-motions-on-the-table` —
+  the MOTION half (`gg`/`G`/counts over rows) is legal and unbuilt. It needs new
+  `(defnavkey)` intents, and `NavIntent`'s projection is exhaustive in both
+  screens, so it is a vocabulary change rather than a keymap one.
 
 ## The two app seams — `BankenApp<E: ClusterEnv, S: SessionEnv>`
 
