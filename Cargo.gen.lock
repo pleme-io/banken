@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "e28c9efef5178836bc46219d6732810341fb897e1834f535775e8d699018320e",
+  "cargo_lock_sha256": "a8a9201a28f034aceff77a3f3eef639b57276b69ce5e5be3bc62a98455499161",
   "manifest_sha256": {
     "Cargo.toml": "780297943a2eae8658969fb1699afd8120926a59984a75b370276a84119b5289",
     "banken-config/Cargo.toml": "ad2de374a20edfaf584decc7ef42646b90e39a09fedbba54f24fd5aff8d2c4df",
     "banken-spec/Cargo.toml": "a37a1d4c985d62064228e05b42d37591bdf05427dca6753d14ecdadcdcfc2b97",
-    "banken/Cargo.toml": "57517d1ac11e624f32be4381a27ec08efd6a16eb62e554e57cdc5dcaf238a586"
+    "banken/Cargo.toml": "d64ae5c1501e3dcb66cde7576b8f9aae3794204fd51ddc3107372595ab7c7e5e"
   },
   "target_resolves": {
     "base": {
@@ -560,6 +560,16 @@
           {
             "name": "futures",
             "package_key": "futures-0.3.33",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "http",
+            "package_key": "http-1.4.2",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
