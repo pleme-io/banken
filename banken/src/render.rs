@@ -264,9 +264,16 @@ mod tests {
     use banken_spec::env::Row;
     use egaku_term::TestBackend;
 
+    /// A test row whose uid **shares no substring with its name**.
+    ///
+    /// It used to be `t-{name}`, which made `frame.contains(name)` pass
+    /// whether the drawer rendered the name or the uid — and the drawer WAS
+    /// rendering uids against a real cluster while these tests were green. A
+    /// fixture value that embeds another field cannot tell the two apart.
     fn row(name: &str, status: &str) -> Row {
         Row {
-            uid: banken_spec::env::Uid::new(format!("t-{name}")).expect("non-blank"),
+            uid: banken_spec::env::Uid::new("00000000-1111-2222-3333-444444444444")
+                .expect("non-blank"),
             version: None,
             name: name.into(),
             namespace: Some("catch".into()),
@@ -352,6 +359,28 @@ mod tests {
         assert!(
             frame.contains(&selected),
             "the selected row must be on screen, got {frame:?}",
+        );
+    }
+
+    /// **THE NAME GATE, and it is a REGRESSION gate measured on a real
+    /// cluster.** The NAME column drew the object UID — 69 of 69 rows on
+    /// `camelot-eks`, `10a69bf6-b039-4731-8cce-28ed6e55c534` where the pod
+    /// name belonged — because the authored column pointed at
+    /// `egaku::IDENTITY_FIELD`, which `TableView::project` short-circuits to
+    /// `TableRow::identity()`, which banken defines as the uid (the `Grip`
+    /// seal). Three render tests were green throughout, because every fixture
+    /// uid embedded its own row's name.
+    #[test]
+    fn the_name_column_draws_the_name_never_the_uid() {
+        let table = PodTable::pods(vec![row("catch-api-7d9f", "Running")]);
+        let mut backend = TestBackend::new(80, 6);
+        backend.draw(|buf| draw_pod_table(buf, 0, 0, 80, 6, &table));
+        let frame = backend.to_lines().join("\n");
+        assert!(frame.contains("catch-api-7d9f"), "{frame}");
+        assert!(
+            !frame.contains("00000000-1111"),
+            "the uid is act identity, not display identity — it must not be \
+             on screen: {frame}",
         );
     }
 

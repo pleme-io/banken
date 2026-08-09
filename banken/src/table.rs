@@ -44,13 +44,20 @@ use banken_spec::types::{Ordering, ResourceKind, ViewSource};
 use banken_spec::{Catalog, SpecError};
 use egaku::{Column, SortKey, SortOrder, TableError, TableView};
 
-/// The reserved column field that projects a row's identity
-/// ([`Row::name`]) rather than one of its cells.
+/// egaku's reserved column field — the one that projects
+/// [`egaku::TableRow::identity`] instead of a cell.
 ///
-/// A re-export of [`egaku::IDENTITY_FIELD`], not a second constant. banken's
-/// authored `(defk8sview)` forms spell it `:field name` and the fixture/live
-/// readers omit it from `Row.cells`; that agreement is now with egaku's
-/// vocabulary rather than with a private copy of it.
+/// A re-export, not a second constant. **banken's authored views deliberately
+/// do NOT use it**: `identity()` here is the object UID (the `Grip` seal, so an
+/// act addresses an object across delete-and-recreate), and
+/// `TableView::project` short-circuits this field to `identity()` without
+/// consulting `cell` — so a NAME column on it renders uids. Measured
+/// 2026-08-09 against camelot-eks: 69 of 69 rows. The NAME column is authored
+/// on [`banken_spec::env::DISPLAY_NAME_FIELD`] instead.
+///
+/// It stays exported because it is what a test asserts *against* — the
+/// `assert_ne!` in `the_pods_table_is_built_from_the_authored_view` is what
+/// keeps the authored column off it.
 pub use egaku::IDENTITY_FIELD;
 
 /// The canonical `:pods` columns (BANKEN.md §III.b `(defk8sview "pods")`):
@@ -66,7 +73,10 @@ pub use egaku::IDENTITY_FIELD;
 #[must_use]
 pub fn pod_columns() -> Vec<Column> {
     vec![
-        Column::new("NAME", IDENTITY_FIELD),
+        // NOT `IDENTITY_FIELD` — see `banken_spec::env::DISPLAY_NAME_FIELD`.
+        // egaku projects the reserved field straight to `identity()`, which
+        // here is the object UID, so a NAME column on it draws a uid.
+        Column::new("NAME", banken_spec::env::DISPLAY_NAME_FIELD),
         Column::new("READY", "ready"),
         Column::new("STATUS", "phase"),
         Column::new("RESTARTS", "restarts"),

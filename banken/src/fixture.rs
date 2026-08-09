@@ -44,6 +44,21 @@ impl Default for FixtureClusterEnv {
     }
 }
 
+/// A stable, name-free stand-in uid for a fixture pod.
+///
+/// Shaped like a real one (opaque, no relationship to any other field) so a
+/// test asserting on a name cannot pass by accidentally matching the uid — see
+/// the call site. Derived from the name so it stays deterministic across runs,
+/// but through a hash, so the name is not recoverable from it.
+fn uid_for(name: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut h);
+    let mut s = String::from("fixture-uid-");
+    s.push_str(&h.finish().to_string());
+    s
+}
+
 /// A realistic mixed set of fixture pods — one of every health shape the
 /// render + sort must handle.
 fn fixture_pods() -> Vec<Row> {
@@ -52,7 +67,15 @@ fn fixture_pods() -> Vec<Row> {
         // real uid is assigned by the apiserver, so the fixture's is a stable
         // stand-in that makes identity deterministic across runs. It is
         // prefixed so it can never be mistaken for one a cluster issued.
-        uid: banken_spec::env::Uid::new(format!("fixture-{name}"))
+        //
+        // **It deliberately does NOT contain the pod name** (2026-08-09). It
+        // used to be `fixture-{name}`, and that made every render assertion of
+        // the shape `frame.contains("catch-api-7d9f")` VACUOUS: the frame
+        // contained the name whether the drawer rendered the name or the uid.
+        // The NAME column was in fact drawing uids on a real cluster and three
+        // green tests said otherwise. A fixture value that embeds another
+        // field cannot distinguish the two.
+        uid: banken_spec::env::Uid::new(uid_for(name))
             .expect("a fixture uid is non-blank by construction"),
         name: name.into(),
         namespace: Some("catch".into()),
@@ -63,9 +86,11 @@ fn fixture_pods() -> Vec<Row> {
         // Keyed by the AUTHORED `(defk8sview "pods")` `:field` values
         // (`ready`/`phase`/`restarts`/`age`), not by the header text. The
         // authored field is the join key; keying by header made the authored
-        // `:field` decorative and a typo in it invisible. `name` is the
-        // reserved identity field and is never a cell
-        // (`banken::table::IDENTITY_FIELD`).
+        // `:field` decorative and a typo in it invisible.
+        //
+        // The NAME column's field (`object-name`) is answered by `Row::cell`
+        // from the dedicated `name` above rather than carried here — see
+        // `banken_spec::env::DISPLAY_NAME_FIELD`.
         cells: vec![
             ("ready".into(), ready.into()),
             ("phase".into(), status.into()),

@@ -80,6 +80,32 @@ impl std::fmt::Display for Uid {
     }
 }
 
+/// The `:field` an authored view points its NAME column at, so the object's
+/// **name** reaches the screen.
+///
+/// # Why it is not `egaku::IDENTITY_FIELD`
+///
+/// `egaku::TableView::project` special-cases `IDENTITY_FIELD` and returns
+/// [`egaku::TableRow::identity`] without ever consulting
+/// [`egaku::TableRow::cell`] (`egaku-0.1.5/src/table.rs:398-404`). banken's
+/// `identity()` is the **uid** — a deliberate, load-bearing choice for `Grip`,
+/// where an act must address an object across delete-and-recreate — so a NAME
+/// column on `IDENTITY_FIELD` draws a uid.
+///
+/// Measured 2026-08-09 against `camelot-eks`: all 69 rows rendered
+/// `10a69bf6-b039-4731-8cce-28ed6e55c534` under `NAME`. Pointing the authored
+/// column at an ordinary field routes it through `cell`, which is the whole
+/// fix and needs no change to egaku — which banken must not make from this
+/// repo (QUADRO T1).
+///
+/// **The upstream destination**, recorded rather than promised:
+/// `pending-banken: egaku-identity-field-projection` — `project` should prefer
+/// `row.cell(field)` and fall back to `identity()`, at which point a NAME
+/// column on `IDENTITY_FIELD` would resolve correctly and this constant could
+/// retire. It is one egaku change; until it lands, the authored field is the
+/// honest join.
+pub const DISPLAY_NAME_FIELD: &str = "object-name";
+
 /// One row of an observed resource table — an ordered set of typed
 /// cells, plus the resource's identity for drill-down.
 ///
@@ -184,18 +210,29 @@ impl egaku::TableRow for Row {
     }
 
     fn cell(&self, field: &str) -> Option<&str> {
-        // The identity FIELD renders the NAME, while `identity()` returns the
-        // UID. Those are two different questions and collapsing them was a
-        // real regression: when `identity()` moved from name to uid (for the
-        // `Grip` work — an act must address an object across recreate), the
-        // NAME column started rendering `uid-v1-v1-Pod-demo-web-…` because
-        // nothing populated the identity field and the drawer fell back to
-        // `identity()`.
+        // The NAME column renders the object's NAME, while `identity()`
+        // returns the UID. Those are two different questions and collapsing
+        // them was a real regression: when `identity()` moved from name to uid
+        // (for the `Grip` work — an act must address an object across
+        // recreate), the NAME column started rendering
+        // `uid-v1-v1-Pod-demo-web-…`.
         //
-        // Display identity ("which row am I looking at") and act identity
-        // ("which object am I about to touch") are answered separately, here
-        // and in `identity()` respectively.
-        if field == egaku::IDENTITY_FIELD {
+        // **`DISPLAY_NAME_FIELD` is what the authored view actually names, and
+        // that is not cosmetic.** `egaku::TableView::project` short-circuits
+        // `IDENTITY_FIELD` straight to `row.identity()` and never calls this
+        // method for it (`egaku-0.1.5/src/table.rs:398-404`), so answering
+        // `IDENTITY_FIELD` here fixed nothing on the render path — measured
+        // 2026-08-09 against camelot-eks, where every one of 69 rows drew its
+        // uid. A column pointed at an ordinary field is projected through
+        // `cell`, which is how the fix reaches the screen without banken
+        // editing egaku from this repo. `pending-banken: egaku-identity-field-
+        // projection` records the upstream destination.
+        //
+        // The `IDENTITY_FIELD` arm stays anyway: it is the right answer to the
+        // question, it keeps a reader that asks for `"name"` working, and it
+        // is what will make the upstream fix a no-op here rather than a second
+        // migration.
+        if field == DISPLAY_NAME_FIELD || field == egaku::IDENTITY_FIELD {
             return Some(self.name.as_str());
         }
         self.cells

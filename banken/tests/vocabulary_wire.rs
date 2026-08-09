@@ -14,6 +14,7 @@ use banken::app::{Action, BankenApp, key_legend, keymap_from_catalog, unbound_ac
 use banken::fixture::FixtureClusterEnv;
 use banken::table::{IDENTITY_FIELD, PodTable, pod_columns};
 use banken_spec::env::ClusterEnv;
+use banken_spec::env::DISPLAY_NAME_FIELD;
 use banken_spec::testing::MockSessionEnv;
 use banken_spec::types::{OperatorId, ResourceKind};
 use banken_spec::{Catalog, SpecError, load_catalog};
@@ -270,7 +271,16 @@ fn the_pods_table_is_built_from_the_authored_view() {
         .collect();
     assert_eq!(
         fields,
-        vec![IDENTITY_FIELD, "ready", "phase", "restarts", "age"]
+        vec![DISPLAY_NAME_FIELD, "ready", "phase", "restarts", "age"]
+    );
+    // **And it must NOT be the reserved field.** `egaku::TableView` projects
+    // `IDENTITY_FIELD` straight to `TableRow::identity()`, which here is the
+    // object UID — so a NAME column authored on it renders uids. Measured
+    // 2026-08-09: 69 of 69 rows on camelot-eks. See
+    // `banken_spec::env::DISPLAY_NAME_FIELD`.
+    assert_ne!(
+        fields[0], IDENTITY_FIELD,
+        "the NAME column must project through `cell`, not through `identity()`",
     );
     assert_eq!(t.view().sort().column, "STATUS");
     assert_eq!(t.kind(), ResourceKind::Pod);
@@ -298,8 +308,9 @@ fn every_authored_column_resolves_against_the_readers_rows() {
     with_ghost.view_mut().set_rows(Vec::new());
     assert_eq!(
         with_ghost.view().unresolved_fields().len(),
-        4,
-        "ready/phase/restarts/age"
+        5,
+        "object-name/ready/phase/restarts/age — NAME counts too now that it \
+         projects through `cell` rather than through `identity()`"
     );
 }
 
