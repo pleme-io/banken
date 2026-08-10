@@ -26,10 +26,12 @@
 //!
 //! # Tier
 //!
-//! This is the typed BORDER plus a mock. It is deliberately not a data source:
-//! nothing here reads `/proc` or calls `sysinfo`. A real implementation is a
-//! separate impl of [`HostEnv`], and until one exists this module claims
-//! nothing about live observation.
+//! The typed border, a mock, and ONE live implementation
+//! ([`SysinfoHostEnv`]). What does NOT exist yet is a `ViewSource::Host` arm,
+//! so nothing in banken's view/table machinery consumes this — the readings are
+//! real, and nothing displays them. That is the honest state, and the next
+//! step: adding the arm will fail every exhaustive match until each is wired,
+//! which is the point of adding it rather than special-casing a host view.
 
 use crate::error::SpecError;
 use serde::{Deserialize, Serialize};
@@ -104,6 +106,29 @@ pub struct ProcessReading {
     pub rss_bytes: u64,
 }
 
+/// Which metric a process table was actually ranked by.
+///
+/// Exists because CPU is not always readable. On macOS with sysinfo 0.32 every
+/// process reports 0.0% regardless of refresh kind or sampling interval —
+/// MEASURED 2026-08-10 across `new_all + refresh_all` and `new_all +
+/// refresh_processes_specifics(with_cpu)`, both 0 nonzero out of ~590
+/// processes. A table that says "top by CPU" and returns an arbitrary order is
+/// worse than one that says what it could actually sort by.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RankedBy {
+    /// CPU percent — available and non-degenerate.
+    Cpu,
+    /// Resident memory, because every CPU reading was zero.
+    RssFallback,
+}
+
+/// A ranked process table that reports its own ranking metric.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ProcessTable {
+    pub ranked_by: RankedBy,
+    pub rows: Vec<ProcessReading>,
+}
+
 /// The host afferent surface. Read-only by construction: there is no method
 /// here that changes anything, so a host observer cannot become a host
 /// controller by accident — the same posture `ClusterEnv` holds for OBSERVE.
@@ -123,7 +148,101 @@ pub trait HostEnv {
     ///
     /// # Errors
     /// A `SpecError::Interp { phase: "host-processes" }` when the read fails.
-    fn top_processes(&self, limit: usize) -> Result<Vec<ProcessReading>, SpecError>;
+    fn top_processes(&self, limit: usize) -> Result<ProcessTable, SpecError>;
+}
+
+
+/// A live [`HostEnv`] backed by `sysinfo`.
+///
+/// The counters here are the same ones `pleme-io/tear` reads in its
+/// `system_resources` MCP tool; the version is pinned to match so the two
+/// cannot drift into reporting different numbers for one machine. See the
+/// dependency comment in Cargo.toml for why this is a second copy rather than
+/// an extracted crate, and what would trigger the extraction.
+#[derive(Debug, Default)]
+pub struct SysinfoHostEnv;
+
+impl HostEnv for SysinfoHostEnv {
+    fn host_reading(&self) -> Result<HostReading, SpecError> {
+        use sysinfo::System;
+        let mut sys = System::new();
+        sys.refresh_memory();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        let load = System::load_average();
+
+        // `physical_core_count` is an Option because a platform may not expose
+        // it; 0 would be a claim, and `load_per_core` already returns None on
+        // a zero denominator rather than dividing.
+        let cores = sys.physical_core_count().unwrap_or(0);
+        let swap_total = sys.total_swap();
+
+        Ok(HostReading {
+            host: System::host_name().unwrap_or_else(|| "unknown".to_string()),
+            uptime_secs: System::uptime(),
+            cpu_cores: u32::try_from(cores).unwrap_or(u32::MAX),
+            #[allow(clippy::cast_possible_truncation)]
+            load_avg: (load.one as f32, load.five as f32, load.fifteen as f32),
+            mem_total_bytes: sys.total_memory(),
+            mem_used_bytes: sys.used_memory(),
+            // None when no swap is CONFIGURED, Some(n) when it exists — the
+            // distinction the type exists to preserve, resolved here from the
+            // total rather than from the used value, since used==0 is a real
+            // and different state.
+            swap_used_bytes: (swap_total > 0).then(|| sys.used_swap()),
+            processes: u32::try_from(sys.processes().len()).unwrap_or(u32::MAX),
+        })
+    }
+
+    fn top_processes(&self, limit: usize) -> Result<ProcessTable, SpecError> {
+        use sysinfo::System;
+        let mut sys = System::new();
+        // Two refreshes with a gap: sysinfo computes CPU as a DELTA between
+        // samples, so a single refresh reports 0.0 for everything. A "top by
+        // CPU" that always returns zeros would sort arbitrarily while looking
+        // like it worked.
+        // `refresh_processes` does NOT compute CPU unless the refresh KIND asks
+        // for it — a plain refresh leaves every `cpu_usage()` at 0.0. And CPU is
+        // a DELTA, so it needs two samples with `MINIMUM_CPU_UPDATE_INTERVAL`
+        // between them. Miss either half and "top by CPU" returns an arbitrary
+        // order that looks sorted. `pleme-io/tear` calls `refresh_all()` once
+        // and reads `cpu_usage()`, which has both halves missing.
+        let kind = sysinfo::ProcessRefreshKind::new().with_cpu();
+        sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, kind);
+        std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+        sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, kind);
+
+        let rows: Vec<ProcessReading> = sys
+            .processes()
+            .iter()
+            .map(|(pid, p)| ProcessReading {
+                pid: pid.as_u32(),
+                name: p.name().to_string_lossy().into_owned(),
+                cpu_pct: p.cpu_usage(),
+                rss_bytes: p.memory(),
+            })
+            .collect();
+        Ok(rank(rows, limit))
+    }
+}
+
+/// Rank a process list, falling back to RSS when CPU is uniformly zero.
+///
+/// Shared by every implementation so the fallback rule cannot differ between
+/// the mock and the live reader — a mock that ranks differently from production
+/// is a test that proves the wrong thing.
+#[must_use]
+pub fn rank(mut rows: Vec<ProcessReading>, limit: usize) -> ProcessTable {
+    let cpu_usable = rows.iter().any(|p| p.cpu_pct > 0.0);
+    if cpu_usable {
+        rows.sort_by(|a, b| b.cpu_pct.total_cmp(&a.cpu_pct));
+    } else {
+        rows.sort_by(|a, b| b.rss_bytes.cmp(&a.rss_bytes));
+    }
+    rows.truncate(limit);
+    ProcessTable {
+        ranked_by: if cpu_usable { RankedBy::Cpu } else { RankedBy::RssFallback },
+        rows,
+    }
 }
 
 /// A fixed reading, for tests and for exercising a view without a machine.
@@ -138,11 +257,8 @@ impl HostEnv for MockHostEnv {
         Ok(self.reading.clone())
     }
 
-    fn top_processes(&self, limit: usize) -> Result<Vec<ProcessReading>, SpecError> {
-        let mut ps = self.processes.clone();
-        ps.sort_by(|a, b| b.cpu_pct.total_cmp(&a.cpu_pct));
-        ps.truncate(limit);
-        Ok(ps)
+    fn top_processes(&self, limit: usize) -> Result<ProcessTable, SpecError> {
+        Ok(rank(self.processes.clone(), limit))
     }
 }
 
@@ -215,16 +331,86 @@ mod tests {
             processes: vec![p(1, "idle", 0.5), p(2, "hot", 190.0), p(3, "warm", 40.0)],
         };
         let top = env.top_processes(2).unwrap();
-        assert_eq!(top.len(), 2, "the limit is respected");
-        assert_eq!(top[0].name, "hot", "ranked by CPU descending");
-        assert_eq!(top[1].name, "warm");
+        assert_eq!(top.ranked_by, RankedBy::Cpu, "CPU was readable, so it must be used");
+        assert_eq!(top.rows.len(), 2, "the limit is respected");
+        assert_eq!(top.rows[0].name, "hot", "ranked by CPU descending");
+        assert_eq!(top.rows[1].name, "warm");
         // Above 100 is correct: cpu_pct is percent of ONE core.
-        assert!(top[0].cpu_pct > 100.0);
+        assert!(top.rows[0].cpu_pct > 100.0);
+    }
+
+    /// **The LIVE implementation, against this machine.**
+    ///
+    /// Every test above uses the mock, so they prove the TYPE and nothing about
+    /// whether sysinfo is being read correctly. Ignored by default because it
+    /// depends on the machine it runs on and sleeps for a CPU sample.
+    ///
+    ///   cargo test -p banken-spec reads_this_machine -- --ignored --nocapture
+    #[test]
+    #[ignore = "reads the real host; run explicitly"]
+    fn reads_this_machine() {
+        let env = SysinfoHostEnv;
+        let r = env.host_reading().expect("host reading");
+        println!(
+            "\n{} | {} cores | load {:.2} ({:.2}/core) | mem {:.1}% | swap {:?} | {} procs",
+            r.host,
+            r.cpu_cores,
+            r.load_avg.0,
+            r.load_per_core().unwrap_or(0.0),
+            r.mem_fraction().unwrap_or(0.0) * 100.0,
+            r.swap_used_bytes,
+            r.processes
+        );
+        assert!(r.cpu_cores > 0, "0 cores means the read failed, not a coreless machine");
+        assert!(r.mem_total_bytes > 0, "0 total memory is not a real reading");
+        assert!(r.processes > 0, "a machine running this test has processes");
+
+        let top = env.top_processes(5).expect("processes");
+        println!("   ranked_by: {:?}", top.ranked_by);
+        for p in &top.rows {
+            println!("   {:>7} {:<24} cpu {:>6.1}%  rss {} MB", p.pid, p.name, p.cpu_pct, p.rss_bytes / 1_048_576);
+        }
+        assert!(!top.rows.is_empty(), "no processes returned");
+        // The table must NAME what it ranked by. On macOS every cpu_usage() is
+        // 0.0 (measured), so the honest outcome here is RssFallback with a
+        // descending RSS order — not a CPU claim over arbitrary data.
+        match top.ranked_by {
+            RankedBy::Cpu => assert!(
+                top.rows.iter().any(|p| p.cpu_pct > 0.0),
+                "claimed a CPU ranking while every reading is 0"
+            ),
+            RankedBy::RssFallback => {
+                let rss: Vec<u64> = top.rows.iter().map(|p| p.rss_bytes).collect();
+                let mut sorted = rss.clone();
+                sorted.sort_unstable_by(|a, b| b.cmp(a));
+                assert_eq!(rss, sorted, "fell back to RSS but did not sort by it");
+            }
+        }
+    }
+
+    /// The fallback is a RULE, not a platform accident — pinned here so the
+    /// mock and the live reader cannot diverge on it.
+    #[test]
+    fn all_zero_cpu_falls_back_to_rss_and_says_so() {
+        let p = |pid, name: &str, cpu, rss| ProcessReading {
+            pid,
+            name: name.into(),
+            cpu_pct: cpu,
+            rss_bytes: rss,
+        };
+        let t = rank(vec![p(1, "small", 0.0, 10), p(2, "big", 0.0, 999)], 5);
+        assert_eq!(t.ranked_by, RankedBy::RssFallback, "no usable CPU, so say RSS");
+        assert_eq!(t.rows[0].name, "big", "and actually sort by it");
+
+        // One non-zero reading is enough to make CPU the honest metric.
+        let t = rank(vec![p(1, "small", 0.0, 999), p(2, "busy", 3.0, 10)], 5);
+        assert_eq!(t.ranked_by, RankedBy::Cpu);
+        assert_eq!(t.rows[0].name, "busy");
     }
 
     #[test]
     fn a_limit_larger_than_the_process_list_is_not_an_error() {
         let env = MockHostEnv { reading: reading(), processes: Vec::new() };
-        assert_eq!(env.top_processes(10).unwrap().len(), 0);
+        assert_eq!(env.top_processes(10).unwrap().rows.len(), 0);
     }
 }

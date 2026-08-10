@@ -17,6 +17,15 @@ repository.workspace = true
 # rather than last-write-wins.
 awase = "0.1"
 
+# Host metrics for the NODE plane. 0.32 pinned to match `pleme-io/tear`, which
+# reads the same counters inline in its `system_resources` MCP tool — the FIRST
+# copy of this shape in the fleet. Two consumers is the point at which the
+# directive says extract; the extraction is deliberately NOT done yet because
+# what is shared today is ~15 lines of sysinfo calls, and a crate for that is
+# its own debt. The trigger to extract: a THIRD consumer, or the moment
+# sampling grows past trivial (deltas, per-core, cgroup awareness).
+sysinfo = "0.32"
+
 # The fleet widget-STATE vocabulary. Present for exactly one reason: the
 # `egaku::TableRow` impl on `env::Row` (see `env.rs`). Rust's orphan rule
 # puts that impl in Row's own crate or nowhere — `banken` cannot write
