@@ -94,6 +94,7 @@ pub mod env;
 pub mod error;
 /// The help page — the authored vocabulary rendered back to the operator.
 pub mod help;
+pub mod host;
 pub mod interp;
 pub mod loader;
 pub mod nav;
