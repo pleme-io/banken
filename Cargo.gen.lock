@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "c5a6c0e5362ff621fdc99fef7b7ecf7b72c6f0a463dc3da2ccc8b5770df375d6",
+  "cargo_lock_sha256": "dbcbec9233db0ffc8780928202c9405d0ff09ff6db9a7a828f5a06c2c36dff97",
   "manifest_sha256": {
-    "Cargo.toml": "31f9548db7e34aac09daf67deb1d93327cde25a4f35c9a9b9d3da8bda40f88f8",
+    "Cargo.toml": "9eb82e7c4fc76844623d35fb7e62dbecbc5a78fac469c54c8849eeaf6c27886d",
     "banken-config/Cargo.toml": "ad2de374a20edfaf584decc7ef42646b90e39a09fedbba54f24fd5aff8d2c4df",
-    "banken-spec/Cargo.toml": "2e3390f4a2ef74b5c85792f176bc679e7e340f96600c6901afceb1063bd8798c",
+    "banken-spec/Cargo.toml": "a37a1d4c985d62064228e05b42d37591bdf05427dca6753d14ecdadcdcfc2b97",
     "banken/Cargo.toml": "2d423b7ffeca04872d91259c51592bc22742efadd5ce978e2301ce9bf008ec95"
   },
   "target_resolves": {
@@ -483,7 +483,7 @@
           "tokio-sleep"
         ]
       },
-      "banken-0.1.13": {
+      "banken-0.1.14": {
         "runtime_dependencies": [
           {
             "name": "anyhow",
@@ -517,7 +517,7 @@
           },
           {
             "name": "banken_config",
-            "package_key": "banken-config-0.1.13",
+            "package_key": "banken-config-0.1.14",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -527,7 +527,7 @@
           },
           {
             "name": "banken_spec",
-            "package_key": "banken-spec-0.1.13",
+            "package_key": "banken-spec-0.1.14",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -678,7 +678,7 @@
           "tear"
         ]
       },
-      "banken-config-0.1.13": {
+      "banken-config-0.1.14": {
         "runtime_dependencies": [
           {
             "name": "ishou_tokens",
@@ -756,7 +756,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "banken-spec-0.1.13": {
+      "banken-spec-0.1.14": {
         "runtime_dependencies": [
           {
             "name": "awase",
@@ -803,16 +803,6 @@
           {
             "name": "serde_yaml",
             "package_key": "serde_yaml-0.9.34+deprecated",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "sysinfo",
-            "package_key": "sysinfo-0.32.1",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1197,62 +1187,6 @@
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": [
-          "std"
-        ]
-      },
-      "crossbeam-deque-0.8.7": {
-        "runtime_dependencies": [
-          {
-            "name": "crossbeam_epoch",
-            "package_key": "crossbeam-epoch-0.9.20",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": false,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "crossbeam_utils",
-            "package_key": "crossbeam-utils-0.8.22",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": false,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": [
-          "default",
-          "std"
-        ]
-      },
-      "crossbeam-epoch-0.9.20": {
-        "runtime_dependencies": [
-          {
-            "name": "crossbeam_utils",
-            "package_key": "crossbeam-utils-0.8.22",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": false,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": [
-          "alloc",
-          "std"
-        ]
-      },
-      "crossbeam-utils-0.8.22": {
-        "runtime_dependencies": [],
-        "build_dependencies": [],
-        "features": [
-          "default",
           "std"
         ]
       },
@@ -6140,58 +6074,6 @@
           "std"
         ]
       },
-      "rayon-1.12.0": {
-        "runtime_dependencies": [
-          {
-            "name": "either",
-            "package_key": "either-1.16.0",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": false,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "rayon_core",
-            "package_key": "rayon-core-1.13.0",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": []
-      },
-      "rayon-core-1.13.0": {
-        "runtime_dependencies": [
-          {
-            "name": "crossbeam_deque",
-            "package_key": "crossbeam-deque-0.8.7",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "crossbeam_utils",
-            "package_key": "crossbeam-utils-0.8.22",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": []
-      },
       "regex-1.13.1": {
         "runtime_dependencies": [
           {
@@ -10060,61 +9942,6 @@
             ],
             "build_dependencies": [],
             "features": []
-          },
-          "sysinfo-0.32.1": {
-            "runtime_dependencies": [
-              {
-                "name": "core_foundation_sys",
-                "package_key": "core-foundation-sys-0.8.7",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": "cfg(any(target_os = \"macos\", target_os = \"ios\"))",
-                "tree": "target"
-              },
-              {
-                "name": "libc",
-                "package_key": "libc-0.2.186",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": "cfg(not(any(target_os = \"unknown\", target_arch = \"wasm32\")))",
-                "tree": "target"
-              },
-              {
-                "name": "memchr",
-                "package_key": "memchr-2.8.3",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "rayon",
-                "package_key": "rayon-1.12.0",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              }
-            ],
-            "build_dependencies": [],
-            "features": [
-              "component",
-              "default",
-              "disk",
-              "multithread",
-              "network",
-              "system",
-              "user",
-              "windows"
-            ]
           }
         }
       },
@@ -10713,51 +10540,6 @@
             ],
             "build_dependencies": [],
             "features": []
-          },
-          "sysinfo-0.32.1": {
-            "runtime_dependencies": [
-              {
-                "name": "libc",
-                "package_key": "libc-0.2.186",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": "cfg(not(any(target_os = \"unknown\", target_arch = \"wasm32\")))",
-                "tree": "target"
-              },
-              {
-                "name": "memchr",
-                "package_key": "memchr-2.8.3",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "rayon",
-                "package_key": "rayon-1.12.0",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              }
-            ],
-            "build_dependencies": [],
-            "features": [
-              "component",
-              "default",
-              "disk",
-              "multithread",
-              "network",
-              "system",
-              "user",
-              "windows"
-            ]
           }
         }
       },
@@ -11356,51 +11138,6 @@
             ],
             "build_dependencies": [],
             "features": []
-          },
-          "sysinfo-0.32.1": {
-            "runtime_dependencies": [
-              {
-                "name": "libc",
-                "package_key": "libc-0.2.186",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": "cfg(not(any(target_os = \"unknown\", target_arch = \"wasm32\")))",
-                "tree": "target"
-              },
-              {
-                "name": "memchr",
-                "package_key": "memchr-2.8.3",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "rayon",
-                "package_key": "rayon-1.12.0",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              }
-            ],
-            "build_dependencies": [],
-            "features": [
-              "component",
-              "default",
-              "disk",
-              "multithread",
-              "network",
-              "system",
-              "user",
-              "windows"
-            ]
           }
         }
       },
@@ -12045,61 +11782,6 @@
             ],
             "build_dependencies": [],
             "features": []
-          },
-          "sysinfo-0.32.1": {
-            "runtime_dependencies": [
-              {
-                "name": "core_foundation_sys",
-                "package_key": "core-foundation-sys-0.8.7",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": "cfg(any(target_os = \"macos\", target_os = \"ios\"))",
-                "tree": "target"
-              },
-              {
-                "name": "libc",
-                "package_key": "libc-0.2.186",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": "cfg(not(any(target_os = \"unknown\", target_arch = \"wasm32\")))",
-                "tree": "target"
-              },
-              {
-                "name": "memchr",
-                "package_key": "memchr-2.8.3",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "rayon",
-                "package_key": "rayon-1.12.0",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              }
-            ],
-            "build_dependencies": [],
-            "features": [
-              "component",
-              "default",
-              "disk",
-              "multithread",
-              "network",
-              "system",
-              "user",
-              "windows"
-            ]
           }
         }
       },
@@ -12652,51 +12334,6 @@
             ],
             "build_dependencies": [],
             "features": []
-          },
-          "sysinfo-0.32.1": {
-            "runtime_dependencies": [
-              {
-                "name": "libc",
-                "package_key": "libc-0.2.186",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": "cfg(not(any(target_os = \"unknown\", target_arch = \"wasm32\")))",
-                "tree": "target"
-              },
-              {
-                "name": "memchr",
-                "package_key": "memchr-2.8.3",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "rayon",
-                "package_key": "rayon-1.12.0",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              }
-            ],
-            "build_dependencies": [],
-            "features": [
-              "component",
-              "default",
-              "disk",
-              "multithread",
-              "network",
-              "system",
-              "user",
-              "windows"
-            ]
           }
         }
       },
@@ -13249,51 +12886,6 @@
             ],
             "build_dependencies": [],
             "features": []
-          },
-          "sysinfo-0.32.1": {
-            "runtime_dependencies": [
-              {
-                "name": "libc",
-                "package_key": "libc-0.2.186",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": "cfg(not(any(target_os = \"unknown\", target_arch = \"wasm32\")))",
-                "tree": "target"
-              },
-              {
-                "name": "memchr",
-                "package_key": "memchr-2.8.3",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "rayon",
-                "package_key": "rayon-1.12.0",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": true,
-                "target": null,
-                "tree": "target"
-              }
-            ],
-            "build_dependencies": [],
-            "features": [
-              "component",
-              "default",
-              "disk",
-              "multithread",
-              "network",
-              "system",
-              "user",
-              "windows"
-            ]
           }
         }
       }
@@ -13361,7 +12953,7 @@
     "backon-1.6.0": {
       "edition": "2024"
     },
-    "banken-0.1.13": {
+    "banken-0.1.14": {
       "edition": "2024",
       "lib_target": {
         "name": "banken",
@@ -13374,14 +12966,14 @@
         }
       ]
     },
-    "banken-config-0.1.13": {
+    "banken-config-0.1.14": {
       "edition": "2024",
       "lib_target": {
         "name": "banken_config",
         "path": "src/lib.rs"
       }
     },
-    "banken-spec-0.1.13": {
+    "banken-spec-0.1.14": {
       "edition": "2024",
       "lib_target": {
         "name": "banken_spec",
@@ -13458,18 +13050,6 @@
     },
     "cpufeatures-0.3.0": {
       "edition": "2024"
-    },
-    "crossbeam-deque-0.8.7": {
-      "edition": "2021",
-      "build_script": "build.rs"
-    },
-    "crossbeam-epoch-0.9.20": {
-      "edition": "2021",
-      "build_script": "build.rs"
-    },
-    "crossbeam-utils-0.8.22": {
-      "edition": "2021",
-      "build_script": "build.rs"
     },
     "crossterm-0.28.1": {
       "edition": "2021"
@@ -13878,14 +13458,6 @@
     "rand_core-0.9.5": {
       "edition": "2021"
     },
-    "rayon-1.12.0": {
-      "edition": "2021"
-    },
-    "rayon-core-1.13.0": {
-      "edition": "2021",
-      "build_script": "build.rs",
-      "links": "rayon-core"
-    },
     "regex-1.13.1": {
       "edition": "2021"
     },
@@ -14042,9 +13614,6 @@
     },
     "synstructure-0.13.2": {
       "edition": "2018"
-    },
-    "sysinfo-0.32.1": {
-      "edition": "2021"
     },
     "tatara-lisp-0.3.3": {
       "edition": "2021"
