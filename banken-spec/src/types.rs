@@ -338,6 +338,11 @@ pub enum ViewSource {
     Health,
     /// The dependency topology of a root resource.
     Topology,
+    /// The NODE this process runs on — load, memory, processes. Read through
+    /// [`crate::host::HostEnv`], not `ClusterEnv`: it is meaningful on a
+    /// machine belonging to no cluster, and every other arm here needs a
+    /// kubeconfig.
+    Host,
 }
 
 /// One column of a resource table.

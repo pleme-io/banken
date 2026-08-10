@@ -174,12 +174,35 @@ impl PodTable {
             .find(|v| v.name == view_name)
             .ok_or_else(|| binding_error("no (defk8sview) is named `", view_name, "`"))?;
 
-        let ViewSource::Resource(kind) = view.source else {
-            return Err(binding_error(
-                "view `",
-                view_name,
-                "` does not read a resource kind, so it has no resource table",
-            ));
+        // EXHAUSTIVE, not `let-else`, and that is the whole point. This was
+        // `let ViewSource::Resource(kind) = … else { … }`, which accepts any
+        // future arm silently — adding `ViewSource::Host` compiled clean and
+        // simply fell into the error branch at runtime. A match names every
+        // arm, so the NEXT source added to the enum cannot reach production
+        // without someone deciding here what it renders as.
+        let kind = match view.source {
+            ViewSource::Resource(kind) => kind,
+            ViewSource::Health => {
+                return Err(binding_error(
+                    "view `",
+                    view_name,
+                    "` reads composed health signals, not a resource kind, so it has no                      resource table",
+                ))
+            }
+            ViewSource::Topology => {
+                return Err(binding_error(
+                    "view `",
+                    view_name,
+                    "` reads a dependency topology, not a resource kind, so it has no                      resource table",
+                ))
+            }
+            ViewSource::Host => {
+                return Err(binding_error(
+                    "view `",
+                    view_name,
+                    "` reads the HOST, which is served by host::HostEnv rather than a                      ClusterEnv resource list — no host table renderer exists yet",
+                ))
+            }
         };
 
         let columns: Vec<Column> = view
