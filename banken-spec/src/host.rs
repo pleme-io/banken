@@ -108,12 +108,31 @@ pub struct ProcessReading {
 
 /// Which metric a process table was actually ranked by.
 ///
-/// Exists because CPU is not always readable. On macOS with sysinfo 0.32 every
-/// process reports 0.0% regardless of refresh kind or sampling interval —
-/// MEASURED 2026-08-10 across `new_all + refresh_all` and `new_all +
-/// refresh_processes_specifics(with_cpu)`, both 0 nonzero out of ~590
-/// processes. A table that says "top by CPU" and returns an arbitrary order is
-/// worse than one that says what it could actually sort by.
+/// Exists because CPU is not always readable — but NOT for the reason first
+/// written here. That comment claimed every process reports 0.0% "regardless of
+/// refresh kind or sampling interval, MEASURED". That was FALSE, and it was
+/// committed. The probe behind it took two samples and stopped.
+///
+/// Re-measured on the same host and pin, counting nonzero of ~590 processes
+/// after each successive refresh:
+///
+/// ```text
+///   after refresh #1:  0     <- where the original probe stopped
+///   after refresh #2: 19
+///   after refresh #3: 19
+///   after refresh #4: 27
+/// ```
+///
+/// sysinfo needs the process table to be seen at least twice AFTER the initial
+/// population before a delta exists, so two samples is one short. The lesson is
+/// the shape of the mistake: "I measured and saw nothing" is not the same claim
+/// as "there is nothing to see", and only the second one justifies a permanent
+/// comment.
+///
+/// The enum stays, because CPU genuinely can be unreadable — a short-lived
+/// process, a restricted platform — and a table that says "top by CPU" while
+/// returning an arbitrary order is worse than one that says what it could
+/// actually sort by.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RankedBy {
     /// CPU percent — available and non-degenerate.
@@ -200,15 +219,21 @@ impl HostEnv for SysinfoHostEnv {
         // samples, so a single refresh reports 0.0 for everything. A "top by
         // CPU" that always returns zeros would sort arbitrarily while looking
         // like it worked.
-        // `refresh_processes` does NOT compute CPU unless the refresh KIND asks
-        // for it — a plain refresh leaves every `cpu_usage()` at 0.0. And CPU is
-        // a DELTA, so it needs two samples with `MINIMUM_CPU_UPDATE_INTERVAL`
-        // between them. Miss either half and "top by CPU" returns an arbitrary
-        // order that looks sorted. `pleme-io/tear` calls `refresh_all()` once
-        // and reads `cpu_usage()`, which has both halves missing.
-        let kind = sysinfo::ProcessRefreshKind::new().with_cpu();
-        sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, kind);
-        std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+        // CPU is a DELTA and needs the table seen more than twice: measured on
+        // this host, sample 2 still reports 0 nonzero and sample 3 reports 19.
+        // Two refreshes — the obvious reading of "a delta needs two samples" —
+        // is one short, and produces an all-zero ranking that looks sorted.
+        // `.with_memory()` too, because RSS is the fallback metric and a
+        // CPU-only refresh leaves it at 0, which would make the fallback rank
+        // over zeros exactly the way the CPU path did.
+        //
+        // `pleme-io/tear` calls `refresh_all()` ONCE and reads `cpu_usage()`,
+        // which is sample 1 — always 0.
+        let kind = sysinfo::ProcessRefreshKind::new().with_cpu().with_memory();
+        for _ in 0..3 {
+            sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, kind);
+            std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+        }
         sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, kind);
 
         let rows: Vec<ProcessReading> = sys
@@ -297,7 +322,7 @@ mod tests {
         assert_eq!(small.load_per_core(), Some(2.0), "saturated");
         assert_eq!(big.load_per_core(), Some(0.125), "idle");
         // Same raw load, opposite conclusions.
-        assert_eq!(small.load_avg.0, big.load_avg.0);
+        assert!((small.load_avg.0 - big.load_avg.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -345,7 +370,7 @@ mod tests {
     /// whether sysinfo is being read correctly. Ignored by default because it
     /// depends on the machine it runs on and sleeps for a CPU sample.
     ///
-    ///   cargo test -p banken-spec reads_this_machine -- --ignored --nocapture
+    ///   cargo test -p banken-spec `reads_this_machine` -- --ignored --nocapture
     #[test]
     #[ignore = "reads the real host; run explicitly"]
     fn reads_this_machine() {
