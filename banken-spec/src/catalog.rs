@@ -275,6 +275,7 @@ mod tests {
                 ResourceKind::Node => "node",
                 ResourceKind::Deployment => "deployment",
                 ResourceKind::ReplicaSet => "replica_set",
+                ResourceKind::Event => "event",
             };
             assert!(
                 all.contains(label),

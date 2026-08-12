@@ -123,3 +123,22 @@
             (:header "ENDPOINTS" :field endpoints)
             (:header "AGE" :field age))
   :default-sort (:column "NAME" :order asc))
+
+;; Events. A navigable view and not only a `ClusterEnv::events` call: this is
+;; the first place an operator looks when a workload will not start, and a
+;; read reachable from no view is reachable by nobody.
+;;
+;; COUNT is a column because k8s collapses repeats into one object with a
+;; count rather than emitting each — an event that fired 400 times and one
+;; that fired once are different situations wearing the same message.
+(defk8sview
+  :name "ev"
+  :kind ResourceTable
+  :source (:resource event)
+  :columns ((:header "TYPE" :field event-type)
+            (:header "REASON" :field reason)
+            (:header "OBJECT" :field object)
+            (:header "COUNT" :field count)
+            (:header "MESSAGE" :field message)
+            (:header "AGE" :field age))
+  :default-sort (:column "AGE" :order desc))

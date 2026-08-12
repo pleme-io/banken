@@ -1155,7 +1155,110 @@ fn node_to_row(n: k8s_openapi::api::core::v1::Node) -> Option<Row> {
     row_of(&n, cells)
 }
 
+fn event_to_row(e: k8s_openapi::api::core::v1::Event) -> Option<Row> {
+    let reason = e.reason.clone().unwrap_or_else(|| "-".into());
+    let kind = e.type_.clone().unwrap_or_else(|| "Normal".into());
+    let message = e.message.clone().unwrap_or_default();
+    let object = e.involved_object.name.clone().unwrap_or_else(|| "-".into());
+    // COUNT matters more than it looks: an event repeating 400 times is a
+    // different situation from one that happened once, and k8s collapses
+    // repeats into a single object with a count rather than emitting each.
+    let count = e.count.map_or_else(|| "-".to_owned(), |c| c.to_string());
+    let cells = vec![
+        ("event-type".into(), kind),
+        ("reason".into(), reason),
+        ("object".into(), object),
+        ("count".into(), count),
+        ("message".into(), message),
+    ];
+    row_of(&e, cells)
+}
+
 impl KubeClusterEnv {
+    /// Read one object by name and project it, using the same per-kind
+    /// projection [`Self::list_resources`] uses.
+    ///
+    /// Sharing the projection is the point: a `describe` that rendered
+    /// different fields than the table it was opened from would make the two
+    /// disagree about the same object, and the operator would have no way to
+    /// know which was right.
+    async fn get_ns_scoped<K>(
+        &self,
+        name: &str,
+        ns: Option<&str>,
+        project: fn(K) -> Option<Row>,
+    ) -> Result<Row, SpecError>
+    where
+        K: kube::Resource<Scope = kube::core::NamespaceResourceScope>
+            + Clone
+            + std::fmt::Debug
+            + k8s_openapi::serde::de::DeserializeOwned,
+        K::DynamicType: Default,
+    {
+        let api: Api<K> = match ns {
+            Some(ns) => Api::namespaced(self.client.clone(), ns),
+            None => Api::default_namespaced(self.client.clone()),
+        };
+        let obj = api.get(name).await.map_err(|e| SpecError::Interp {
+            phase: "get-resource".into(),
+            message: Self::error_chain(&e),
+        })?;
+        project(obj).ok_or_else(|| SpecError::Interp {
+            phase: "get-resource".into(),
+            message: "the apiserver returned an object with no metadata.uid".into(),
+        })
+    }
+
+    /// The cluster-scoped peer of [`Self::get_ns_scoped`].
+    async fn get_cluster_scoped<K>(
+        &self,
+        name: &str,
+        project: fn(K) -> Option<Row>,
+    ) -> Result<Row, SpecError>
+    where
+        K: kube::Resource<Scope = kube::core::ClusterResourceScope>
+            + Clone
+            + std::fmt::Debug
+            + k8s_openapi::serde::de::DeserializeOwned,
+        K::DynamicType: Default,
+    {
+        let api: Api<K> = Api::all(self.client.clone());
+        let obj = api.get(name).await.map_err(|e| SpecError::Interp {
+            phase: "get-resource".into(),
+            message: Self::error_chain(&e),
+        })?;
+        project(obj).ok_or_else(|| SpecError::Interp {
+            phase: "get-resource".into(),
+            message: "the apiserver returned an object with no metadata.uid".into(),
+        })
+    }
+
+    /// Cluster events, newest last (the apiserver's own order).
+    async fn list_events(&self, ns: Option<&str>) -> Result<Vec<Event>, SpecError> {
+        use k8s_openapi::api::core::v1::Event as K8sEvent;
+        let api: Api<K8sEvent> = match ns {
+            Some(ns) => Api::namespaced(self.client.clone(), ns),
+            None => Api::all(self.client.clone()),
+        };
+        let list = api
+            .list(&ListParams::default())
+            .await
+            .map_err(|e| SpecError::Interp {
+                phase: "events".into(),
+                message: Self::error_chain(&e),
+            })?;
+        Ok(list
+            .items
+            .into_iter()
+            .map(|e| Event {
+                kind: e.type_.unwrap_or_else(|| "Normal".into()),
+                reason: e.reason.unwrap_or_else(|| "-".into()),
+                message: e.message.unwrap_or_default(),
+                involved: e.involved_object.name.unwrap_or_else(|| "-".into()),
+            })
+            .collect())
+    }
+
     /// List a namespaced kind and project each object into a [`Row`].
     ///
     /// The generic that ends the pod-shaped era: `list_pods` was the only
@@ -1280,19 +1383,52 @@ impl ClusterEnv for KubeClusterEnv {
                 self.block(self.list_cluster_scoped::<Namespace>(namespace_to_row))
             }
             ResourceKind::Node => self.block(self.list_cluster_scoped::<Node>(node_to_row)),
+            ResourceKind::Event => self.block(
+                self.list_ns_scoped::<k8s_openapi::api::core::v1::Event>(ns, event_to_row),
+            ),
         }
     }
 
+    /// Read ONE object, by the same total dispatch `list_resources` uses.
+    ///
+    /// Total for the same reason: a kind added to the enum must be a compile
+    /// error here rather than a runtime refusal an operator meets by pressing
+    /// `d` on a row that rendered perfectly well.
     fn get_resource(
         &self,
-        _kind: ResourceKind,
-        _name: &str,
-        _ns: Option<&str>,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
     ) -> Result<Row, SpecError> {
-        Err(SpecError::Interp {
-            phase: "get-resource".into(),
-            message: "live get not yet wired (pending-banken: live-read M1)".into(),
-        })
+        use k8s_openapi::api::apps::v1::{Deployment, ReplicaSet};
+        use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Namespace, Node, Pod, Service};
+        match kind {
+            ResourceKind::Pod => self.block(self.get_ns_scoped::<Pod>(name, ns, pod_to_row)),
+            ResourceKind::Service => {
+                self.block(self.get_ns_scoped::<Service>(name, ns, service_to_row))
+            }
+            ResourceKind::ConfigMap => {
+                self.block(self.get_ns_scoped::<ConfigMap>(name, ns, configmap_to_row))
+            }
+            ResourceKind::Endpoints => {
+                self.block(self.get_ns_scoped::<Endpoints>(name, ns, endpoints_to_row))
+            }
+            ResourceKind::Deployment => {
+                self.block(self.get_ns_scoped::<Deployment>(name, ns, deployment_to_row))
+            }
+            ResourceKind::ReplicaSet => {
+                self.block(self.get_ns_scoped::<ReplicaSet>(name, ns, replicaset_to_row))
+            }
+            ResourceKind::Namespace => {
+                self.block(self.get_cluster_scoped::<Namespace>(name, namespace_to_row))
+            }
+            ResourceKind::Node => {
+                self.block(self.get_cluster_scoped::<Node>(name, node_to_row))
+            }
+            ResourceKind::Event => self.block(
+                self.get_ns_scoped::<k8s_openapi::api::core::v1::Event>(name, ns, event_to_row),
+            ),
+        }
     }
 
     fn logs(&self, _pod: &str, _ns: &str, _follow: bool) -> Result<LogStream, SpecError> {
@@ -1304,12 +1440,12 @@ impl ClusterEnv for KubeClusterEnv {
         })
     }
 
-    fn events(&self, _ns: Option<&str>) -> Result<Vec<Event>, SpecError> {
-        Err(SpecError::Interp {
-            phase: "events".into(),
-            message: "live events not yet wired (pending-banken: live-read M1)".into(),
-        })
+    /// Cluster events — the first place an operator looks when a pod will
+    /// not start, and previously a typed refusal.
+    fn events(&self, ns: Option<&str>) -> Result<Vec<Event>, SpecError> {
+        self.block(self.list_events(ns))
     }
+
 
     fn topology(&self, _root: &ResourceRef) -> Result<DepTree, SpecError> {
         Err(SpecError::Interp {

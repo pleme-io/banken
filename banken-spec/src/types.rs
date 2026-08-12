@@ -414,6 +414,12 @@ pub enum ResourceKind {
     Deployment,
     /// apps/v1 ReplicaSet (namespaced).
     ReplicaSet,
+    /// core/v1 Event (namespaced).
+    ///
+    /// A navigable kind rather than only a `ClusterEnv::events` call: events
+    /// are the first place an operator looks when a workload will not start,
+    /// and a read reachable from no view is reachable by nobody.
+    Event,
 }
 
 impl ResourceKind {
@@ -427,6 +433,7 @@ impl ResourceKind {
         ResourceKind::Node,
         ResourceKind::Deployment,
         ResourceKind::ReplicaSet,
+        ResourceKind::Event,
     ];
 
     /// Stable label for telemetry / catalog rows.
@@ -440,6 +447,7 @@ impl ResourceKind {
             ResourceKind::Node => "node",
             ResourceKind::Deployment => "deployment",
             ResourceKind::ReplicaSet => "replica_set",
+            ResourceKind::Event => "event",
         }
     }
 }

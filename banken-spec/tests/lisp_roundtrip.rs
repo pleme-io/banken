@@ -21,8 +21,8 @@ fn authored_views_compile_into_typed_values() {
     let views = load_views().expect("canonical views must compile");
     assert_eq!(
         views.len(),
-        9,
-        "pods + svc + ward + deploy + rs + no + ns + cm + ep",
+        10,
+        "pods + svc + ward + deploy + rs + no + ns + cm + ep + ev",
     );
 
     let pods = views.iter().find(|v| v.name == "pods").expect("pods view");
