@@ -28,6 +28,18 @@
 //! awase 0.1.8. Routing vim through chords would have dropped two motions from
 //! the agreed v1 alphabet, and would have collided `G` with the authored
 //! `shift+g` (pod-break-glass). See `theory/UNSOKU.md` §V.
+//!
+//! The **erase chords** are the deliberate exception, and they run the other
+//! way for the same reason: `ctrl+w` / `ctrl+u` / `ctrl+k` and the `delete`
+//! key are the deletions an operator expects in ANY one-line query box, and
+//! none of them can be a character —
+//! `egaku_term::app::text_char` refuses every CTRL-modified key
+//! (`egaku-term/src/app.rs:188`) and `delete` is not a `KeyCode::Char` at all.
+//! So they arrive as chords, and [`Stroke`] names each one rather than the key
+//! that produced it. Measured 2026-08-12 against the live 0.1.15 binary: all
+//! four were INERT — the picker bound `backspace` and `ctrl+c` and nothing
+//! else, so the only deletion the first screen had was one character at a
+//! time.
 
 use unsoku::{Motion, Operator, TextObject};
 use unsoku::{Register, Stance, TextTarget};
@@ -92,8 +104,17 @@ impl TextTarget for QueryLine {
 
 /// One keystroke, as the vim layer reads it.
 ///
-/// A char or one of the three structural keys. Deliberately not
-/// `awase::Hotkey` — see the module docs.
+/// A char, one of the three structural keys, or one of the four **erase
+/// chords**. Deliberately not `awase::Hotkey` — see the module docs.
+///
+/// # Why the erase chords are strokes and not `Char`s
+///
+/// `ctrl+w` is not a character: [`egaku_term::event::text_char`] refuses every
+/// CTRL/ALT/SUPER-modified key, so it can only ever arrive as a *chord*. Naming
+/// each one here rather than letting the picker resolve a span itself is what
+/// keeps [`Vim::apply`] the single path text leaves the query by — which is the
+/// property that makes "every removal fills the register" structural rather
+/// than remembered per call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stroke {
     /// A printable character.
@@ -104,6 +125,44 @@ pub enum Stroke {
     Backspace,
     /// `return`.
     Enter,
+    /// `ctrl+w` — erase the word before the caret.
+    EraseWordBack,
+    /// `ctrl+u` — erase from the start of the line to the caret.
+    EraseToStart,
+    /// `ctrl+k` — erase from the caret to the end of the line.
+    EraseToEnd,
+    /// The `delete` key — erase the character AT the caret (forwards), the
+    /// direction `backspace` cannot reach.
+    EraseForward,
+}
+
+impl Stroke {
+    /// The span this stroke erases, or `None` when it is not an erase chord.
+    ///
+    /// Free of `self.stance` on purpose: the four erase chords mean the same
+    /// thing in both stances. That is not a shortcut — `ctrl+w` and `ctrl+u`
+    /// are real vim *insert-mode* commands, and readline gives them the same
+    /// reading everywhere else an operator meets a one-line query box. A
+    /// deletion whose meaning changed with an invisible mode would be the
+    /// worst of both models.
+    fn erase_span(self, q: &QueryLine) -> Option<std::ops::Range<usize>> {
+        let (text, caret) = (q.text.as_str(), q.caret);
+        Some(match self {
+            // Word boundaries are genuinely unsoku's to know, so this one is
+            // resolved rather than sliced. A backward motion returns
+            // `target..caret` (unsoku 0.1.71 lib.rs:412), which IS the span.
+            Self::EraseWordBack => {
+                unsoku::operated_span(text, caret, Operator::Delete, Motion::WordStartPrev, 1)?
+            }
+            // These three are exact slices for the same reason `D` and `x`
+            // already are: there is no boundary rule to get wrong, and a
+            // motion would only add a way for the answer to drift.
+            Self::EraseToStart => 0..caret,
+            Self::EraseToEnd => caret..text.len(),
+            Self::EraseForward => caret..unsoku::next_char(text, caret),
+            Self::Char(_) | Self::Escape | Self::Backspace | Self::Enter => return None,
+        })
+    }
 }
 
 /// What a stroke did, so the caller knows what to do about the screen.
@@ -153,17 +212,25 @@ pub struct Vim {
 }
 
 impl Vim {
-    /// A modal editor for a FILTER BOX, which opens in **Insert**.
+    /// A modal editor opening in the stance the caller names.
     ///
-    /// [`Stance::default()`] is Normal, which is right for an editor and wrong
-    /// here: a picker's primary act is typing a filter, and an operator who
-    /// has to press `i` before they can type has been given a worse chooser
-    /// than the one they had. `esc` reaches Normal for motions, deletion and
-    /// row navigation — the same trade fzf's vim mode makes.
+    /// # The stance is the CALLER's, and that is the whole correction
+    ///
+    /// This used to be `for_filter()`, which hardcoded [`Stance::Insert`] and
+    /// argued for it: a picker's primary act is typing a filter, so opening in
+    /// Normal makes the operator press `i` before they can type. That argument
+    /// is real but it is a *preference*, and burying a preference inside a
+    /// constructor is what made it unchangeable — the operator asked for
+    /// vim-true behaviour (navigate first, `i` to write) and there was no
+    /// surface to ask it through.
+    ///
+    /// So the stance is a parameter. The prescribed default lives once, at
+    /// [`crate::picker::ContextPicker::OPENING_STANCE`], and is the seam a
+    /// `(defbanken …)` field writes to.
     #[must_use]
-    pub fn for_filter() -> Self {
+    pub fn opening_in(stance: Stance) -> Self {
         Self {
-            stance: Stance::Insert,
+            stance,
             ..Self::default()
         }
     }
@@ -214,6 +281,21 @@ impl Vim {
 
     /// Feed one stroke.
     pub fn stroke(&mut self, s: Stroke, q: &mut QueryLine) -> Effect {
+        // The erase chords resolve BEFORE the stance branch, because they mean
+        // the same thing in both — see [`Stroke::erase_span`]. They also
+        // resolve immediately, so they cancel anything armed: an operator who
+        // pressed `d` and then reached for `ctrl+w` wants the word gone, not a
+        // `d` still waiting for a motion afterwards.
+        if let Some(span) = s.erase_span(q) {
+            self.reset();
+            if span.is_empty() {
+                // At the edge the chord has nothing to take. Inert, never a
+                // no-op `Edited` — a refilter on an unchanged query would make
+                // the screen flicker for a keystroke that did nothing.
+                return Effect::Inert;
+            }
+            return self.apply(Operator::Delete, span, q);
+        }
         match self.stance {
             Stance::Insert => self.insert(s, q),
             Stance::Normal => self.normal(s, q),
@@ -246,6 +328,14 @@ impl Vim {
                 Effect::Moved
             }
             Stroke::Enter => Effect::Accept,
+            // Resolved in [`Self::stroke`] before the stance branch — an erase
+            // chord reads the same in both stances, so neither arm may claim
+            // one. Listed rather than wildcarded so a new [`Stroke`] variant is
+            // a compile error here until this stance states what it means.
+            Stroke::EraseWordBack
+            | Stroke::EraseToStart
+            | Stroke::EraseToEnd
+            | Stroke::EraseForward => Effect::Inert,
         }
     }
 
@@ -254,15 +344,25 @@ impl Vim {
         let c = match s {
             Stroke::Enter => return Effect::Accept,
             Stroke::Escape => {
-                // A pending sequence is cancelled first; only a *resting*
-                // escape leaves the screen. Otherwise an operator who armed
-                // `d` by mistake has to leave the picker to undo it.
+                // A pending sequence is cancelled; a RESTING escape does
+                // nothing at all.
+                //
+                // **`esc` never leaves the screen.** It used to: the first
+                // `esc` left Insert and the second quit, so an operator
+                // pressing it twice by reflex — the universal "get me out of
+                // whatever I'm in" gesture — closed the navigator instead of
+                // arriving at a known stance. That is the opposite of what the
+                // key means in vim, where `esc` is the way BACK to safety and
+                // is idempotent once you are there.
+                //
+                // Leaving is `q` (below) or `ctrl+c`, both of which say
+                // "leave" and nothing else.
                 if self.pending.is_some() || self.count.is_some() || self.g || self.object.is_some()
                 {
                     self.reset();
                     return Effect::Moved;
                 }
-                return Effect::Cancel;
+                return Effect::Inert;
             }
             Stroke::Backspace => {
                 let to = unsoku::prev_char(&q.text, q.caret);
@@ -270,6 +370,11 @@ impl Vim {
                 return Effect::Moved;
             }
             Stroke::Char(c) => c,
+            // See the matching arm in [`Self::insert`].
+            Stroke::EraseWordBack
+            | Stroke::EraseToStart
+            | Stroke::EraseToEnd
+            | Stroke::EraseForward => return Effect::Inert,
         };
 
         // `{count}` — a leading 0 is the LineStart motion, not a digit.
@@ -341,6 +446,22 @@ impl Vim {
             'g' => {
                 self.g = true;
                 Effect::Moved
+            }
+
+            // ── leaving ──
+            //
+            // Now that `esc` is idempotent, `q` is the key that leaves — and
+            // it is not a second key list: `q` is what the authored
+            // `(defnavkey :intent quit)` spells, asserted by
+            // `the_quit_char_is_the_authored_quit_chord` so a re-spelling
+            // upstream fails here rather than silently stranding the operator
+            // with no way out but `ctrl+c`.
+            //
+            // Guarded on `pending`, like the stance arm below: `dq` is not a
+            // vim sequence, and an armed `d` must not be able to quit.
+            'q' if self.pending.is_none() => {
+                self.reset();
+                Effect::Cancel
             }
 
             // ── stance ──
@@ -451,7 +572,16 @@ impl Vim {
             }
             _ => {
                 unsoku::take(q, span, &mut self.register);
-                let at = unsoku::clamp(&q.text, q.caret, Stance::Normal);
+                // Clamped for the stance we are ACTUALLY in, not for Normal.
+                //
+                // A hardcoded `Stance::Normal` was invisibly correct while
+                // `apply` was reachable only from `normal()`. The erase chords
+                // make it reachable from Insert, where it is wrong in a way
+                // that costs a character: `ctrl+w` over "foo bar" leaves
+                // "foo " with the caret at 4, and a Normal clamp drags it back
+                // to 3 — so the next key an operator types lands BEFORE the
+                // space they just stopped at.
+                let at = unsoku::clamp(&q.text, q.caret, self.stance);
                 q.set_caret(at);
                 Effect::Edited
             }

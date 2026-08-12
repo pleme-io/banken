@@ -57,10 +57,18 @@
 //! than a second key list — re-spelling `(defnavkey :keys "down")` upstream
 //! moves this screen's binding too.
 //!
-//! `backspace` is bound structurally and is deliberately **not** a
-//! `(defnavkey)`: it edits a text query, not a selection. The nav vocabulary
-//! describes moving around a resource view, and giving it a text-editing
-//! intent would make `NavIntent` mean two things.
+//! **That filter is a property of INSERT, and the screen now opens in
+//! NORMAL** ([`ContextPicker::OPENING_STANCE`]). The typable chords are not
+//! lost — they arrive at [`crate::vim`] instead, which is where a modal screen
+//! keeps its command keys: `j`/`k` move rows, `q` leaves, `i` starts typing.
+//! One keyboard, two readings, and the keymap above is only the half that
+//! must hold in BOTH stances.
+//!
+//! The erase chords — `backspace`, `ctrl+w`, `ctrl+u`, `ctrl+k`, `delete` —
+//! are bound structurally and are deliberately **not** `(defnavkey)`s: they
+//! edit a text query, not a selection. The nav vocabulary describes moving
+//! around a resource view, and giving it a text-editing intent would make
+//! `NavIntent` mean two things.
 
 use awase::{Key, Modifiers};
 use banken_spec::Catalog;
@@ -85,10 +93,28 @@ pub enum PickerAction {
     Down,
     /// Commit the highlighted context.
     Accept,
-    /// Leave without choosing.
-    Cancel,
-    /// Erase one character from the filter query.
+    /// `esc` — routed through the modal layer, which cancels a pending
+    /// operator, or leaves Insert, or does nothing.
+    ///
+    /// **Deliberately not named `Cancel` any more.** It was, and it was bound
+    /// to `escape` AND `ctrl+c` at once — so making a resting `esc` inert (the
+    /// operator's ask) would have silently taken `ctrl+c` down with it, since
+    /// both arrived at one arm that routed into the modal layer. The escape
+    /// hatch is now [`Self::Abort`], a separate action that cannot be reached
+    /// through a stance and therefore cannot be swallowed by one.
+    Escape,
+    /// `ctrl+c` — leave, unconditionally, from any stance.
+    Abort,
+    /// Erase one character backwards from the caret (`backspace`).
     Erase,
+    /// `ctrl+w` — erase the word before the caret.
+    EraseWord,
+    /// `ctrl+u` — erase from the start of the query to the caret.
+    EraseToStart,
+    /// `ctrl+k` — erase from the caret to the end of the query.
+    EraseToEnd,
+    /// `delete` — erase the character AT the caret.
+    EraseForward,
 }
 
 /// Why the picker could not be opened.
@@ -173,6 +199,20 @@ impl ContextPicker {
         Ok(Self::with_contexts(catalog, contexts))
     }
 
+    /// The stance the picker opens in.
+    ///
+    /// **NORMAL, by operator decision (2026-08-12).** It opened in Insert, on
+    /// the argument that a chooser's primary act is typing a filter and that
+    /// making someone press `i` first is a worse chooser. That argument is
+    /// real, and it lost to a stronger one: the screen advertises itself as
+    /// vim, so `j` and `k` must move. An operator who presses `j` expecting
+    /// the next row and gets the letter `j` in their filter has been told the
+    /// screen is modal and then handed a screen that is not.
+    ///
+    /// One constant, one call site — the seam a `(defbanken :opening-stance …)`
+    /// field writes to. `pending-banken: opening-stance-config`.
+    pub const OPENING_STANCE: unsoku::Stance = unsoku::Stance::Normal;
+
     /// The same picker over a supplied context list — the seam a test drives,
     /// so every behaviour below is provable without a kubeconfig on disk.
     ///
@@ -212,7 +252,7 @@ impl ContextPicker {
             total,
             keys,
             advertised,
-            vim: crate::vim::Vim::for_filter(),
+            vim: crate::vim::Vim::opening_in(Self::OPENING_STANCE),
             query: crate::vim::QueryLine::default(),
             current: kubeconfig_current_context(),
             refusal: None,
@@ -269,22 +309,34 @@ impl ContextPicker {
         self.refusal = None;
         self.notice = None;
 
-        // Backspace and escape are STANCE-DEPENDENT — in Insert backspace
-        // deletes, in Normal it moves left; escape cancels a pending operator
-        // before it cancels the screen. So they go through the modal layer
-        // rather than straight to an event, while the arrows stay direct
+        // Everything that touches the QUERY or the STANCE goes through the
+        // modal layer; only the arrows and `enter` reach the picker directly
         // (an arrow is not a vim key and has one meaning in both stances).
+        //
+        // Backspace and escape are stance-dependent — in Insert backspace
+        // deletes, in Normal it moves left; escape cancels a pending operator
+        // and otherwise rests. The four erase chords are NOT stance-dependent
+        // and still route here, because [`crate::vim::Vim::apply`] is the one
+        // path text may leave the query by.
+        //
+        // ONE total match, every arm returning. It used to be two matches with
+        // the first falling through, which left the second carrying arms no
+        // keystroke could reach — and one of them (`Cancel => Backspace`) was
+        // already wrong. A total match means a new `PickerAction` cannot be
+        // added without this screen stating what it does.
         match action {
-            PickerAction::Erase => return self.stroke(crate::vim::Stroke::Backspace),
-            PickerAction::Cancel => return self.stroke(crate::vim::Stroke::Escape),
-            _ => {}
-        }
-
-        let event = match action {
-            PickerAction::Up => PickerEvent::NavUp,
-            PickerAction::Down => PickerEvent::NavDown,
-            PickerAction::Erase => PickerEvent::Backspace,
-            PickerAction::Cancel => PickerEvent::Cancel,
+            PickerAction::Erase => self.stroke(crate::vim::Stroke::Backspace),
+            PickerAction::EraseWord => self.stroke(crate::vim::Stroke::EraseWordBack),
+            PickerAction::EraseToStart => self.stroke(crate::vim::Stroke::EraseToStart),
+            PickerAction::EraseToEnd => self.stroke(crate::vim::Stroke::EraseToEnd),
+            PickerAction::EraseForward => self.stroke(crate::vim::Stroke::EraseForward),
+            PickerAction::Escape => self.stroke(crate::vim::Stroke::Escape),
+            // Straight to the event, never through the modal layer. That is
+            // the whole point of it being a separate action: an escape hatch
+            // routed through a stance is an escape hatch a stance can eat.
+            PickerAction::Abort => self.emit(PickerEvent::Cancel),
+            PickerAction::Up => self.emit(PickerEvent::NavUp),
+            PickerAction::Down => self.emit(PickerEvent::NavDown),
             PickerAction::Accept => {
                 // The gate. An ambiguous name does not identify one cluster,
                 // so accepting it would be an affordance banken cannot honour
@@ -293,32 +345,16 @@ impl ContextPicker {
                 match self.picker.selected_item() {
                     Some(item) if item.key.is_ambiguous() => {
                         self.refusal = Some(ambiguity_refusal(&item.key));
-                        return true;
+                        true
                     }
                     // Nothing matches the query: `enter` is inert, not an
                     // error. Typing a filter that matches nothing is a normal
                     // step on the way to one that does.
-                    None => return false,
-                    Some(_) => PickerEvent::Accept,
+                    None => false,
+                    Some(_) => self.emit(PickerEvent::Accept),
                 }
-            }
-        };
-
-        let effects = self.picker.on_event(event);
-        let changed = !effects.is_empty();
-        for effect in effects {
-            match effect {
-                PickerEffect::Accepted { key } => {
-                    self.chosen = Some(key);
-                    self.quit = true;
-                }
-                PickerEffect::Cancelled => self.quit = true,
-                PickerEffect::Opened
-                | PickerEffect::Filtered { .. }
-                | PickerEffect::Moved { .. } => {}
             }
         }
-        changed
     }
 
     /// Feed one keystroke to the modal editor.
@@ -632,7 +668,24 @@ impl ContextPicker {
         match self.vim.stance() {
             unsoku::Stance::Insert => {
                 s.push_str("type: filter  ·  ");
-                s.push_str(&chord_for(&self.advertised, PickerAction::Cancel));
+                // Derived, never spelled: these are exactly the chords an
+                // operator reported missing, so the footer that would have
+                // taught them is the footer that has to be right.
+                for (i, action) in [
+                    PickerAction::EraseWord,
+                    PickerAction::EraseToStart,
+                    PickerAction::EraseToEnd,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if i > 0 {
+                        s.push('/');
+                    }
+                    s.push_str(&chord_for(&self.advertised, action));
+                }
+                s.push_str(": erase  ·  ");
+                s.push_str(&chord_for(&self.advertised, PickerAction::Escape));
                 s.push_str(": NORMAL  ·  ");
                 s.push_str(&chord_for(&self.advertised, PickerAction::Accept));
                 s.push_str(": open");
@@ -640,9 +693,12 @@ impl ContextPicker {
             unsoku::Stance::Normal => {
                 s.push_str("hjkl0$wbe: move  ·  d/c/y + x D C: edit  ·  i/a: INSERT  ·  ");
                 s.push_str(&chord_for(&self.advertised, PickerAction::Accept));
-                s.push_str(": open  ·  ");
-                s.push_str(&chord_for(&self.advertised, PickerAction::Cancel));
-                s.push_str(": quit");
+                // `q`, NOT escape. The footer said `escape: quit` while escape
+                // quit, and both halves changed together — an operator whose
+                // only advertised way out no longer worked would be stranded
+                // on the landing screen with nothing on screen to tell them
+                // `q`. See `the_hint_names_the_key_that_actually_leaves`.
+                s.push_str(": open  ·  q: quit");
             }
         }
         s
@@ -793,18 +849,45 @@ fn keymap_from_catalog(catalog: &Catalog) -> (awase::KeyMode<PickerAction>, Adve
     // The structural chords, appended AFTER the authored ones so the footer
     // prefers what the vocabulary declared (see `chord_for`).
     //
-    // Backspace is text editing, not navigation — see the module docs for why
-    // it is not a `(defnavkey)`. Ctrl-C is the universal terminal escape
-    // hatch, and an operator's last resort must not depend on the vocabulary
-    // having loaded the way they expected.
+    // **The five erase chords are text editing, not navigation**, which is why
+    // none of them is a `(defnavkey)` — see the module docs. `NavIntent`
+    // describes moving around a resource view, and giving it a text-editing
+    // intent would make it mean two things.
+    //
+    // All five are chords rather than characters because they cannot be
+    // anything else: `egaku_term::app::text_char` refuses every CTRL-modified
+    // key, and `delete` is not a `KeyCode::Char`. Verified deliverable in
+    // egaku-term 0.3's `to_hotkey` (`src/event.rs:139` maps `Char(c)` through
+    // `Key::from_name`, `:147` maps `KeyCode::Delete`), which is what makes
+    // binding them here sufficient — there is no upstream gap behind this.
+    //
+    // Ctrl-C is the universal terminal escape hatch, and an operator's last
+    // resort must not depend on the vocabulary having loaded the way they
+    // expected — nor on which stance they happen to be in.
     for (hotkey, action) in [
         (
             awase::Hotkey::new(Modifiers::NONE, Key::Backspace),
             PickerAction::Erase,
         ),
         (
+            awase::Hotkey::new(Modifiers::CTRL, Key::W),
+            PickerAction::EraseWord,
+        ),
+        (
+            awase::Hotkey::new(Modifiers::CTRL, Key::U),
+            PickerAction::EraseToStart,
+        ),
+        (
+            awase::Hotkey::new(Modifiers::CTRL, Key::K),
+            PickerAction::EraseToEnd,
+        ),
+        (
+            awase::Hotkey::new(Modifiers::NONE, Key::Delete),
+            PickerAction::EraseForward,
+        ),
+        (
             awase::Hotkey::new(Modifiers::CTRL, Key::C),
-            PickerAction::Cancel,
+            PickerAction::Abort,
         ),
     ] {
         advertised.push((action, hotkey.display()));
@@ -826,16 +909,21 @@ fn keymap_from_catalog(catalog: &Catalog) -> (awase::KeyMode<PickerAction>, Adve
 ///   names all four. A help overlay here would document less than the screen
 ///   already shows, and its chord (`h`) is a letter an operator needs for
 ///   typing `helm-controller` into the filter.
-/// - `Dismiss` and `Quit` both mean "leave", and both are already `Cancel`;
-///   `Quit`'s authored chord is `q`, which is filtered out as typable, so in
-///   practice `escape` carries it.
+/// - `Dismiss` is `escape`, which on this screen means "step back a stance",
+///   never "leave" — see [`PickerAction::Escape`].
+/// - `Quit` is `None` here, and that is a statement rather than an omission.
+///   Its authored chord is `q`, a typable character, so it is filtered out of
+///   this keymap by rule 1 and reaches [`crate::vim`] as a NORMAL-stance
+///   command instead. Mapping it to a `PickerAction` would be the drift:
+///   `escape` would claim the quit intent while no longer quitting.
+///   `the_quit_char_is_the_authored_quit_chord` is the gate on the handoff.
 fn picker_action(intent: NavIntent) -> Option<PickerAction> {
     match intent {
         NavIntent::SelectNext => Some(PickerAction::Down),
         NavIntent::SelectPrev => Some(PickerAction::Up),
         NavIntent::Confirm => Some(PickerAction::Accept),
-        NavIntent::Dismiss | NavIntent::Quit => Some(PickerAction::Cancel),
-        NavIntent::ToggleSort | NavIntent::Help => None,
+        NavIntent::Dismiss => Some(PickerAction::Escape),
+        NavIntent::Quit | NavIntent::ToggleSort | NavIntent::Help => None,
     }
 }
 
@@ -953,6 +1041,20 @@ mod tests {
             .map(|b| b.action)
     }
 
+    /// Type a filter the way an operator now has to: `i` first.
+    ///
+    /// The screen opens in NORMAL, so a bare `type_char('j')` moves a row.
+    /// Every test that means "the operator filtered for X" goes through here,
+    /// which is also what keeps them honest about the extra keystroke the
+    /// stance flip costs.
+    fn filter(p: &mut ContextPicker, query: &str) {
+        p.type_char('i');
+        assert_eq!(p.stance_badge(), "INSERT", "`i` must start a filter");
+        for c in query.chars() {
+            p.type_char(c);
+        }
+    }
+
     /// **THE GATE that makes the screen a filter.** The authored vocabulary
     /// binds `j`/`k`/`o`/`q` in the table. If any of them bound here, an
     /// operator filtering for `jaeger` would move the cursor on the `j` and
@@ -980,7 +1082,7 @@ mod tests {
             (Key::Down, PickerAction::Down),
             (Key::Up, PickerAction::Up),
             (Key::Return, PickerAction::Accept),
-            (Key::Escape, PickerAction::Cancel),
+            (Key::Escape, PickerAction::Escape),
             (Key::Backspace, PickerAction::Erase),
         ] {
             assert_eq!(
@@ -991,16 +1093,93 @@ mod tests {
         }
         assert_eq!(
             act(p.keymap(), awase::Hotkey::new(Modifiers::CTRL, Key::C)),
-            Some(PickerAction::Cancel),
+            Some(PickerAction::Abort),
         );
+    }
+
+    /// **THE MEASURED GAP, 2026-08-12.** All four were inert on the live
+    /// 0.1.15 binary: only `backspace` deleted anything, so the first screen's
+    /// entire editing vocabulary was one character at a time. egaku-term
+    /// delivers every one of them (`event.rs:139`/`:147`) — they were simply
+    /// never bound.
+    #[test]
+    fn the_erase_chords_bind() {
+        let p = three();
+        for (mods, key, expected) in [
+            (Modifiers::CTRL, Key::W, PickerAction::EraseWord),
+            (Modifiers::CTRL, Key::U, PickerAction::EraseToStart),
+            (Modifiers::CTRL, Key::K, PickerAction::EraseToEnd),
+            (Modifiers::NONE, Key::Delete, PickerAction::EraseForward),
+        ] {
+            assert_eq!(
+                act(p.keymap(), awase::Hotkey::new(mods, key)),
+                Some(expected),
+                "{mods:?}+{key:?} must erase",
+            );
+        }
+    }
+
+    /// And they must actually erase — a binding that resolves to an action the
+    /// query never feels is the same defect one level in.
+    ///
+    /// Driven in INSERT, which is the stance the operator reported them
+    /// missing from, and where `apply`'s caret clamp had to stop being
+    /// hardcoded to Normal.
+    #[test]
+    fn the_erase_chords_edit_the_query_in_insert() {
+        for (chord, expect) in [
+            (PickerAction::EraseWord, "camelot-"),
+            (PickerAction::EraseToStart, ""),
+            // The caret is at the end after typing, so the two forward
+            // deletions have nothing to take — inert, and the query is
+            // untouched. That is the honest expectation, not a weaker one.
+            (PickerAction::EraseToEnd, "camelot-eks"),
+            (PickerAction::EraseForward, "camelot-eks"),
+        ] {
+            let mut p = three();
+            filter(&mut p, "camelot-eks");
+            assert_eq!(p.query.text(), "camelot-eks", "typed");
+            p.dispatch(chord);
+            assert_eq!(p.query.text(), expect, "{chord:?}");
+        }
+    }
+
+    /// **The caret must survive the erase.** `Vim::apply` clamped to
+    /// `Stance::Normal` unconditionally, which was invisible while only
+    /// Normal could reach it. In Insert it drags the caret one character back
+    /// off the end, so the next keystroke lands before the space `ctrl+w`
+    /// just stopped at — "foo b" instead of "foo x".
+    #[test]
+    fn ctrl_w_leaves_the_caret_where_the_next_character_belongs() {
+        let mut p = three();
+        filter(&mut p, "foo bar");
+        p.dispatch(PickerAction::EraseWord);
+        assert_eq!(p.query.text(), "foo ");
+        p.type_char('x');
+        assert_eq!(p.query.text(), "foo x", "the caret stayed past the space");
+    }
+
+    /// An erase chord at the edge takes nothing and reports so, rather than
+    /// refiltering an unchanged query.
+    #[test]
+    fn an_erase_chord_with_nothing_to_take_is_inert() {
+        let mut p = three();
+        filter(&mut p, "");
+        for chord in [
+            PickerAction::EraseWord,
+            PickerAction::EraseToStart,
+            PickerAction::EraseToEnd,
+            PickerAction::EraseForward,
+        ] {
+            assert!(!p.dispatch(chord), "{chord:?} on an empty query");
+            assert_eq!(p.query.text(), "");
+        }
     }
 
     #[test]
     fn typing_filters_and_enter_chooses_the_match() {
         let mut p = three();
-        for c in "jaeg".chars() {
-            p.type_char(c);
-        }
+        filter(&mut p, "jaeg");
         assert!(p.dispatch(PickerAction::Accept));
         assert_eq!(
             p.chosen().map(|c| c.name.as_str()),
@@ -1015,9 +1194,7 @@ mod tests {
     #[test]
     fn the_query_matches_the_apiserver_not_only_the_name() {
         let mut p = three();
-        for c in "amazon".chars() {
-            p.type_char(c);
-        }
+        filter(&mut p, "amazon");
         assert!(p.dispatch(PickerAction::Accept));
         assert_eq!(p.chosen().map(|c| c.name.as_str()), Some("camelot-eks"));
     }
@@ -1107,37 +1284,111 @@ mod tests {
     #[test]
     fn enter_with_no_match_is_inert() {
         let mut p = three();
-        for c in "zzzz".chars() {
-            p.type_char(c);
-        }
+        filter(&mut p, "zzzz");
         assert!(!p.dispatch(PickerAction::Accept));
         assert!(p.chosen().is_none());
         assert!(!p.should_quit());
     }
 
-    /// **`esc` now has two jobs, and the order is vim's.** The picker opens in
-    /// Insert, so the first `esc` leaves Insert for Normal; only a *resting*
-    /// `esc` leaves the screen. That is what makes Normal reachable at all —
-    /// and it is why an operator can no longer close the picker by reflex
-    /// mid-word.
+    /// **The landing screen opens in NORMAL** (operator decision,
+    /// 2026-08-12). It opened in INSERT, so `j` typed a `j` instead of moving
+    /// — a screen that advertises a stance badge and then ignores the stance's
+    /// keys.
     #[test]
-    fn escape_reaches_normal_first_and_only_then_leaves() {
+    fn the_picker_opens_in_normal_and_j_moves_a_row() {
         let mut p = three();
-        assert_eq!(p.stance_badge(), "INSERT", "a filter box opens typing");
-
-        assert!(p.dispatch(PickerAction::Cancel));
-        assert!(
-            !p.should_quit(),
-            "the first esc leaves INSERT, not the screen"
-        );
         assert_eq!(p.stance_badge(), "NORMAL");
+        assert_eq!(p.picker.view().selected, 0);
 
-        assert!(p.dispatch(PickerAction::Cancel));
-        assert!(p.should_quit(), "a resting esc DOES leave");
+        p.type_char('j');
+        assert_eq!(p.picker.view().selected, 1, "`j` moved a row");
+        assert_eq!(p.query.text(), "", "and typed nothing");
+
+        p.type_char('i');
+        assert_eq!(p.stance_badge(), "INSERT", "`i` starts writing");
+        p.type_char('j');
+        assert_eq!(p.query.text(), "j", "and now `j` IS a character");
+    }
+
+    /// **`esc` NEVER leaves the screen** (operator: "hitting escape multiple
+    /// times shouldn't eventually exit the app, it should at most leave you in
+    /// normal mode").
+    ///
+    /// It used to: the first `esc` left Insert and the second quit — so the
+    /// universal "get me out of whatever I'm in" reflex closed the navigator
+    /// instead of arriving somewhere known. Held over MANY presses, because
+    /// the failure mode is specifically a repeated one.
+    #[test]
+    fn escape_never_leaves_the_screen_however_many_times_it_is_pressed() {
+        let mut p = three();
+        p.type_char('i');
+        assert_eq!(p.stance_badge(), "INSERT");
+
+        for press in 0..12 {
+            p.dispatch(PickerAction::Escape);
+            assert!(!p.should_quit(), "escape #{press} left the screen");
+            assert_eq!(p.stance_badge(), "NORMAL", "escape #{press}");
+        }
+        assert!(p.chosen().is_none());
+    }
+
+    /// The other half of the same decision: something still has to leave, and
+    /// it is `q` in NORMAL — the key the authored vocabulary already spells
+    /// for the quit intent.
+    #[test]
+    fn q_leaves_from_normal_and_is_a_character_in_insert() {
+        let mut p = three();
+        p.type_char('q');
+        assert!(p.should_quit(), "`q` in NORMAL leaves");
+        assert!(p.chosen().is_none(), "leaving is not choosing");
+
+        let mut p = three();
+        p.type_char('i');
+        p.type_char('q');
+        assert!(!p.should_quit(), "`q` in INSERT is text, not an exit");
+        assert_eq!(p.query.text(), "q");
+    }
+
+    /// **THE ANTI-DRIFT GATE on the handoff.** `q` is handled in
+    /// [`crate::vim`], not in this screen's keymap, so the two could disagree
+    /// silently. This asserts the character vim treats as quit IS the chord
+    /// the authored `(defnavkey :intent quit)` declares — re-spell it upstream
+    /// and this fails rather than stranding the operator with no advertised
+    /// way out.
+    #[test]
+    fn the_quit_char_is_the_authored_quit_chord() {
+        let catalog = banken_spec::load_catalog().expect("the shipped vocabulary must load");
+        let quit: Vec<String> = catalog
+            .nav_keys()
+            .iter()
+            .filter(|n| n.intent == NavIntent::Quit)
+            .map(|n| n.keys.hotkey().display())
+            .collect();
         assert!(
-            p.chosen().is_none(),
-            "leaving is not choosing — `main` must exit quietly, not connect",
+            quit.iter().any(|c| c == "q"),
+            "vim.rs treats `q` as quit; the vocabulary declares {quit:?}",
         );
+    }
+
+    /// **`ctrl+c` must work from EVERY stance.** This is the trap the
+    /// `Escape`/`Abort` split exists for: both used to be one `Cancel` action
+    /// routed through the modal layer, so making a resting escape inert would
+    /// have silently made `ctrl+c` inert too — taking the last resort out with
+    /// the reflex key.
+    #[test]
+    fn ctrl_c_leaves_from_every_stance() {
+        let mut p = three();
+        assert!(p.dispatch(PickerAction::Abort), "from NORMAL");
+        assert!(p.should_quit());
+
+        let mut p = three();
+        p.type_char('i');
+        for c in "half-typed".chars() {
+            p.type_char(c);
+        }
+        assert!(p.dispatch(PickerAction::Abort), "from INSERT mid-word");
+        assert!(p.should_quit());
+        assert!(p.chosen().is_none());
     }
 
     /// **The row must show the apiserver.** It is the whole reason picking is
@@ -1180,28 +1431,69 @@ mod tests {
     /// makes this a gate rather than a spelling test.
     #[test]
     fn the_footer_advertises_the_bound_chords() {
-        let p = three();
-        let hint = p.hint();
-        assert!(!hint.contains('?'), "every advertised chord binds: {hint}");
-        for action in [
-            PickerAction::Up,
-            PickerAction::Down,
-            PickerAction::Accept,
-            PickerAction::Cancel,
+        // Per stance, because the footer is per stance — and the INSERT half
+        // is where the erase chords are advertised, i.e. exactly the claim an
+        // operator would have called a lie a day ago.
+        let mut p = three();
+        for (stance, actions) in [
+            (
+                "NORMAL",
+                vec![
+                    PickerAction::Up,
+                    PickerAction::Down,
+                    PickerAction::Accept,
+                ],
+            ),
+            (
+                "INSERT",
+                vec![
+                    PickerAction::Up,
+                    PickerAction::Down,
+                    PickerAction::Accept,
+                    PickerAction::Escape,
+                    PickerAction::EraseWord,
+                    PickerAction::EraseToStart,
+                    PickerAction::EraseToEnd,
+                ],
+            ),
         ] {
-            let chord = chord_for(&p.advertised, action);
-            assert!(
-                hint.contains(&chord),
-                "{action:?} → `{chord}` not in {hint}"
-            );
-            let hotkey = awase::Hotkey::parse(&chord)
-                .unwrap_or_else(|e| panic!("the footer's `{chord}` must be a real chord: {e}"));
-            assert_eq!(
-                act(p.keymap(), hotkey),
-                Some(action),
-                "the footer's `{chord}` must actually do what it says",
-            );
+            assert_eq!(p.stance_badge(), stance);
+            let hint = p.hint();
+            assert!(!hint.contains('?'), "every advertised chord binds: {hint}");
+            for action in actions {
+                let chord = chord_for(&p.advertised, action);
+                assert!(
+                    hint.contains(&chord),
+                    "{stance}: {action:?} → `{chord}` not in {hint}"
+                );
+                let hotkey = awase::Hotkey::parse(&chord)
+                    .unwrap_or_else(|e| panic!("the footer's `{chord}` must be a real chord: {e}"));
+                assert_eq!(
+                    act(p.keymap(), hotkey),
+                    Some(action),
+                    "{stance}: the footer's `{chord}` must actually do what it says",
+                );
+            }
+            p.type_char('i');
         }
+    }
+
+    /// **The advertised way out must be the way out.** The NORMAL footer said
+    /// `escape: quit` while escape quit; both changed in the same commit, and
+    /// an operator left with a footer naming a key that no longer leaves would
+    /// be stranded on the landing screen.
+    #[test]
+    fn the_hint_names_the_key_that_actually_leaves() {
+        let mut p = three();
+        let normal = p.hint();
+        assert!(normal.contains("q: quit"), "NORMAL: {normal}");
+        assert!(
+            !normal.contains("escape: quit"),
+            "escape does not quit any more: {normal}",
+        );
+        // And it is true: the advertised key leaves.
+        p.type_char('q');
+        assert!(p.should_quit());
     }
 
     /// The footer must describe the stance it is in. It advertised
@@ -1210,18 +1502,22 @@ mod tests {
     #[test]
     fn the_hint_describes_the_stance_it_is_in() {
         let mut p = three();
-        let insert = p.hint();
-        assert!(insert.contains("type: filter"), "INSERT: {insert}");
-
-        p.dispatch(PickerAction::Cancel); // esc -> NORMAL
         let normal = p.hint();
         assert!(
             !normal.contains("type: filter"),
-            "NORMAL must not: {normal}"
+            "NORMAL must not claim typing filters: {normal}"
         );
         assert!(
             normal.contains("d/c/y"),
             "and must name the verbs: {normal}"
+        );
+
+        p.type_char('i'); // -> INSERT
+        let insert = p.hint();
+        assert!(insert.contains("type: filter"), "INSERT: {insert}");
+        assert!(
+            insert.contains("erase"),
+            "and must name the erase chords, which is how they get found: {insert}",
         );
         assert_ne!(insert, normal);
     }
@@ -1234,7 +1530,8 @@ mod tests {
     fn the_advertised_chord_is_stable_across_builds() {
         for _ in 0..8 {
             let p = three();
-            assert_eq!(chord_for(&p.advertised, PickerAction::Cancel), "escape");
+            assert_eq!(chord_for(&p.advertised, PickerAction::Escape), "escape");
+            assert_eq!(chord_for(&p.advertised, PickerAction::Abort), "ctrl+c");
         }
     }
 
