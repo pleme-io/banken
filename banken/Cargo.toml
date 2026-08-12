@@ -78,6 +78,13 @@ unsoku = "0.1"
 # is immutable, so a frame cannot tear.
 arc-swap = "1"
 
+# The fleet token set. banken uses it NARROWLY and on purpose (see
+# `crate::palette`): named ANSI slots stay slots so the operator's own terminal
+# theme wins, and only the ronda ramp — interpolated colour, which no slot can
+# express — resolves through these tokens. That was five hardcoded RGB triples
+# no fleet edit could reach; it is now the theme's own error/warning/success.
+ishou-tokens = "0.1"
+
 # ── The live-cluster read path (BANKEN.md §VI M0 destination-tier). ──
 # Gated behind the `live` feature so the default build (the fixture path
 # proven this session) stays lean + green. NO `kubectl` subprocess — the

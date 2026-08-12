@@ -173,7 +173,7 @@ pub struct BankenConfig {
     /// `FleetDefaults::theme`, so a fleet re-theme lands here on the next
     /// compile.
     ///
-    /// Lisp face: `:theme "vellum"` — note the **snake_case** wire name.
+    /// Lisp face: `:theme "vellum"` — note the **`snake_case`** wire name.
     /// `FleetTheme`'s serde repr is `rename_all = "snake_case"`
     /// (`ishou-tokens/src/fleet_theme.rs:62`), which is deliberately NOT
     /// the same vocabulary as `FleetTheme::preset_name()` (which spells the
@@ -569,7 +569,7 @@ watchIntervalMs: 500
 
     /// The typed theme is what makes an unknown palette name unrepresentable
     /// rather than silently defaulted. `FleetTheme`'s serde repr is
-    /// snake_case, and it is NOT the preset vocabulary — `"nord"` names the
+    /// `snake_case`, and it is NOT the preset vocabulary — `"nord"` names the
     /// same palette in `FleetTheme::preset_name()` but is not a valid wire
     /// value, and the typed field is what stops the two being confused.
     #[test]
@@ -745,6 +745,13 @@ impl BankenConfig {
     /// operator actually has, and the answer is not derivable from the folded
     /// value. A surface that shows an effective value without being able to
     /// name its source is the provenance hole this loader exists inside of.
+    ///
+    /// # Errors
+    ///
+    /// A `shikumi::ShikumiError` when the discovery walk itself fails — a home
+    /// directory that cannot be resolved, or a layer path that cannot be
+    /// stat'ed. An *absent* layer is not an error: not having a config file is
+    /// the common case, and the fold's whole job is to be correct without one.
     pub fn layers() -> Result<Vec<std::path::PathBuf>, shikumi::ShikumiError> {
         shikumi::ConfigDiscovery::new("banken")
             .hierarchical()

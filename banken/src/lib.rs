@@ -6,8 +6,9 @@
 //! triplet). It is an **observe-first, GitOps-native cluster navigator** —
 //! it keeps k9s's fast keyboard navigation and routes every action through
 //! the three-class gate: OBSERVE reads freely, DECLARE lowers to a
-//! full-manifest GitOps change a reconciler applies, BREAK-GLASS is
-//! witnessed. There is **no live-mutate path** — the [`banken_spec::env::ClusterEnv`]
+//! full-manifest `GitOps` change a reconciler applies, BREAK-GLASS is
+//! witnessed. There is **no live-mutate path** — the
+//! [`banken_spec::env::ClusterEnv`]
 //! seam has no unwitnessed-mutate method.
 //!
 //! ## What is PROVEN vs DESIGN (tier-honest — never rounded up)
@@ -110,6 +111,13 @@ pub mod live;
 /// behind it.
 #[cfg(feature = "live")]
 pub mod picker;
+
+/// palette — the fleet's colours, for the places that genuinely need RGB.
+///
+/// Deliberately narrow: named ANSI slots stay slots so the operator's own
+/// terminal theme wins, and only interpolated colour (the ronda ramp, which no
+/// slot can express) resolves through `ishou` tokens.
+pub mod palette;
 
 /// glass — the break-glass ledger, written BEFORE the glass breaks.
 ///

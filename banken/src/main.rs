@@ -447,9 +447,10 @@ fn opening_stance() -> unsoku::Stance {
 }
 
 fn refresh_interval() -> std::time::Duration {
-    let ms = banken_config::BankenConfig::discover_effective()
-        .map(|c| c.refresh_interval_ms)
-        .unwrap_or_else(|_| u64::try_from(banken::feed::DEFAULT_POLL.as_millis()).unwrap_or(1000));
+    let ms = banken_config::BankenConfig::discover_effective().map_or_else(
+        |_| u64::try_from(banken::feed::DEFAULT_POLL.as_millis()).unwrap_or(1000),
+        |c| c.refresh_interval_ms,
+    );
     if ms == 0 {
         return banken::feed::DEFAULT_POLL;
     }

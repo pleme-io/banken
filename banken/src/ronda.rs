@@ -278,41 +278,49 @@ impl Standing {
     }
 }
 
-/// The colour for a position on the ramp, `0.0`..=`1.0`.
+/// The colour for a position on the ramp, `0.0`..=`1.0`, in the fleet theme.
 ///
-/// A genuine gradient rather than five hand-picked constants: the anchors are
+/// A genuine gradient rather than a set of presets: the anchors are
 /// interpolated, so a light part-way between two rungs — which is what an
 /// eased transition draws — lands on a colour part-way between theirs. That is
-/// what makes the change *smooth* rather than a jump between five presets.
+/// what makes the change *smooth* rather than a jump.
 ///
-/// The walk is red → orange → amber → lime → green, which is the one ramp an
-/// operator does not have to be taught: it is the same one every signal
-/// strength and every fuel gauge already uses.
+/// The walk is red → amber → green, which is the one ramp an operator does not
+/// have to be taught: the same one every signal strength and every fuel gauge
+/// already uses.
+///
+/// **The anchors come from [`crate::palette`], not from this file.** They were
+/// five hardcoded triples — five magic numbers no fleet edit could reach — and
+/// are now the fleet theme's own error / warning / success, so one `ishou`
+/// edit moves banken's ladder along with every other fleet surface. The two
+/// intermediate rungs (`network`, `identity`) are interpolations rather than
+/// separately-tuned constants, which is why three anchors replaced five.
 #[must_use]
 pub fn ramp(position: f32) -> (u8, u8, u8) {
-    /// The anchors, at their positions on the ramp.
-    const STOPS: [(f32, (u8, u8, u8)); 5] = [
-        (0.00, (198, 64, 72)),  // down — a muted red, not an alarm
-        (0.25, (208, 122, 56)), // network
-        (0.50, (202, 172, 62)), // serving
-        (0.75, (152, 188, 78)), // identity
-        (1.00, (92, 200, 112)), // pods — arrived
-    ];
+    ramp_in(position, crate::palette::Palette::fleet())
+}
+
+/// [`ramp`] against an explicit palette — the seam a test uses to prove the
+/// ramp follows the theme rather than merely reading from something named
+/// after it.
+#[must_use]
+pub fn ramp_in(position: f32, palette: &crate::palette::Palette) -> (u8, u8, u8) {
+    let stops = palette.ramp_stops();
 
     // NaN first, and not by `clamp`: `f32::clamp` PROPAGATES NaN rather than
     // pinning it, so a NaN position flowed all the way through the lerp and
     // `as u8` turned it into 0 — a BLACK cell, the one colour that is not on
     // the ramp at all and reads as a rendering fault. Caught by
     // `the_ramp_clamps_rather_than_wrapping`.
-    let p = if position.is_finite() {
+    let at = if position.is_finite() {
         position.clamp(0.0, 1.0)
     } else {
         0.0
     };
-    let mut lo = STOPS[0];
-    let mut hi = STOPS[STOPS.len() - 1];
-    for pair in STOPS.windows(2) {
-        if p >= pair[0].0 && p <= pair[1].0 {
+    let mut lo = stops[0];
+    let mut hi = stops[stops.len() - 1];
+    for pair in stops.windows(2) {
+        if at >= pair[0].0 && at <= pair[1].0 {
             lo = pair[0];
             hi = pair[1];
             break;
@@ -321,17 +329,25 @@ pub fn ramp(position: f32) -> (u8, u8, u8) {
     let span = hi.0 - lo.0;
     // Guard the degenerate span rather than dividing by it: two anchors at the
     // same position would otherwise produce a NaN channel and a black cell.
-    let t = if span <= f32::EPSILON {
+    let frac = if span <= f32::EPSILON {
         0.0
     } else {
-        (p - lo.0) / span
+        (at - lo.0) / span
     };
-    let lerp = |a: u8, b: u8| {
-        let a = f32::from(a);
-        let b = f32::from(b);
-        // `clamp` before the cast: an `as` conversion saturates in release but
-        // the intent should not depend on knowing that.
-        (a + (b - a) * t).clamp(0.0, 255.0) as u8
+    let lerp = |from: u8, to: u8| {
+        let from = f32::from(from);
+        let to = f32::from(to);
+        // `clamp` before the cast, so the value is already in `u8`'s range and
+        // the conversion cannot lose a sign or truncate. `as` is the only cast
+        // available from `f32` (there is no `TryFrom<f32> for u8`), which is
+        // why the clamp does the work the type system cannot.
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped to 0.0..=255.0 on the line above; f32 has no TryFrom<u8>"
+        )]
+        let channel = (from + (to - from) * frac).clamp(0.0, 255.0) as u8;
+        channel
     };
     (
         lerp(lo.1.0, hi.1.0),
@@ -637,6 +653,7 @@ pub type DeepClimb = Arc<
 /// it is not zero, and an estate with connection logging will see it.
 ///
 /// The `--context` path starts no rounds at all: there is no list to mark.
+#[must_use = "dropping the handle cancels the rounds — bind it for the session's lifetime"]
 pub fn spawn_rounds(
     targets: Vec<(String, Option<String>)>,
     publisher: RondaPublisher,
@@ -849,9 +866,12 @@ mod tests {
         let mut p = 0.0_f32;
         while p <= 1.0 {
             let c = ramp(p);
-            let jump = i32::from(c.0).abs_diff(i32::from(prev.0).unsigned_abs() as i32)
-                + i32::from(c.1).abs_diff(i32::from(prev.1).unsigned_abs() as i32)
-                + i32::from(c.2).abs_diff(i32::from(prev.2).unsigned_abs() as i32);
+            // Straight `u8::abs_diff` — the previous form round-tripped through
+            // `i32`/`unsigned_abs`/`as i32` for no reason, and the casts were
+            // the only thing clippy had to complain about.
+            let jump = u32::from(c.0.abs_diff(prev.0))
+                + u32::from(c.1.abs_diff(prev.1))
+                + u32::from(c.2.abs_diff(prev.2));
             assert!(
                 jump <= 12,
                 "a 1% step at {p} jumped {jump} — the ramp is not smooth",
@@ -869,6 +889,56 @@ mod tests {
         let pods = ramp(1.0);
         assert!(down.0 > down.1, "the bottom is red-dominant: {down:?}");
         assert!(pods.1 > pods.0, "the top is green-dominant: {pods:?}");
+    }
+
+    /// **The convergence guard.** The ramp must be a projection of the fleet
+    /// theme, not a copy of it that happens to agree today. Two different
+    /// themes must produce two different ramps — if they did not, `palette`
+    /// would be an elaborate way to keep the five magic numbers it replaced.
+    ///
+    /// Asserted at the RAMP rather than only at the palette, because that is
+    /// where the wiring can break: `ramp` could read its anchors from anywhere
+    /// and every palette test would still pass.
+    #[test]
+    fn the_ramp_follows_the_fleet_theme_rather_than_a_frozen_copy() {
+        use crate::palette::Palette;
+        let bare = Palette::for_theme(ishou_tokens::FleetTheme::Bare);
+        let vellum = Palette::for_theme(ishou_tokens::FleetTheme::Vellum);
+
+        let differs = [0.0_f32, 0.25, 0.5, 0.75, 1.0]
+            .iter()
+            .any(|&p| ramp_in(p, &bare) != ramp_in(p, &vellum));
+        assert!(
+            differs,
+            "every position drew the same colour under two different themes — \
+             the ramp is not reading the theme",
+        );
+        // And the free function IS the fleet-theme one, so the default path is
+        // the converged path rather than a third behaviour.
+        let fleet = Palette::fleet();
+        for p in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+            assert_eq!(ramp(p), ramp_in(p, fleet), "at {p}");
+        }
+    }
+
+    /// The intermediate rungs are INTERPOLATIONS now, not authored constants —
+    /// which is the claim that let five anchors become three. Each must sit
+    /// strictly between its neighbours on at least one channel, or the ramp
+    /// has a flat segment where an operator expects a step.
+    #[test]
+    fn the_intermediate_rungs_are_genuine_interpolations() {
+        for pair in Rung::ALL.windows(2) {
+            let (Some(a), Some(b)) = (pair[0].position(), pair[1].position()) else {
+                continue; // Unknown has no position — it is off the ramp.
+            };
+            assert_ne!(
+                ramp(a),
+                ramp(b),
+                "{:?} and {:?} draw the same colour — a flat segment",
+                pair[0],
+                pair[1],
+            );
+        }
     }
 
     /// Out-of-range positions clamp rather than wrap or produce a black cell.

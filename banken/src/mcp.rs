@@ -401,7 +401,15 @@ fn row_json(r: &banken_spec::env::Row) -> Value {
     })
 }
 
-#[tool_handler]
+// `router = self.tool_router` is NOT the default and is load-bearing.
+//
+// rmcp 1.x's `#[tool_handler]` defaults to `Self::tool_router()` — the STATIC
+// constructor — so the cached field goes unread and the whole router is rebuilt
+// on every `list_tools` and every `call_tool`. Nothing fails; the surface
+// behaves identically and pays an allocation per call forever. The only signal
+// was clippy's `field `tool_router` is never read`, which is exactly the kind
+// of finding a silently-skipped lint run hides.
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for BankenMcp {
     // `ServerInfo` is `#[non_exhaustive]` as of rmcp 1.x, so the struct-literal
     // form is E0639 even with `..Default::default()` — field assignment is the
