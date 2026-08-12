@@ -116,13 +116,13 @@ impl Catalog {
         let pathology_names: BTreeSet<&str> = pathologies.iter().map(|p| p.name.as_str()).collect();
 
         for v in &views {
-            if let Some(target) = &v.drill_to {
-                if !drill_names.contains(target.as_str()) {
-                    return Err(SpecError::DanglingDrill {
-                        surface: v.name.clone(),
-                        drill: target.clone(),
-                    });
-                }
+            if let Some(target) = &v.drill_to
+                && !drill_names.contains(target.as_str())
+            {
+                return Err(SpecError::DanglingDrill {
+                    surface: v.name.clone(),
+                    drill: target.clone(),
+                });
             }
         }
 
@@ -136,13 +136,13 @@ impl Catalog {
         }
 
         for w in &wards {
-            if let Some(target) = &w.drill_to {
-                if !drill_names.contains(target.as_str()) {
-                    return Err(SpecError::DanglingDrill {
-                        surface: w.name.clone(),
-                        drill: target.clone(),
-                    });
-                }
+            if let Some(target) = &w.drill_to
+                && !drill_names.contains(target.as_str())
+            {
+                return Err(SpecError::DanglingDrill {
+                    surface: w.name.clone(),
+                    drill: target.clone(),
+                });
             }
             for p in &w.pathologies {
                 if !pathology_names.contains(p.as_str()) {

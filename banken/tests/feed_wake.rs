@@ -40,6 +40,10 @@ struct TickingEnv {
 }
 
 impl TickingEnv {
+    /// Kept beside `sharing` as the no-shared-counter constructor. Unused
+    /// today; deleting it would make the next test that wants a plain
+    /// ticking env reach for `sharing(Arc::new(...))` and wonder why.
+    #[allow(dead_code, reason = "the sibling constructor to `sharing`")]
     fn new() -> Self {
         Self::sharing(Arc::new(AtomicUsize::new(0)))
     }
@@ -160,6 +164,9 @@ static COUNTING_ALLOC: Counting = Counting;
 
 struct CountingHandle;
 static COUNTING: CountingHandle = CountingHandle;
+// `&self` on a ZST reads as a handle at the call site (`COUNTING.reset()`),
+// which is the point — the static IS the allocator's counter.
+#[allow(clippy::unused_self, reason = "handle ergonomics on a ZST static")]
 impl CountingHandle {
     fn reset(&self) {
         ALLOCATED.store(0, Ordering::SeqCst);

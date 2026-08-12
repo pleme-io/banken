@@ -50,7 +50,7 @@ fn pods_table_header_carries_columns_in_order() {
 }
 
 /// The fixture rows all render, one per data row, sorted STATUS-desc so the
-/// healthy Running pods sort above the CrashLoopBackOff (desc string sort).
+/// healthy Running pods sort above the `CrashLoopBackOff` (desc string sort).
 #[test]
 fn pods_table_renders_every_fixture_row() {
     let table = fixture_table();
@@ -88,7 +88,7 @@ fn selected_row_carries_the_highlight_background() {
     assert_ne!(other.bg, Color::Cyan, "unselected row has no highlight");
 }
 
-/// A CrashLoopBackOff STATUS cell renders error-red; a Running STATUS cell
+/// A `CrashLoopBackOff` STATUS cell renders error-red; a Running STATUS cell
 /// renders success-green — the pathology-color axis (BANKEN.md §V) at the
 /// cell level. Asserted via the typed cell fg, never a text scan.
 #[test]

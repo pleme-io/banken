@@ -7,7 +7,7 @@
 //! - `l` → **OBSERVE**: a read (logs), rendered as an [`ActionResult`]
 //!   panel. Mutates nothing.
 //! - `s` → **DECLARE**: `banken_spec::apply` lowers the selection to a
-//!   **full-manifest** GitOps change; the result carries the whole
+//!   **full-manifest** `GitOps` change; the result carries the whole
 //!   manifest preview that would be committed (never a live mutation).
 //! - `S` → **BREAK-GLASS**: `banken_spec::apply` routes to
 //!   `env.break_glass`, producing a witnessed [`GlassRecord`] preview.
@@ -54,7 +54,7 @@ pub enum RowAction {
     /// authored vocabulary already claimed `d` for `describe`, and the legal
     /// reading wins. See `pending-banken: vim-on-the-pods-table`.
     Describe,
-    /// `s` → DECLARE a scale change (full-manifest GitOps preview).
+    /// `s` → DECLARE a scale change (full-manifest `GitOps` preview).
     DeclareScale,
     /// `S` → BREAK-GLASS shell (witnessed, RUNBOOK-logged).
     BreakGlassShell,
@@ -241,8 +241,7 @@ pub fn dispatch<E: ClusterEnv>(
             let manifest = match &spec.legality {
                 ActionLegality::Declare { target } => {
                     banken_spec::interp::lower_to_full_manifest(&sel, target, spec.manifest_scope)
-                        .map(|c| c.full_manifest)
-                        .unwrap_or_else(|e| e.to_string())
+                        .map_or_else(|e| e.to_string(), |c| c.full_manifest)
                 }
                 _ => String::new(),
             };

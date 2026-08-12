@@ -41,25 +41,23 @@ pub struct Selection {
 impl Selection {
     /// A human-readable description of the selection, used to log a
     /// break-glass target.
+    #[must_use]
     pub fn describe(&self) -> String {
-        match &self.namespace {
-            Some(ns) => {
-                let mut s = String::new();
-                s.push_str(self.kind.label());
-                s.push('/');
-                s.push_str(&self.name);
-                s.push_str(" (ns=");
-                s.push_str(ns);
-                s.push(')');
-                s
-            }
-            None => {
-                let mut s = String::new();
-                s.push_str(self.kind.label());
-                s.push('/');
-                s.push_str(&self.name);
-                s
-            }
+        if let Some(ns) = &self.namespace {
+            let mut s = String::new();
+            s.push_str(self.kind.label());
+            s.push('/');
+            s.push_str(&self.name);
+            s.push_str(" (ns=");
+            s.push_str(ns);
+            s.push(')');
+            s
+        } else {
+            let mut s = String::new();
+            s.push_str(self.kind.label());
+            s.push('/');
+            s.push_str(&self.name);
+            s
         }
     }
 }
@@ -124,13 +122,13 @@ pub fn lower_to_full_manifest(
     // For the FluxHelmValues rail, a resource with no owning
     // release.yaml has no lowering target — surface it as a typed error
     // (offer break-glass or a reviewed rail upstream), never guess.
-    if let DeclareTarget::FluxHelmValues { release_path } = target {
-        if release_path.as_os_str().is_empty() {
-            return Err(SpecError::NoLoweringTarget(format!(
-                "{} has no owning release.yaml",
-                sel.describe()
-            )));
-        }
+    if let DeclareTarget::FluxHelmValues { release_path } = target
+        && release_path.as_os_str().is_empty()
+    {
+        return Err(SpecError::NoLoweringTarget(format!(
+            "{} has no owning release.yaml",
+            sel.describe()
+        )));
     }
 
     let manifest = FullManifest {

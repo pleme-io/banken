@@ -11,7 +11,7 @@
 //!
 //! 1. **Typed Rust border** — [`types`]: [`types::ActionLegality`]
 //!    (OBSERVE / DECLARE / BREAK-GLASS), [`types::DeclareTarget`] (five
-//!    GitOps rails, **no `Kubectl`/`Apply` arm**),
+//!    `GitOps` rails, **no `Kubectl`/`Apply` arm**),
 //!    [`types::K8sViewSpec`] / [`types::K8sActionSpec`] (the two authored
 //!    borders, `#[derive(DeriveTataraDomain)]`).
 //! 2. **Authored Lisp spec** — `specs/views.lisp` + `specs/actions.lisp`:

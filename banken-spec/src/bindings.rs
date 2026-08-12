@@ -273,7 +273,10 @@ mod tests {
         // builder only ever emits Action::Command), proving the assertion
         // is non-vacuous rather than checking a shape nothing can violate.
         let mut mode = KeyMode::new(BANKEN_MODE, false);
-        mode.add_binding(Binding::new(
+        // The return is the DISPLACED binding, and there is none here —
+        // this mode is freshly built one line above. Discarded explicitly
+        // so the `must_use` is answered rather than silenced.
+        let _displaced = mode.add_binding(Binding::new(
             ActionChord::plain(Key::X).hotkey(),
             Action::exec("kubectl delete pod"),
         ));

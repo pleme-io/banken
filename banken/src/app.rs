@@ -659,7 +659,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         match PodTable::from_view(&self.catalog, name, self.filtered(rows)) {
             Ok(t) => {
                 self.table = t;
-                self.view_name = name.to_owned();
+                name.clone_into(&mut self.view_name);
                 self.bancadas = self
                     .catalog
                     .bancadas_from(name)
@@ -841,6 +841,10 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
 
     /// Apply an action to the app state. Public so tests can drive the app
     /// without a terminal (the pure state transition, ungated).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one flat match over a closed Action enum — splitting it to satisfy a line counter would hide the exhaustiveness, which is the property that matters"
+    )]
     pub fn apply_action(&mut self, action: Action) {
         // An open prompt OWNS the keyboard, and is handled before anything
         // else. While it is up `hotkey_map` has already narrowed the bindings
@@ -1291,6 +1295,10 @@ fn draw_overlay(
 }
 
 /// The title + colored style + body lines for an action-result overlay.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one flat match over a closed ActionResult enum; see apply_action"
+)]
 fn overlay_content(result: &ActionResult) -> (String, Style, Vec<String>) {
     match result {
         ActionResult::Observed { title, lines } => {

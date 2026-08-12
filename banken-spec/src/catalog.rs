@@ -340,7 +340,7 @@ mod tests {
     /// value be authored in Lisp by the same spelling the catalog reports.
     ///
     /// The four hand-written `types.rs` axes are excluded on purpose:
-    /// `ViewKind`'s wire form is PascalCase (`ResourceTable`) while its label
+    /// `ViewKind`'s wire form is `PascalCase` (`ResourceTable`) while its label
     /// is kebab (`resource-table`), which is the one real obstacle recorded
     /// under `pending-banken: closed-catalog-macro-backfill`. Asserting the
     /// property where it holds, and naming where it does not, is the honest
@@ -388,7 +388,7 @@ mod tests {
     /// arm, so a live-mutate rail cannot be constructed. This test
     /// documents (and, via the exhaustive `kind()` match on the type,
     /// enforces) that the declare-target universe is exactly the five
-    /// GitOps rails — a sixth "live" arm would be a compile-visible
+    /// `GitOps` rails — a sixth "live" arm would be a compile-visible
     /// addition caught by `every_declare_target_kind_in_all`.
     #[test]
     fn no_live_mutate_declare_target_exists() {
@@ -403,7 +403,10 @@ mod tests {
             "every declare-target is a known GitOps rail",
         );
         // ManifestScope has exactly one arm — Full — so no partial
-        // (patch) scope can be authored.
-        let _full = ManifestScope::Full;
+        // (patch) scope can be authored. The exhaustive match is the
+        // assertion: adding a variant stops this compiling.
+        match ManifestScope::Full {
+            ManifestScope::Full => {}
+        }
     }
 }

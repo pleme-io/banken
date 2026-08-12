@@ -156,7 +156,7 @@ closed_catalog! {
         Watch => "watch",
         /// An interactive shell (in the pod, or on the node).
         Shell => "shell",
-        /// An editor opened on the GitOps source of truth.
+        /// An editor opened on the `GitOps` source of truth.
         Editor => "editor",
     }
 }
@@ -246,7 +246,7 @@ closed_catalog! {
 /// One argument of a staged command: a literal, or a typed reference into the
 /// context.
 ///
-/// Externally tagged + snake_case so the authored Lisp reads
+/// Externally tagged + `snake_case` so the authored Lisp reads
 /// `(:literal "logs")` / `(:context resource-name)`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

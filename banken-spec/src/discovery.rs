@@ -1,4 +1,4 @@
-//! `discovery` — the typed RESTMapper banken owns, built from ONE aggregated
+//! `discovery` — the typed `RESTMapper` banken owns, built from ONE aggregated
 //! discovery document.
 //!
 //! # Why banken owns this instead of enabling it
@@ -9,7 +9,7 @@
 //! while being **rich on the wire**.
 //!
 //! - `kube_core::discovery::ApiResource` carries exactly five fields — group,
-//!   version, api_version, kind, plural — and **discards `shortNames`,
+//!   version, `api_version`, kind, plural — and **discards `shortNames`,
 //!   `categories` and `singularName`**, which `k8s_openapi`'s own `APIResource`
 //!   proves the server sends. So `po` → pods is *not expressible* through
 //!   kube-rs's discovery API.
@@ -469,14 +469,13 @@ impl RestMapper {
         // Group-qualified form first: `<plural>.<group>`. Checked before the
         // bare lookup so a qualified name can always disambiguate, even when
         // the bare plural is itself a legal alias somewhere.
-        if let Some((plural, group)) = alias.split_once('.') {
-            if let Some(e) = self
+        if let Some((plural, group)) = alias.split_once('.')
+            && let Some(e) = self
                 .entries
                 .iter()
                 .find(|e| e.plural == plural && e.group == group)
-            {
-                return Ok(e);
-            }
+        {
+            return Ok(e);
         }
 
         match self.by_alias.get(alias) {

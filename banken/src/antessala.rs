@@ -399,15 +399,17 @@ impl ConnectingScreen {
         };
 
         let live = stage == self.stage;
-        let done = stage < self.stage;
 
         let mut x = buf.set_stringn(left, y, marker, width.saturating_sub(left), marker_style);
         x = buf.set_stringn(x, y, "  ", width.saturating_sub(x), Style::default());
 
+        // DONE and PENDING deliberately share a style: the eye should land on
+        // the ONE live row, and giving a finished stage its own colour turns
+        // the block into a legend to be read rather than a line to be seen.
+        // They are kept as one arm rather than three so that is a decision in
+        // the code, not a coincidence a reader has to verify.
         let label_style = if live {
             Style::default().bold()
-        } else if done {
-            Style::default().fg(Color::DarkGrey)
         } else {
             Style::default().fg(Color::DarkGrey)
         };

@@ -57,7 +57,7 @@ closed_catalog! {
         Logs => "logs",
         /// TERMINAL — the symptom→cause diagnose tree.
         Diagnose => "diagnose",
-        /// TERMINAL — the XRay dependency tree.
+        /// TERMINAL — the `XRay` dependency tree.
         Xray => "xray",
     }
 }

@@ -32,7 +32,7 @@
 //!
 //! BANKEN.md §V and §IX C-controller are explicit and repeated: the QUIET
 //! headline is labelled **"(computed)"**, *never* "(proven)", until a fleet
-//! `PromessaController` + a real OutcomeChain ship — and neither exists in
+//! `PromessaController` + a real `OutcomeChain` ship — and neither exists in
 //! code (autorevivy's `attest()` is a placeholder string). A doc sentence
 //! saying "do not round this up" is reviewer discipline. So instead:
 //! [`Attestation::Proven`] carries an [`OutcomeChainRef`] whose
@@ -165,12 +165,12 @@ closed_catalog! {
     }
 }
 
-/// A reference to a Viggy OutcomeChain — the witness an *attested* QUIET
+/// A reference to a Viggy `OutcomeChain` — the witness an *attested* QUIET
 /// headline would need.
 ///
 /// **This type cannot be deserialized.** [`Self::deserialize`] always
 /// fails, naming BANKEN.md §IX C-controller, because no fleet
-/// `PromessaController` and no real OutcomeChain exist in code. That makes
+/// `PromessaController` and no real `OutcomeChain` exist in code. That makes
 /// [`Attestation::Proven`] un-authorable from Lisp or YAML —
 /// **parse-time-rejected**, not a doc note asking reviewers to be careful.
 ///
@@ -194,7 +194,7 @@ impl OutcomeChainRef {
     /// Deliberately **crate-private**: outside this crate
     /// [`Attestation::Proven`] is unconstructible, so no consumer can
     /// declare a proven headline in Rust either. Make this `pub` when a
-    /// real OutcomeChain ships — that one keyword is the whole revival.
+    /// real `OutcomeChain` ships — that one keyword is the whole revival.
     ///
     /// `allow(dead_code)`: only the in-crate tests call it today, and that
     /// is the *point* — ★★ MODULARIZE, DON'T DELETE keeps the destination
@@ -253,7 +253,7 @@ pub enum Attestation {
     /// Computed live from band phases + detections + the presence guard.
     /// Advisory reading (BANKEN.md §IX C-external-world), never a theorem.
     Computed,
-    /// Attested on a real OutcomeChain by a fleet `PromessaController`.
+    /// Attested on a real `OutcomeChain` by a fleet `PromessaController`.
     ///
     /// **Un-authorable today** — [`OutcomeChainRef`] refuses to
     /// deserialize. ASPIRATIONAL, kept per ★★ MODULARIZE, DON'T DELETE.
@@ -382,7 +382,7 @@ mod tests {
 
     /// The variant is KEPT (★★ MODULARIZE, DON'T DELETE) and is genuinely
     /// constructible in-crate + serializable — so the day a real
-    /// OutcomeChain ships, reviving it is making one constructor `pub`, not
+    /// `OutcomeChain` ships, reviving it is making one constructor `pub`, not
     /// re-deriving the shape.
     #[test]
     fn the_proven_arm_still_exists_and_serializes() {

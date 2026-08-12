@@ -267,7 +267,7 @@ pub struct Event {
     pub involved: String,
 }
 
-/// A reference to a specific resource (an XRay root).
+/// A reference to a specific resource (an `XRay` root).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResourceRef {
     /// The resource kind.
@@ -278,7 +278,7 @@ pub struct ResourceRef {
     pub namespace: Option<String>,
 }
 
-/// A dependency tree (the XRay data).
+/// A dependency tree (the `XRay` data).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DepTree {
     /// The root of the tree.
@@ -355,7 +355,7 @@ pub struct WitnessedAction {
 pub struct GlassRecord {
     /// The action that ran.
     pub action: WitnessedAction,
-    /// The AnomalyChain record id (a placeholder handle until a real
+    /// The `AnomalyChain` record id (a placeholder handle until a real
     /// chain ships — labelled, never rounded up).
     pub record_id: String,
 }
@@ -399,7 +399,7 @@ pub trait ClusterEnv {
     /// A `SpecError::Interp { phase: "events" }` on read failure.
     fn events(&self, ns: Option<&str>) -> Result<Vec<Event>, SpecError>;
 
-    /// Read the dependency topology rooted at `root` (XRay data).
+    /// Read the dependency topology rooted at `root` (`XRay` data).
     ///
     /// # Errors
     /// A `SpecError::Interp { phase: "topology" }` on read failure.
@@ -446,7 +446,7 @@ pub trait ClusterEnv {
     //    Emits a git change, never a live cluster mutation.
 
     /// Emit a DECLARE change to git. The change carries the **whole**
-    /// lowered manifest; a reconciler (FluxCD / pangea-operator) then
+    /// lowered manifest; a reconciler (`FluxCD` / pangea-operator) then
     /// applies it. This mutates *git*, never the live cluster.
     ///
     /// # Errors
@@ -804,7 +804,7 @@ mod grip_tests {
         // The message must carry BOTH uids: an operator who is refused needs to
         // see that the name is the same and the object is not.
         let msg = err.to_string();
-        assert!(msg.contains("A") && msg.contains("B"), "got: {msg}");
+        assert!(msg.contains('A') && msg.contains('B'), "got: {msg}");
     }
 
     #[test]

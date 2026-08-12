@@ -5,8 +5,9 @@
 //! through the shipped `banken_spec::apply` gate and produces the right
 //! typed `Outcome`:
 //!  - `s` (DECLARE) → a full-manifest change preview is present.
-//!  - `l` (OBSERVE) → a logs read (mutates nothing).
-//!  - `S` (BREAK-GLASS) → a witnessed record (never a live mutation).
+//! - `l` (OBSERVE) → a logs read (mutates nothing).
+//! - `S` (BREAK-GLASS) → a witnessed record (never a live mutation).
+//!
 //! And that **no path performs a live mutation** — structurally impossible,
 //! because `ClusterEnv` has no unwitnessed-mutate method.
 //!
@@ -93,7 +94,7 @@ fn break_glass_key_produces_a_witnessed_record() {
 /// the read + git-declare + witnessed-glass arms; there is no unwitnessed
 /// mutate to call (the citizenship invariant). We prove the *observable*
 /// consequence: a DECLARE yields a git-change preview and never a
-/// BreakGlassRecord, and an OBSERVE yields a read and never either write.
+/// `BreakGlassRecord`, and an OBSERVE yields a read and never either write.
 #[test]
 fn no_dispatch_path_performs_a_live_mutation() {
     let env = FixtureClusterEnv::new();

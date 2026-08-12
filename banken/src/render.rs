@@ -115,7 +115,7 @@ pub fn draw_pod_table(buf: &mut Buffer, x: u16, y: u16, width: u16, height: u16,
         table,
         &widths,
         header_style,
-        RowContent::Header,
+        &RowContent::Header,
     );
 
     // ── Rule under the header ──
@@ -171,7 +171,7 @@ pub fn draw_pod_table(buf: &mut Buffer, x: u16, y: u16, width: u16, height: u16,
             table,
             &widths,
             base,
-            RowContent::Data {
+            &RowContent::Data {
                 row,
                 colorize_status: !is_selected,
             },
@@ -196,6 +196,10 @@ enum RowContent<'a> {
 /// Draw one row of cells left-to-right, each padded to its column width
 /// with `COL_GAP` between. All writes are typed `Buffer` ops — no
 /// `format!()` of VT.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "eight buffer coordinates the caller genuinely holds; a parameter object here would exist to satisfy a counter, not a reader"
+)]
 fn draw_row_cells(
     buf: &mut Buffer,
     x: u16,
@@ -204,7 +208,7 @@ fn draw_row_cells(
     table: &PodTable,
     widths: &[u16],
     base: Style,
-    content: RowContent<'_>,
+    content: &RowContent<'_>,
 ) {
     let view = table.view();
     let right_edge = x.saturating_add(width);

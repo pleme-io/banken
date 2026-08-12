@@ -281,7 +281,7 @@ async fn the_watch_plane_absorbs_from_a_real_cluster() {
     );
 }
 
-/// **The discovery gate.** Two aggregated requests build a real RESTMapper,
+/// **The discovery gate.** Two aggregated requests build a real `RESTMapper`,
 /// and `po` resolves to Pod against an actual apiserver.
 ///
 /// This is the thing kube-rs structurally cannot do (`ApiResource` discards

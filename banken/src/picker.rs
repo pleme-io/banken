@@ -626,7 +626,7 @@ impl ContextPicker {
         // says how far the climb got, and only prose can say *why it stopped
         // there*. "port open, no apiserver reached — credentials: SSO session
         // expired" is a fix; an orange dot is a mood.
-        let standing_line = if self.ronda.covered() > 0 { 1 } else { 0 };
+        let standing_line = u16::from(self.ronda.covered() > 0);
         let first_row = 3;
         let footer = height.saturating_sub(1 + standing_line);
         let visible = usize::from(footer.saturating_sub(first_row));
@@ -685,6 +685,10 @@ impl ContextPicker {
     }
 
     /// What the highlighted context's climb reached, and why it stopped.
+    #[allow(
+        clippy::many_single_char_names,
+        reason = "x/y/width are the buffer-coordinate vocabulary every draw fn in this crate shares; longer names here would make the arithmetic harder to read, not easier"
+    )]
     fn draw_standing(&self, buf: &mut Buffer, width: u16, y: u16) {
         let Some(item) = self.picker.selected_item() else {
             return;
@@ -714,6 +718,10 @@ impl ContextPicker {
         }
     }
 
+    #[allow(
+        clippy::many_single_char_names,
+        reason = "x/y/width are the buffer-coordinate vocabulary every draw fn in this crate shares"
+    )]
     fn draw_row(&self, buf: &mut Buffer, y: u16, width: u16, ctx: &ContextChoice, selected: bool) {
         let base = if selected {
             let sel = Style::default().fg(Color::Black).bg(Color::Cyan);

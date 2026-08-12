@@ -18,8 +18,8 @@
 //!
 //! # The BROKEN-METRIC guard is STRUCTURAL, not a catalog row
 //!
-//! The marquee invariant — *"no workload shows GREEN unless `up==1 ∧
-//! count(core_metric)>0"* (BANKEN.md §V / TENDRIL §II.9) — is **not**
+//! The marquee invariant — *no workload shows GREEN unless
+//! `up==1 && count(core_metric)>0`* (BANKEN.md §V / TENDRIL §II.9) — is **not**
 //! implemented as a pathology, deliberately. A rule in a catalog can be
 //! omitted, mis-authored, or filtered out by a ward's `:pathologies` list,
 //! and then the guard silently stops guarding. Instead
@@ -130,7 +130,7 @@ closed_catalog! {
 ///
 /// **There is no `Kubectl`/`Apply`/`Patch` arm**, for the same reason
 /// [`crate::types::DeclareTarget`] has none: a remedy that live-mutates is
-/// un-authorable. A remedy is either a DECLARE onto one of the five GitOps
+/// un-authorable. A remedy is either a DECLARE onto one of the five `GitOps`
 /// rails (reusing [`DeclareTargetKind`] — one catalog, not two), the
 /// witnessed BREAK-GLASS arm, or an honest admission that banken cannot fix
 /// it.
@@ -140,7 +140,7 @@ closed_catalog! {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Remedy {
-    /// Fix it by declaring a change onto a GitOps rail.
+    /// Fix it by declaring a change onto a `GitOps` rail.
     Declare {
         /// Which of the five rails carries the fix.
         rail: DeclareTargetKind,
@@ -194,7 +194,7 @@ pub struct PathologySpec {
     /// fire (a conjunction — see [`PathologySpec::fires`]). Empty is an
     /// authoring error, not a never-firing rule.
     pub evidence: Vec<EvidenceKind>,
-    /// How it is fixed — a GitOps rail, break-glass, or an honest "not by
+    /// How it is fixed — a `GitOps` rail, break-glass, or an honest "not by
     /// banken".
     pub remedy: Remedy,
 }

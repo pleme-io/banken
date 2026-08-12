@@ -29,7 +29,7 @@
 //! `DeclareTargetKind`, `ViewKind`, `ResourceKind`) are still hand-written
 //! and still guarded by their `every_*_variant_in_all` tests. Three are
 //! mechanically portable; **`ViewKind` is the real obstacle** — its serde
-//! wire form is PascalCase (`ResourceTable`), which is what the shipped
+//! wire form is `PascalCase` (`ResourceTable`), which is what the shipped
 //! `specs/views.lisp` authors, while its `label()` is kebab-case
 //! (`resource-table`). This macro deliberately ties `label()` to the
 //! *label* and lets the caller pick the serde repr, so porting `ViewKind`

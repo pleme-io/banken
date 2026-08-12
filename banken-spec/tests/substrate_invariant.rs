@@ -76,7 +76,7 @@ fn trait_methods(src: &str, trait_name: &str) -> Vec<String> {
         panic!("{trait_name} trait has no opening brace");
     };
     // Walk braces to find the trait body's matching close.
-    let body_bytes = after[open..].as_bytes();
+    let body_bytes = &after.as_bytes()[open..];
     let mut depth = 0i32;
     let mut end = None;
     for (i, &b) in body_bytes.iter().enumerate() {

@@ -3,7 +3,7 @@
 //!
 //! `ActionLegality` types every action a banken row exposes into
 //! exactly one of three classes — OBSERVE / DECLARE / BREAK-GLASS.
-//! `DeclareTarget` enumerates the GitOps lowering rails a DECLARE can
+//! `DeclareTarget` enumerates the `GitOps` lowering rails a DECLARE can
 //! aim at; **it has no `Kubectl`/`Apply` arm — a live-mutate action is
 //! un-authorable by construction**, which is the whole primitive.
 //!
@@ -112,7 +112,7 @@ pub struct RunbookRef(pub String);
 /// The `postigo` legality class of one action.
 ///
 /// - `Observe` — a read; always allowed, mutates nothing.
-/// - `Declare` — a k9s scale/edit/restart/delete reframed as a GitOps
+/// - `Declare` — a k9s scale/edit/restart/delete reframed as a `GitOps`
 ///   change a reconciler applies (git mutates, never the cluster).
 /// - `BreakGlass` — the one sanctioned live-effect arm: witnessed,
 ///   RUNBOOK-logged, never a default chord.
@@ -127,7 +127,7 @@ pub struct RunbookRef(pub String);
 pub enum ActionLegality {
     /// Read: always allowed, mutates nothing.
     Observe,
-    /// k9s scale/edit/restart/delete → a GitOps change.
+    /// k9s scale/edit/restart/delete → a `GitOps` change.
     Declare { target: DeclareTarget },
     /// Wedged-GitOps only; witnessed + RUNBOOK-logged live effect.
     BreakGlass {
@@ -158,6 +158,7 @@ impl LegalityClass {
     ];
 
     /// Stable label for telemetry / catalog rows.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             LegalityClass::Observe => "observe",
@@ -187,6 +188,7 @@ impl LegalityClass {
 
 impl ActionLegality {
     /// Project this action to its coarse legality class.
+    #[must_use]
     pub fn class(&self) -> LegalityClass {
         match self {
             ActionLegality::Observe => LegalityClass::Observe,
@@ -265,6 +267,7 @@ impl DeclareTargetKind {
     ];
 
     /// Stable label for telemetry / catalog rows.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             DeclareTargetKind::FluxHelmValues => "flux-helm-values",
@@ -278,6 +281,7 @@ impl DeclareTargetKind {
 
 impl DeclareTarget {
     /// Project this target to its coarse kind.
+    #[must_use]
     pub fn kind(&self) -> DeclareTargetKind {
         match self {
             DeclareTarget::FluxHelmValues { .. } => DeclareTargetKind::FluxHelmValues,
@@ -298,7 +302,7 @@ pub enum ViewKind {
     ResourceTable,
     /// The health `ward` (Pulses + Popeye + QUIET headline).
     HealthWard,
-    /// The XRay dependency tree.
+    /// The `XRay` dependency tree.
     DependencyTree,
     /// A scrollable log pager.
     LogPager,
@@ -314,6 +318,7 @@ impl ViewKind {
     ];
 
     /// Stable label for telemetry / catalog rows.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             ViewKind::ResourceTable => "resource-table",
@@ -326,7 +331,7 @@ impl ViewKind {
 
 /// The data source a view reads from.
 ///
-/// Externally tagged, snake_case, so the authored Lisp round-trips:
+/// Externally tagged, `snake_case`, so the authored Lisp round-trips:
 /// `:source (:resource pod)` → `{"resource":"pod"}` → `Resource(Pod)`;
 /// `:source health` → `"health"` → `Health`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -402,7 +407,7 @@ pub enum ResourceKind {
     Pod,
     /// core/v1 Service (namespaced).
     Service,
-    /// core/v1 ConfigMap (namespaced).
+    /// core/v1 `ConfigMap` (namespaced).
     ConfigMap,
     /// core/v1 Endpoints (namespaced).
     Endpoints,
@@ -412,7 +417,7 @@ pub enum ResourceKind {
     Node,
     /// apps/v1 Deployment (namespaced).
     Deployment,
-    /// apps/v1 ReplicaSet (namespaced).
+    /// apps/v1 `ReplicaSet` (namespaced).
     ReplicaSet,
     /// core/v1 Event (namespaced).
     ///
@@ -437,6 +442,7 @@ impl ResourceKind {
     ];
 
     /// Stable label for telemetry / catalog rows.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             ResourceKind::Pod => "pod",
@@ -455,7 +461,7 @@ impl ResourceKind {
 // ── The two authored spec borders (BANKEN.md §III.a) ───────────────
 
 /// A `(defk8sview)` — one navigable view (a resource table, the health
-/// ward, an XRay tree, a log pager).
+/// ward, an `XRay` tree, a log pager).
 #[derive(DeriveTataraDomain, Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[tatara(keyword = "defk8sview")]
 pub struct K8sViewSpec {

@@ -41,6 +41,7 @@ pub struct MockClusterEnv {
 
 impl MockClusterEnv {
     /// A fresh empty mock.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

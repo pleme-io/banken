@@ -298,10 +298,11 @@ fn read_unmerged() -> Result<Declarations, ContextError> {
             Ok(kc) => kc,
             // A missing entry in a merge list is normal (client-go tolerates
             // it); an unreadable one that EXISTS is not.
-            Err(e) if !file.exists() => {
-                let _absent = e;
-                continue;
-            }
+            // An ABSENT file is not an error — a kubeconfig naming a path
+            // that is not there is the normal shape of a stale KUBECONFIG
+            // entry. An unreadable file that EXISTS is a different fact and
+            // falls through to the arm below.
+            Err(_) if !file.exists() => continue,
             Err(e) => {
                 return Err(ContextError::Unreadable {
                     file,
@@ -908,6 +909,10 @@ impl KubeClusterEnv {
 /// `metadata.uid`. Synthesising one from `(namespace, name)` would reintroduce
 /// exactly the non-unique identity this type exists to remove, and would do it
 /// invisibly. The caller counts what it skipped rather than rendering it.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
+)]
 fn pod_to_row(pod: Pod) -> Option<Row> {
     let uid = banken_spec::env::Uid::new(pod.metadata.uid.clone().unwrap_or_default())?;
     let version = pod.metadata.resource_version.clone();
@@ -920,15 +925,15 @@ fn pod_to_row(pod: Pod) -> Option<Row> {
         .unwrap_or_else(|| "Unknown".into());
 
     // READY = ready_containers / total_containers.
-    let (ready, total, restarts) = status
-        .and_then(|s| s.container_statuses.as_ref())
-        .map(|cs| {
-            let total = cs.len();
-            let ready = cs.iter().filter(|c| c.ready).count();
-            let restarts: i32 = cs.iter().map(|c| c.restart_count).sum();
-            (ready, total, restarts)
-        })
-        .unwrap_or((0, 0, 0));
+    let (ready, total, restarts) =
+        status
+            .and_then(|s| s.container_statuses.as_ref())
+            .map_or((0, 0, 0), |cs| {
+                let total = cs.len();
+                let ready = cs.iter().filter(|c| c.ready).count();
+                let restarts: i32 = cs.iter().map(|c| c.restart_count).sum();
+                (ready, total, restarts)
+            });
 
     // Surface a waiting-reason (CrashLoopBackOff, ImagePullBackOff, …) as
     // the STATUS when present — matches k9s's column semantics.
@@ -1044,6 +1049,24 @@ fn row_of<K: kube::Resource>(o: &K, cells: Vec<(String, String)>) -> Option<Row>
     })
 }
 
+// ── The row projectors ─────────────────────────────────────────────
+//
+// Every one takes its object BY VALUE. clippy calls that needless, and it is
+// half right: the bodies clone their fields rather than moving them, so today
+// nothing is gained. It is not wrong either — these are passed as
+// `fn(K) -> Option<Row>` into consuming list adapters, so by-value is the
+// shape the seam already has, and switching to `&K` would touch the two
+// generic readers and twenty call sites to buy nothing.
+//
+// The real improvement is the opposite direction: MOVE the fields out instead
+// of cloning them, which is what by-value is for and would delete a clone per
+// field per row. That is a behaviour-preserving refactor worth doing on its
+// own, not smuggled into a lint sweep.
+// `pending-banken: projectors-move-instead-of-clone`
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "passed as fn(K) -> Option<Row> into consuming adapters; the fix is to move rather than clone, tracked separately"
+)]
 fn service_to_row(s: k8s_openapi::api::core::v1::Service) -> Option<Row> {
     let spec = s.spec.as_ref();
     let ty = spec
@@ -1052,9 +1075,9 @@ fn service_to_row(s: k8s_openapi::api::core::v1::Service) -> Option<Row> {
     let cluster_ip = spec
         .and_then(|s| s.cluster_ip.clone())
         .unwrap_or_else(|| "-".into());
-    let ports = spec
-        .and_then(|s| s.ports.as_ref())
-        .map(|ps| {
+    let ports = spec.and_then(|s| s.ports.as_ref()).map_or_else(
+        || "-".to_owned(),
+        |ps| {
             let mut out = String::new();
             for (i, p) in ps.iter().enumerate() {
                 if i > 0 {
@@ -1063,8 +1086,8 @@ fn service_to_row(s: k8s_openapi::api::core::v1::Service) -> Option<Row> {
                 out.push_str(&p.port.to_string());
             }
             out
-        })
-        .unwrap_or_else(|| "-".into());
+        },
+    );
     let cells = vec![
         ("type".into(), ty),
         ("cluster-ip".into(), cluster_ip),
@@ -1073,6 +1096,10 @@ fn service_to_row(s: k8s_openapi::api::core::v1::Service) -> Option<Row> {
     row_of(&s, cells)
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
+)]
 fn deployment_to_row(d: k8s_openapi::api::apps::v1::Deployment) -> Option<Row> {
     let st = d.status.as_ref();
     let desired = d.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
@@ -1090,6 +1117,10 @@ fn deployment_to_row(d: k8s_openapi::api::apps::v1::Deployment) -> Option<Row> {
     row_of(&d, cells)
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
+)]
 fn replicaset_to_row(r: k8s_openapi::api::apps::v1::ReplicaSet) -> Option<Row> {
     let st = r.status.as_ref();
     let desired = r.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
@@ -1103,6 +1134,10 @@ fn replicaset_to_row(r: k8s_openapi::api::apps::v1::ReplicaSet) -> Option<Row> {
     row_of(&r, cells)
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
+)]
 fn configmap_to_row(c: k8s_openapi::api::core::v1::ConfigMap) -> Option<Row> {
     // KEY COUNT, never the values. A ConfigMap routinely carries credentials
     // that were put there by mistake, and a navigator that renders them into a
@@ -1116,19 +1151,23 @@ fn configmap_to_row(c: k8s_openapi::api::core::v1::ConfigMap) -> Option<Row> {
     row_of(&c, vec![("keys".into(), keys.to_string())])
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
+)]
 fn endpoints_to_row(e: k8s_openapi::api::core::v1::Endpoints) -> Option<Row> {
-    let addresses: usize = e
-        .subsets
-        .as_ref()
-        .map(|ss| {
-            ss.iter()
-                .map(|s| s.addresses.as_ref().map_or(0, Vec::len))
-                .sum()
-        })
-        .unwrap_or(0);
+    let addresses: usize = e.subsets.as_ref().map_or(0, |ss| {
+        ss.iter()
+            .map(|s| s.addresses.as_ref().map_or(0, Vec::len))
+            .sum()
+    });
     row_of(&e, vec![("endpoints".into(), addresses.to_string())])
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
+)]
 fn namespace_to_row(n: k8s_openapi::api::core::v1::Namespace) -> Option<Row> {
     let phase = n
         .status
@@ -1138,6 +1177,10 @@ fn namespace_to_row(n: k8s_openapi::api::core::v1::Namespace) -> Option<Row> {
     row_of(&n, vec![("phase".into(), phase)])
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
+)]
 fn node_to_row(n: k8s_openapi::api::core::v1::Node) -> Option<Row> {
     let st = n.status.as_ref();
     // A node's STATUS is the Ready condition, and `Unschedulable` on the spec
@@ -1147,14 +1190,16 @@ fn node_to_row(n: k8s_openapi::api::core::v1::Node) -> Option<Row> {
     let ready = st
         .and_then(|s| s.conditions.as_ref())
         .and_then(|cs| cs.iter().find(|c| c.type_ == "Ready"))
-        .map(|c| {
-            if c.status == "True" {
-                "Ready".to_owned()
-            } else {
-                "NotReady".to_owned()
-            }
-        })
-        .unwrap_or_else(|| "Unknown".into());
+        .map_or_else(
+            || "Unknown".to_owned(),
+            |c| {
+                if c.status == "True" {
+                    "Ready".to_owned()
+                } else {
+                    "NotReady".to_owned()
+                }
+            },
+        );
     let status = if n.spec.as_ref().and_then(|s| s.unschedulable) == Some(true) {
         let mut s = ready.clone();
         s.push_str(",SchedulingDisabled");
@@ -1164,12 +1209,15 @@ fn node_to_row(n: k8s_openapi::api::core::v1::Node) -> Option<Row> {
     };
     let version = st
         .and_then(|s| s.node_info.as_ref())
-        .map(|i| i.kubelet_version.clone())
-        .unwrap_or_else(|| "-".into());
+        .map_or_else(|| "-".into(), |i| i.kubelet_version.clone());
     let cells = vec![("phase".into(), status), ("version".into(), version)];
     row_of(&n, cells)
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
+)]
 fn event_to_row(e: k8s_openapi::api::core::v1::Event) -> Option<Row> {
     let reason = e.reason.clone().unwrap_or_else(|| "-".into());
     let kind = e.type_.clone().unwrap_or_else(|| "Normal".into());
@@ -1795,7 +1843,9 @@ mod tests {
     /// rows were real; only the cluster was wrong.
     #[test]
     fn a_context_declared_by_two_files_is_refused() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = Scratch::new("ambig");
         let a = write_kubeconfig(dir.path(), "a.yaml", "shared", "https://127.0.0.1:6443");
         let b = write_kubeconfig(
@@ -1831,7 +1881,9 @@ mod tests {
     /// that makes "the right cluster" checkable rather than a label to trust.
     #[test]
     fn a_uniquely_declared_context_resolves_to_its_server() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = Scratch::new("unique");
         let a = write_kubeconfig(dir.path(), "a.yaml", "only-here", "https://127.0.0.1:6443");
         let b = write_kubeconfig(dir.path(), "b.yaml", "elsewhere", "https://other:6443");
