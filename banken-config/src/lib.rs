@@ -204,6 +204,74 @@ pub struct BankenConfig {
     ///
     /// Lisp face: `:spec-dir "banken-spec/specs"`.
     pub spec_dir: PathBuf,
+
+    /// The `owner/name` of the `GitOps` repository a DECLARE opens its pull
+    /// request against. Empty ⇒ banken refuses to declare.
+    ///
+    /// **Empty is the prescribed value and the refusal is the point.** There
+    /// is no fleet-wide right answer — the repository that owns a resource is
+    /// a fact about one estate — and a DECLARE written to a *guessed*
+    /// repository opens a PR that looks correct and reconciles nothing, which
+    /// costs a reviewer's trust rather than merely failing. So the zero value
+    /// is "I do not know", and `crate::declare` turns that into a typed
+    /// refusal naming the field.
+    ///
+    /// This replaced a `BANKEN_GITOPS_REPO` environment variable, which is
+    /// exactly the untyped, unauthored, undiscoverable surface the fleet
+    /// configuration rule exists to eliminate: it had no schema, no default a
+    /// reader could find, and no way to be set per-estate alongside the rest
+    /// of the config.
+    ///
+    /// Lisp face: `:gitops-repo "pleme-io/k8s"`.
+    #[serde(default)]
+    pub gitops_repo: String,
+
+    /// The branch a DECLARE's pull request targets.
+    ///
+    /// Prescribed `"main"` — unlike the repository, this one HAS a defensible
+    /// fleet-wide answer, so it gets a real default rather than a refusal.
+    ///
+    /// Lisp face: `:gitops-base "main"`.
+    #[serde(default = "default_gitops_base")]
+    pub gitops_base: String,
+
+    /// How often the watchdog re-walks its cheap TCP rounds, in milliseconds.
+    ///
+    /// A knob because the right answer depends on the estate: a VPN that comes
+    /// up while the operator reads the list should be noticed quickly, but each
+    /// round is a real connect against every configured context, and an estate
+    /// with connection logging sees them.
+    ///
+    /// Lisp face: `:ronda-round-ms 15000`.
+    #[serde(default = "default_ronda_round_ms")]
+    pub ronda_round_ms: u64,
+
+    /// How often the watchdog climbs the EXPENSIVE half of the ladder, in
+    /// milliseconds.
+    ///
+    /// Separate from [`Self::ronda_round_ms`] because the costs differ by two
+    /// orders of magnitude: everything above `Rung::Network` runs a credential
+    /// helper, which on an EKS context is an `aws eks get-token` subprocess and
+    /// an STS round-trip. Five minutes against four reachable contexts is ~48
+    /// helper invocations an hour; climbing on the cheap clock against all
+    /// eighteen would be ~4300. That ratio is why there are two knobs and not
+    /// one.
+    ///
+    /// Lisp face: `:ronda-climb-ms 300000`.
+    #[serde(default = "default_ronda_climb_ms")]
+    pub ronda_climb_ms: u64,
+}
+
+fn default_gitops_base() -> String {
+    "main".to_owned()
+}
+
+const fn default_ronda_round_ms() -> u64 {
+    15_000
+}
+
+const fn default_ronda_climb_ms() -> u64 {
+    300_000
 }
 
 impl BankenConfig {
@@ -223,6 +291,32 @@ impl BankenConfig {
     #[must_use]
     pub fn is_namespaced(&self) -> bool {
         !self.namespace.is_empty()
+    }
+
+    /// The `GitOps` repository a DECLARE targets, or `None` when unset.
+    ///
+    /// `None` rather than an empty string so the refusal happens at the one
+    /// place that can explain it, instead of an empty `owner/name` reaching
+    /// the forge and failing as a parse error about a string nobody typed.
+    #[must_use]
+    pub fn gitops_target(&self) -> Option<(&str, &str)> {
+        if self.gitops_repo.trim().is_empty() {
+            None
+        } else {
+            Some((self.gitops_repo.as_str(), self.gitops_base.as_str()))
+        }
+    }
+
+    /// The cheap-round interval as a `Duration`.
+    #[must_use]
+    pub fn ronda_round(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.ronda_round_ms)
+    }
+
+    /// The credential-climb interval as a `Duration`.
+    #[must_use]
+    pub fn ronda_climb(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.ronda_climb_ms)
     }
 
     /// The namespace to pass to a `ClusterEnv` read — `None` for
@@ -313,6 +407,16 @@ impl shikumi::TieredConfig for BankenConfig {
             theme: FleetTheme::Bare,
             scrollback_lines: 0,
             spec_dir: PathBuf::new(),
+            // No repository — so a DECLARE from a bare-tier banken REFUSES.
+            // That is the zero-opinion answer: this tier has no idea which
+            // estate it is pointed at, and guessing one would be an opinion.
+            gitops_repo: String::new(),
+            gitops_base: default_gitops_base(),
+            // Zero rounds at the bare tier would leave every marker `unknown`
+            // forever, which is not zero-opinion — it is a broken watchdog. The
+            // cadence is not an opinion about the estate, so the floor keeps it.
+            ronda_round_ms: default_ronda_round_ms(),
+            ronda_climb_ms: default_ronda_climb_ms(),
         }
     }
 

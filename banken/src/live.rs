@@ -1537,12 +1537,13 @@ impl ClusterEnv for KubeClusterEnv {
     ///
     /// # Where the repository comes from
     ///
-    /// `BANKEN_GITOPS_REPO` (`owner/name`) and `BANKEN_GITOPS_BASE` (default
-    /// `main`). Environment rather than a config field for now because the
-    /// answer is genuinely per-estate and banken has no typed fleet map to
-    /// derive it from — `pending-banken: declare-repo-from-fleet-map`. A
-    /// missing value REFUSES rather than defaulting: a DECLARE opened against
-    /// a guessed repository is a PR that looks correct and reconciles nothing.
+    /// `(defbanken :gitops-repo "owner/name" :gitops-base "main")`, through
+    /// shikumi's tiered fold — the same authored surface as every other knob,
+    /// not an environment variable. The prescribed value is EMPTY and a
+    /// DECLARE therefore refuses until an operator sets it: there is no
+    /// fleet-wide right answer, and a PR opened against a guessed repository
+    /// looks correct and reconciles nothing, which costs a reviewer's trust
+    /// rather than merely failing.
     ///
     /// # Errors
     ///
@@ -1551,16 +1552,20 @@ impl ClusterEnv for KubeClusterEnv {
     /// rejects a step.
     #[cfg(feature = "gitops")]
     fn declare(&self, change: DeclareChange) -> Result<ChangeRef, SpecError> {
-        let repo = std::env::var("BANKEN_GITOPS_REPO").map_err(|_| SpecError::Interp {
+        let cfg =
+            banken_config::BankenConfig::discover_effective().map_err(|e| SpecError::Interp {
+                phase: "declare".into(),
+                message: format!("cannot read banken's config to resolve the GitOps repo: {e}"),
+            })?;
+        let (repo, base) = cfg.gitops_target().ok_or_else(|| SpecError::Interp {
             phase: "declare".into(),
-            message: "BANKEN_GITOPS_REPO is unset (expects `owner/name`) — banken \
-                      will not guess which repository owns this resource, because \
-                      a PR opened against the wrong one looks correct and \
-                      reconciles nothing"
+            message: "`:gitops-repo` is unset in (defbanken …) — banken will not \
+                      guess which repository owns this resource, because a PR \
+                      opened against the wrong one looks correct and reconciles \
+                      nothing. Set it to `owner/name` in your banken config."
                 .into(),
         })?;
-        let base = std::env::var("BANKEN_GITOPS_BASE").unwrap_or_else(|_| "main".into());
-        let route = crate::declare::route_for(&change.target, &repo, &base)?;
+        let route = crate::declare::route_for(&change.target, repo, base)?;
         let plan = crate::declare::DeclarePlan::new(route, &change)?;
         let forge = crate::declare::GitHubForge::from_env()?;
         crate::declare::submit(&forge, &plan)

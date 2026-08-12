@@ -134,13 +134,14 @@ async fn run_pick(
         let climb: banken::ronda::DeepClimb = std::sync::Arc::new(|context: String| {
             Box::pin(async move { banken::live::KubeClusterEnv::climb(&context).await })
         });
-        banken::ronda::spawn_rounds(
+        banken::ronda::spawn_rounds_at(
             contexts
                 .into_iter()
                 .map(|c| (c.name, c.server))
                 .collect::<Vec<_>>(),
             publisher,
             Some(climb),
+            ronda_cadence(),
         )
     });
 
@@ -446,6 +447,25 @@ fn opening_stance() -> unsoku::Stance {
     }
 }
 
+/// The watchdog's two cadences, from the authored config.
+///
+/// Falls back to the prescribed pair when the config cannot be read, rather
+/// than failing the session: a watchdog is an aid, and an unreadable config
+/// file is already reported by the surfaces that actually depend on it. The
+/// fallback is `Cadence::default()`, which is the *same* pair the prescribed
+/// tier carries — so a fallback and a successful read produce identical
+/// behaviour, and there is no third cadence to reason about.
+#[cfg(feature = "live")]
+fn ronda_cadence() -> banken::ronda::Cadence {
+    banken_config::BankenConfig::discover_effective().map_or_else(
+        |_| banken::ronda::Cadence::default(),
+        |c| banken::ronda::Cadence {
+            round: c.ronda_round(),
+            climb: c.ronda_climb(),
+        },
+    )
+}
+
 fn refresh_interval() -> std::time::Duration {
     let ms = banken_config::BankenConfig::discover_effective().map_or_else(
         |_| u64::try_from(banken::feed::DEFAULT_POLL.as_millis()).unwrap_or(1000),
@@ -523,13 +543,14 @@ async fn run_mcp(source: banken::cli::McpSource) -> Result<(), String> {
         let climb: banken::ronda::DeepClimb = Arc::new(|context: String| {
             Box::pin(async move { banken::live::KubeClusterEnv::climb(&context).await })
         });
-        banken::ronda::spawn_rounds(
+        banken::ronda::spawn_rounds_at(
             contexts
                 .into_iter()
                 .map(|c| (c.name, c.server))
                 .collect::<Vec<_>>(),
             publisher,
             Some(climb),
+            ronda_cadence(),
         )
     });
 

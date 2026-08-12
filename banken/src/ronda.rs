@@ -659,6 +659,61 @@ pub fn spawn_rounds(
     publisher: RondaPublisher,
     climb: Option<DeepClimb>,
 ) -> tokio::task::JoinHandle<()> {
+    spawn_rounds_at(targets, publisher, climb, Cadence::default())
+}
+
+/// How often each half of the ladder is walked.
+///
+/// Two fields rather than one because the costs differ by two orders of
+/// magnitude — see [`DEEP_INTERVAL`]. Authored as `:ronda-round-ms` /
+/// `:ronda-climb-ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cadence {
+    /// Between cheap TCP rounds.
+    pub round: Duration,
+    /// Between credential climbs.
+    pub climb: Duration,
+}
+
+impl Default for Cadence {
+    fn default() -> Self {
+        Self {
+            round: ROUND_INTERVAL,
+            climb: DEEP_INTERVAL,
+        }
+    }
+}
+
+/// [`spawn_rounds`] at an explicit cadence.
+///
+/// # Errors
+///
+/// None — a context with no dialable address is reported as
+/// [`Rung::Down`] rather than failing the round, because one unreachable
+/// context must not stop the other seventeen from being measured.
+#[must_use = "dropping the handle cancels the rounds — bind it for the session's lifetime"]
+pub fn spawn_rounds_at(
+    targets: Vec<(String, Option<String>)>,
+    publisher: RondaPublisher,
+    climb: Option<DeepClimb>,
+    cadence: Cadence,
+) -> tokio::task::JoinHandle<()> {
+    // A zero cheap-round would spin the loop as fast as the executor allows —
+    // a busy loop dressed as a config value. Clamped to the prescribed
+    // interval rather than refused, because a watchdog is not worth failing a
+    // session over, and the floor is the value the operator would have got.
+    let cadence = Cadence {
+        round: if cadence.round.is_zero() {
+            ROUND_INTERVAL
+        } else {
+            cadence.round
+        },
+        climb: if cadence.climb.is_zero() {
+            DEEP_INTERVAL
+        } else {
+            cadence.climb
+        },
+    };
     tokio::spawn(async move {
         let names: Vec<String> = targets.iter().map(|(n, _)| n.clone()).collect();
         publisher.seed(&names);
@@ -686,7 +741,7 @@ pub fn spawn_rounds(
         // The two cadences are the whole cost story. The cheap half runs
         // often; the expensive half runs rarely, and only where the cheap half
         // already proved packets move.
-        let mut since_deep = DEEP_INTERVAL; // …so the first pass climbs.
+        let mut since_deep = cadence.climb; // …so the first pass climbs.
         loop {
             let mut round = Vec::new();
             for (name, target) in &dials {
@@ -713,7 +768,7 @@ pub fn spawn_rounds(
             }
 
             if let Some(climb) = climb.clone()
-                && since_deep >= DEEP_INTERVAL
+                && since_deep >= cadence.climb
             {
                 since_deep = Duration::ZERO;
                 let mut deep = Vec::new();
@@ -737,8 +792,8 @@ pub fn spawn_rounds(
                 }
             }
 
-            tokio::time::sleep(ROUND_INTERVAL).await;
-            since_deep = since_deep.saturating_add(ROUND_INTERVAL);
+            tokio::time::sleep(cadence.round).await;
+            since_deep = since_deep.saturating_add(cadence.round);
         }
     })
 }

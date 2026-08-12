@@ -53,6 +53,36 @@
   ;; The log-pager cap, in lines. 0 ⇒ unbounded. DERIVED from
   ;; FleetDefaults::scrollback_lines — the fleet 10k floor.
   :scrollback-lines 10000
+  ;; ── DECLARE's destination ────────────────────────────────────────
+  ;; Which repository a DECLARE opens its pull request against, `owner/name`.
+  ;;
+  ;; EMPTY on purpose, and the refusal is the feature. There is no
+  ;; fleet-wide right answer — which repository owns a resource is a fact
+  ;; about ONE estate — and a DECLARE written to a guessed repository opens
+  ;; a PR that looks correct and reconciles nothing, which costs a
+  ;; reviewer's trust rather than merely failing. So the prescribed value is
+  ;; "I do not know", and `banken::declare` turns that into a typed refusal
+  ;; naming this field. An operator sets it in their own overlay.
+  ;;
+  ;; This replaced a BANKEN_GITOPS_REPO environment variable — the untyped,
+  ;; unauthored, undiscoverable surface the fleet configuration rule exists
+  ;; to eliminate.
+  :gitops-repo ""
+  ;; The branch the pull request targets. Unlike the repository, this one HAS
+  ;; a defensible fleet-wide answer, so it gets a real default.
+  :gitops-base "main"
+  ;; ── The watchdog's two cadences ──────────────────────────────────
+  ;; The cheap TCP round: a VPN that comes up while the operator is reading
+  ;; the list should be noticed, and a connect to an open port is one round
+  ;; trip with no authentication.
+  :ronda-round-ms 15000
+  ;; The EXPENSIVE climb. Separate knob because the costs differ by two
+  ;; orders of magnitude: everything above `network` runs a credential
+  ;; helper, which on EKS is an `aws eks get-token` subprocess plus an STS
+  ;; round-trip. Five minutes against four reachable contexts is ~48 helper
+  ;; invocations an hour; climbing on the cheap clock against all eighteen
+  ;; would be ~4300. That ratio is why there are two knobs.
+  :ronda-climb-ms 300000
   ;; *** THE SEAM *** — the one field joining the deployment face to the
   ;; tatara-lisp DOMAIN face. Everything under here is (defk8sview …) /
   ;; (defk8saction …), never a runtime knob.
