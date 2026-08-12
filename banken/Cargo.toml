@@ -14,14 +14,21 @@ name = "banken"
 path = "src/main.rs"
 
 [dependencies]
-banken-spec = { path = "../banken-spec" }
+# `version` alongside `path`, and it is what makes this crate publishable.
+# cargo refuses to publish a crate carrying a path-only dependency — the
+# published artifact has no `../banken-spec` to resolve — with the misleading
+# "dependency `banken-spec` does not specify a version". Measured 2026-08-12:
+# the drip-publish shipped banken-spec and banken-config to crates.io and
+# failed on `banken` alone for exactly this. `^0.1.0` spans every 0.1.x, so
+# the auto-release patch bump does not have to edit this line.
+banken-spec = { path = "../banken-spec", version = "0.1.0" }
 # *** WIRED 2026-08-08. It was NOT a dependency of this binary. ***
 # `banken-config` shipped 16 green tests and carried both faces on one struct
 # (the `defbanken` Lisp keyword + `impl shikumi::TieredConfig`) — and nothing
 # consumed it. `main.rs` hardcoded the poll interval, so `:refresh-interval-ms`
 # was authored, tested, and IGNORED. A config surface nothing reads is worse
 # than no config surface, because it looks like it works.
-banken-config = { path = "../banken-config" }
+banken-config = { path = "../banken-config", version = "0.1.0" }
 # The fleet keybinding vocabulary. banken uses awase's typed `Hotkey`/`Key`
 # to construct `banken_spec::chord::ActionChord` values and `KeyRepeatGate`
 # to debounce the held-key path on the three postigo action chords.
