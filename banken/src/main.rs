@@ -521,6 +521,7 @@ async fn run_mcp(source: banken::cli::McpSource) -> Result<(), String> {
     use rmcp::{ServiceExt, transport::stdio};
     use std::sync::Arc;
 
+    let mut permits: Option<Arc<dyn banken::permit::PermitEnv + Send + Sync>> = None;
     let (env, cluster): (Arc<dyn ClusterEnv + Send + Sync>, String) = match source {
         McpSource::Fixture => (Arc::new(FixtureClusterEnv::new()), FIXTURE_CLUSTER.into()),
         McpSource::Live(context) => {
@@ -532,7 +533,12 @@ async fn run_mcp(source: banken::cli::McpSource) -> Result<(), String> {
                     m
                 })?;
             let name = env.context_name().unwrap_or(context);
-            (Arc::new(env), name)
+            let shared = Arc::new(env);
+            // The SAME env answers reads and authorization questions, so
+            // `banken_can_i` can never disagree with `banken_list` about which
+            // identity is asking.
+            permits = Some(shared.clone() as Arc<dyn banken::permit::PermitEnv + Send + Sync>);
+            (shared, name)
         }
     };
 
@@ -556,7 +562,11 @@ async fn run_mcp(source: banken::cli::McpSource) -> Result<(), String> {
 
     eprintln!("banken mcp: serving OBSERVE-only reads of `{cluster}` over stdio");
 
-    BankenMcp::new(env, cluster, ronda)
+    let mut server = BankenMcp::new(env, cluster, ronda);
+    if let Some(p) = permits {
+        server = server.with_permits(p);
+    }
+    server
         .serve(stdio())
         .await
         .map_err(|e| format!("serve: {e}"))?

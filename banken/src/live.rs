@@ -1671,6 +1671,63 @@ impl ClusterEnv for KubeClusterEnv {
     // *** No unwitnessed-mutate method — ClusterEnv has none. ***
 }
 
+/// The live authorization check — `SelfSubjectAccessReview`.
+///
+/// One POST, evaluated against the same RBAC the real request would hit, with
+/// no side effect and no dependence on the object existing. It is what
+/// `kubectl auth can-i` does.
+///
+/// **A create against a `SelfSubjectAccessReview` is not a mutation of the
+/// estate.** The resource is a request/response envelope — the apiserver
+/// answers it and stores nothing — which is why an OBSERVE-only tool may
+/// perform it, and why asking about a *destructive* verb is safe: "may I
+/// delete pods" changes nothing.
+impl crate::permit::PermitEnv for KubeClusterEnv {
+    fn may(&self, ask: &crate::permit::Ask) -> Result<crate::permit::Permit, SpecError> {
+        use k8s_openapi::api::authorization::v1::{
+            ResourceAttributes, SelfSubjectAccessReview, SelfSubjectAccessReviewSpec,
+        };
+
+        let (group, resource) = crate::permit::wire_identity(ask.kind);
+        let review = SelfSubjectAccessReview {
+            spec: SelfSubjectAccessReviewSpec {
+                resource_attributes: Some(ResourceAttributes {
+                    group: Some(group.to_owned()),
+                    resource: Some(resource.to_owned()),
+                    verb: Some(ask.verb.clone()),
+                    namespace: ask.namespace.clone(),
+                    ..ResourceAttributes::default()
+                }),
+                ..SelfSubjectAccessReviewSpec::default()
+            },
+            ..SelfSubjectAccessReview::default()
+        };
+
+        let api: Api<SelfSubjectAccessReview> = Api::all(self.client.clone());
+        // A failed review is `Unknown`, never `Denied`. The two are opposite
+        // facts, and collapsing them would grey out a view the operator can
+        // actually read — with no way for them to tell why.
+        let created = match self.block(api.create(&kube::api::PostParams::default(), &review)) {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(crate::permit::Permit::Unknown { why: e.to_string() });
+            }
+        };
+        let Some(status) = created.status else {
+            return Ok(crate::permit::Permit::Unknown {
+                why: "the apiserver returned a review with no status".to_owned(),
+            });
+        };
+        Ok(if status.allowed {
+            crate::permit::Permit::Allowed
+        } else {
+            crate::permit::Permit::Denied {
+                reason: status.reason.unwrap_or_default(),
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

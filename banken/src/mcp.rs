@@ -69,6 +69,12 @@ pub struct BankenMcp {
     env: Arc<dyn ClusterEnv + Send + Sync>,
     cluster: String,
     ronda: crate::ronda::Ronda,
+    /// The per-verb authorization check, when the env can perform one.
+    ///
+    /// `Option` because the fixture has no apiserver to ask, and a fixture
+    /// that answered "allowed" would be inventing an authorization result —
+    /// the one kind of answer that must never be fabricated.
+    permits: Option<Arc<dyn crate::permit::PermitEnv + Send + Sync>>,
     /// The break-glass ledger, exposed READ-ONLY.
     ///
     /// Reading the audit trail is an OBSERVE, and a valuable one: "a human
@@ -161,6 +167,18 @@ pub struct EventsInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CanIInput {
+    /// The verb — `list`, `get`, `watch`, `create`, `delete`, `patch`. Defaults
+    /// to `list`, the read a view actually performs.
+    #[serde(default)]
+    pub verb: String,
+    /// The resource kind (see `banken_list`).
+    pub kind: String,
+    /// The namespace to ask about. Omit for cluster-scope / all-namespaces.
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct Empty {}
 
 #[tool_router]
@@ -175,6 +193,7 @@ impl BankenMcp {
         let cluster = cluster.into();
         Self {
             env,
+            permits: None,
             glass: crate::glass::GlassLedger::default_path()
                 .map(|p| crate::glass::GlassLedger::at(p, cluster.clone())),
             cluster,
@@ -188,6 +207,20 @@ impl BankenMcp {
     #[must_use]
     pub fn with_glass_ledger(mut self, ledger: crate::glass::GlassLedger) -> Self {
         self.glass = Some(ledger);
+        self
+    }
+
+    /// Attach the authorization checker.
+    ///
+    /// Absent by default: only a live cluster can answer an authorization
+    /// question, and a source that invented one would be fabricating the
+    /// single kind of answer an agent must never receive fabricated.
+    #[must_use]
+    pub fn with_permits(
+        mut self,
+        permits: Arc<dyn crate::permit::PermitEnv + Send + Sync>,
+    ) -> Self {
+        self.permits = Some(permits);
         self
     }
 
@@ -335,6 +368,54 @@ impl BankenMcp {
                 })).collect::<Vec<_>>(),
                 "note": "An entry with no `outcome` is UNRESOLVED — banken \
                          recorded the intent and never saw the session finish.",
+            })),
+            Err(e) => fail(&e),
+        }
+    }
+
+    #[tool(
+        description = "Ask the apiserver whether this identity may perform a verb on a resource kind, optionally in one namespace — `kubectl auth can-i`. Call this BEFORE concluding from an empty list that a workload is missing: an empty table and a forbidden one look identical, and only this tells them apart. Safe for destructive verbs — asking `may I delete pods` changes nothing."
+    )]
+    pub async fn banken_can_i(&self, Parameters(p): Parameters<CanIInput>) -> String {
+        // The CALLER's error first, then the environment's. A typo'd kind is
+        // wrong regardless of whether an apiserver is reachable, and reporting
+        // the environmental limitation instead would send an agent to debug
+        // banken's wiring over its own misspelling.
+        let Some(kind) = kind_of(&p.kind) else {
+            return ok(&json!({
+                "error": format!("unknown kind `{}`", p.kind),
+                "legal": legal_kinds(),
+            }));
+        };
+        let Some(permits) = self.permits.as_ref() else {
+            return ok(&json!({
+                "error": "this server has no apiserver to ask (it is serving the \
+                          fixture source). This is NOT a denial — it is banken \
+                          being unable to check.",
+            }));
+        };
+        let verb = if p.verb.trim().is_empty() {
+            "list".to_owned()
+        } else {
+            p.verb.trim().to_ascii_lowercase()
+        };
+        let ask = crate::permit::Ask {
+            verb: verb.clone(),
+            kind,
+            namespace: p.namespace.clone(),
+        };
+        match permits.may(&ask) {
+            Ok(permit) => ok(&json!({
+                "cluster": self.cluster,
+                "verb": verb,
+                "kind": kind.label(),
+                "namespace": p.namespace,
+                "permit": permit.token(),
+                "verdict": permit.describe(),
+                "note": "`allowed` means AUTHORIZATION would not stop you — not \
+                         that the request will succeed. Admission webhooks, \
+                         quotas and network policy are separate gates. \
+                         `unknown` is not a denial.",
             })),
             Err(e) => fail(&e),
         }
@@ -507,6 +588,7 @@ mod tests {
             "banken_events",
             "banken_readiness",
             "banken_glass_ledger",
+            "banken_can_i",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),
@@ -697,6 +779,52 @@ mod tests {
             "positions() must still drop unmeasured contexts — a ramp may not \
              paint `not looked at yet` as a colour",
         );
+    }
+
+    /// **`banken_can_i` ASKS, it does not DO.** It accepts a destructive verb
+    /// as an argument — "may I delete pods" — and that is safe by
+    /// construction: a `SelfSubjectAccessReview` is a request/response
+    /// envelope the apiserver answers and stores. The tool NAME carries no
+    /// mutating verb, which is what `no_mutating_tool_exists` checks, and the
+    /// distinction is worth pinning: an agent may learn the shape of its own
+    /// access without exercising any of it.
+    #[tokio::test]
+    async fn can_i_asks_about_a_destructive_verb_without_performing_it() {
+        // With no permit env (the fixture), it REFUSES rather than answering —
+        // and says the refusal is not a denial, which is the whole point.
+        let s = server()
+            .banken_can_i(Parameters(CanIInput {
+                verb: "delete".into(),
+                kind: "pods".into(),
+                namespace: Some("kube-system".into()),
+            }))
+            .await;
+        let v: Value = serde_json::from_str(&s).expect("valid json");
+        let err = v["error"].as_str().expect("a refusal");
+        assert!(err.contains("NOT a denial"), "{err}");
+        assert!(
+            v["permit"].is_null(),
+            "a refusal must not look like a verdict: {s}"
+        );
+    }
+
+    /// An unknown kind is refused here too — and must not be mistaken for a
+    /// denial, which would tell an agent it lacks access it may well have.
+    #[tokio::test]
+    async fn can_i_refuses_an_unknown_kind_without_calling_it_denied() {
+        let s = server()
+            .banken_can_i(Parameters(CanIInput {
+                verb: "list".into(),
+                kind: "poddz".into(),
+                namespace: None,
+            }))
+            .await;
+        let v: Value = serde_json::from_str(&s).expect("valid json");
+        assert!(
+            v["error"].as_str().unwrap_or_default().contains("poddz"),
+            "{s}"
+        );
+        assert_ne!(v["permit"], "denied", "{s}");
     }
 
     /// Whatever the env answers, the response is a typed shape — never

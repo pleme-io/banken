@@ -112,6 +112,14 @@ pub mod live;
 #[cfg(feature = "live")]
 pub mod picker;
 
+/// permit — may this identity actually read that, *here*?
+///
+/// ronda's ladder answers "may I list pods somewhere on this cluster"; this
+/// answers it per namespace and per verb, so a view can say "you cannot read
+/// this" instead of drawing an empty table that looks exactly like an empty
+/// namespace.
+pub mod permit;
+
 /// declare — a DECLARE becomes a branch, a full manifest, and a pull request.
 ///
 /// The delivery half of the postigo gate's git-mutating class: banken writes
