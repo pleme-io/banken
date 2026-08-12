@@ -1538,14 +1538,39 @@ impl ClusterEnv for KubeClusterEnv {
         })
     }
 
-    fn break_glass(&self, _action: WitnessedAction) -> Result<GlassRecord, SpecError> {
-        // BREAK-GLASS exec routes through the kubernetes MCP `k8s-pod-exec`
-        // (the §IX named interim executor), not this backend. A typed error
-        // until that arm is wired.
-        Err(SpecError::Interp {
+    /// Record the break-glass, durably, and hand back the record.
+    ///
+    /// # What this DOES and does not do
+    ///
+    /// It writes the witnessed record — fsynced, before anything else — and
+    /// stops there. It does **not** run the effect, and that split is the
+    /// design rather than an omission: the effect is a terminal session, which
+    /// belongs to the `(defbancada)` handoff into tear/mado, and banken stays
+    /// a navigator. `crate::glass::open_witnessed_session` is the arm that
+    /// opens it, and it takes the `Witnessed` this call produced — so the
+    /// ordering (record, THEN act) is a signature rather than a convention.
+    ///
+    /// A caller that only records and never acts leaves an unresolved ledger
+    /// entry, which `GlassLedger::unresolved` surfaces. That is the honest
+    /// residue of a break-glass that was authorised and then abandoned, and it
+    /// is deliberately visible rather than swept up.
+    ///
+    /// # Errors
+    ///
+    /// `SpecError::Interp { phase: "break-glass" }` when the record cannot be
+    /// durably written — which is a refusal of the whole action. A break-glass
+    /// that cannot be recorded must not proceed, so this failing is the point.
+    fn break_glass(&self, action: WitnessedAction) -> Result<GlassRecord, SpecError> {
+        let path = crate::glass::GlassLedger::default_path().ok_or_else(|| SpecError::Interp {
             phase: "break-glass".into(),
-            message: "break-glass exec via the kubernetes MCP (pending-banken: break-glass)".into(),
-        })
+            message: "no XDG_STATE_HOME and no HOME — banken cannot resolve a \
+                      break-glass ledger path, and will not perform a witnessed \
+                      action it cannot record"
+                .into(),
+        })?;
+        let cluster = self.context_name().unwrap_or_default();
+        let witnessed = crate::glass::GlassLedger::at(path, cluster).record(&action)?;
+        Ok(witnessed.record().clone())
     }
 
     // *** No unwitnessed-mutate method — ClusterEnv has none. ***

@@ -69,6 +69,15 @@ pub struct BankenMcp {
     env: Arc<dyn ClusterEnv + Send + Sync>,
     cluster: String,
     ronda: crate::ronda::Ronda,
+    /// The break-glass ledger, exposed READ-ONLY.
+    ///
+    /// Reading the audit trail is an OBSERVE, and a valuable one: "a human
+    /// exec'd into this pod twenty minutes ago" is often the whole answer to
+    /// "why does this pod look like that", and it is invisible in every other
+    /// read. Exposing the *record* is the opposite of exposing the *action* —
+    /// the agent learns that glass was broken and still has no way to break
+    /// any.
+    glass: Option<crate::glass::GlassLedger>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -163,12 +172,23 @@ impl BankenMcp {
         cluster: impl Into<String>,
         ronda: crate::ronda::Ronda,
     ) -> Self {
+        let cluster = cluster.into();
         Self {
             env,
-            cluster: cluster.into(),
+            glass: crate::glass::GlassLedger::default_path()
+                .map(|p| crate::glass::GlassLedger::at(p, cluster.clone())),
+            cluster,
             ronda,
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Point the ledger reader at an explicit path (a test, or an operator
+    /// with a non-default state dir).
+    #[must_use]
+    pub fn with_glass_ledger(mut self, ledger: crate::glass::GlassLedger) -> Self {
+        self.glass = Some(ledger);
+        self
     }
 
     #[tool(
@@ -278,6 +298,43 @@ impl BankenMcp {
                     "object": e.involved,
                     "message": e.message,
                 })).collect::<Vec<_>>(),
+            })),
+            Err(e) => fail(&e),
+        }
+    }
+
+    #[tool(
+        description = "The break-glass ledger — every witnessed live action banken has performed, who authorised it, and whether it resolved. READ-ONLY, and often the missing half of a triage: 'a human exec'd into this pod twenty minutes ago' explains a state no other read can. An entry with no outcome is a session that crashed, was killed, or is still open."
+    )]
+    pub async fn banken_glass_ledger(&self, Parameters(_): Parameters<Empty>) -> String {
+        let Some(ledger) = self.glass.as_ref() else {
+            return ok(&json!({
+                "error": "no break-glass ledger path could be resolved (no \
+                          XDG_STATE_HOME and no HOME). This is NOT a claim that \
+                          no break-glass has happened — it is banken being \
+                          unable to look.",
+            }));
+        };
+        match ledger.entries() {
+            // The distinction the whole tool turns on: an EMPTY ledger means no
+            // break-glass has been performed, which is a real finding. An
+            // unreadable ledger means banken cannot see, which is not. They are
+            // different JSON shapes here for exactly that reason.
+            Ok(entries) => ok(&json!({
+                "ledger": ledger.path().display().to_string(),
+                "count": entries.len(),
+                "unresolved": ledger.unresolved().map(|u| u.len()).unwrap_or(0),
+                "entries": entries.iter().map(|e| json!({
+                    "recordId": e.record_id,
+                    "atUnixMs": e.at_unix_ms,
+                    "cluster": e.cluster,
+                    "selector": e.selector,
+                    "witness": e.witness,
+                    "runbook": e.runbook,
+                    "outcome": e.outcome,
+                })).collect::<Vec<_>>(),
+                "note": "An entry with no `outcome` is UNRESOLVED — banken \
+                         recorded the intent and never saw the session finish.",
             })),
             Err(e) => fail(&e),
         }
@@ -434,12 +491,65 @@ mod tests {
             "banken_logs",
             "banken_events",
             "banken_readiness",
+            "banken_glass_ledger",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),
                 "missing {expected}: {names:?}",
             );
         }
+    }
+
+    /// Reading the break-glass ledger is an OBSERVE and is exposed; *breaking*
+    /// glass is not. The ledger tool must report what a human did without
+    /// giving the agent any way to do it — which is why `no_mutating_tool_exists`
+    /// denies `break_glass` while this tool exists alongside it.
+    #[tokio::test]
+    async fn the_glass_ledger_is_readable_and_an_empty_one_is_a_finding() {
+        use crate::glass::{GlassLedger, GlassOutcome};
+        use banken_spec::env::WitnessedAction;
+        use banken_spec::types::{OperatorId, RunbookRef};
+
+        let dir = std::env::temp_dir().join(format!("banken-mcp-glass-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tmp");
+        let ledger = GlassLedger::at(dir.join("glass.jsonl"), "fixture");
+        // Start clean — this path is reused across runs on the same pid.
+        let _ = std::fs::remove_file(ledger.path());
+
+        let server = BankenMcp::new(
+            Arc::new(FixtureClusterEnv::new()),
+            "fixture",
+            crate::ronda::Ronda::inert(),
+        )
+        .with_glass_ledger(ledger.clone());
+
+        // An empty ledger is a REAL answer: no break-glass has happened.
+        let s = server.banken_glass_ledger(Parameters(Empty {})).await;
+        let v: Value = serde_json::from_str(&s).expect("valid json");
+        assert_eq!(v["count"], 0, "{s}");
+        assert!(
+            v["error"].is_null(),
+            "an empty ledger is a finding, not a failure to look: {s}",
+        );
+
+        let w = ledger
+            .record(&WitnessedAction {
+                selector: "pod/api".into(),
+                witness: OperatorId::new("drzzln").expect("non-blank"),
+                runbook: RunbookRef("R.md".into()),
+            })
+            .expect("recorded");
+        let s = server.banken_glass_ledger(Parameters(Empty {})).await;
+        let v: Value = serde_json::from_str(&s).expect("valid json");
+        assert_eq!(v["count"], 1, "{s}");
+        assert_eq!(v["unresolved"], 1, "recorded and not yet resolved: {s}");
+        assert_eq!(v["entries"][0]["witness"], "drzzln");
+        assert!(v["entries"][0]["outcome"].is_null(), "{s}");
+
+        ledger.resolve(&w, GlassOutcome::Opened).expect("resolved");
+        let s = server.banken_glass_ledger(Parameters(Empty {})).await;
+        let v: Value = serde_json::from_str(&s).expect("valid json");
+        assert_eq!(v["unresolved"], 0, "{s}");
     }
 
     /// The capability statement must SAY that declare and break-glass are

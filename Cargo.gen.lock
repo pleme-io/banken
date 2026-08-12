@@ -5,7 +5,7 @@
     "Cargo.toml": "af024042da327de1315128e34e29c8fe38f2205a2d296e348ea538368aab94f5",
     "banken-config/Cargo.toml": "ad2de374a20edfaf584decc7ef42646b90e39a09fedbba54f24fd5aff8d2c4df",
     "banken-spec/Cargo.toml": "2e3390f4a2ef74b5c85792f176bc679e7e340f96600c6901afceb1063bd8798c",
-    "banken/Cargo.toml": "fa7ced9c4da60a28e3a34d65937c935b2aa1d29b8e126db35bc877fc38143045"
+    "banken/Cargo.toml": "19b5418e789ae81b1a2c54ec0f49ffd7d805200d2e35b24b4e3c359b80493d12"
   },
   "target_resolves": {
     "base": {
@@ -656,7 +656,7 @@
               "derive"
             ],
             "uses_default_features": true,
-            "optional": true,
+            "optional": false,
             "target": null,
             "tree": "target"
           },
@@ -666,7 +666,7 @@
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
-            "optional": true,
+            "optional": false,
             "target": null,
             "tree": "target"
           },

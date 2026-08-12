@@ -113,29 +113,80 @@ hard half; the remaining half is delivery.
 - **Done-predicate:** scaling a Deployment in banken produces a reviewed commit,
   and the operator watches the row move without leaving the tool.
 
-### Phase E — BREAK-GLASS becomes real
+### Phase E — BREAK-GLASS becomes real *(the ledger half SHIPPED 2026-08-12)*
 
 `exec` and `port-forward` are what pull people back to `kubectl`. banken should
 have them — as witnessed actions, which is precisely the design's strength.
 
-- `exec` opens through the existing `(defbancada)` session handoff into
-  tear/mado, so the terminal is a real terminal and banken stays a navigator.
-- Every invocation writes a `GlassRecord` before the session opens, not after.
-- **Done-predicate:** a witnessed record exists for every break-glass, and the
-  record is written on the failing path too.
+**SHIPPED — the record.** `crate::glass` is a write-ahead, fsynced, append-only
+ledger, and `KubeClusterEnv::break_glass` writes to it. The ordering is a
+signature rather than a convention: `GlassLedger::record` is the *only*
+constructor of `Witnessed`, and `open_witnessed_session` takes `&Witnessed`, so
+opening a break-glass session before the record is durable has no code path.
+Tier: parse-time-rejected within the crate (the field is private and there is no
+`Default`), **not** unrepresentable fleet-wide — an author editing `glass.rs`
+could add a second constructor.
 
-### Phase F — the agent surface *(differentiator #2, the biggest)*
+The failing path is covered by construction rather than by remembering to log:
+the record is written *before* the effect, so an effect that fails, hangs, or
+kills the process cannot leave an unrecorded break-glass. A crash between the
+two leaves a record of something that may not have happened — over-recording,
+the safe direction. `GlassLedger::unresolved()` surfaces exactly those.
+
+Red-run 2026-08-12: removing the append turned 8 of the 14 ledger tests red,
+including both load-bearing ones, so the suite is not blind.
+
+The ledger is also exposed on the MCP surface as `banken_glass_ledger` —
+**read-only**. Reading the audit trail is an OBSERVE and often the missing half
+of a triage ("a human exec'd into this pod twenty minutes ago" explains a state
+no other read can), while `break_glass` itself stays absent from that surface.
+
+**REMAINING — the effect.** `exec` should open through the `(defbancada)`
+handoff into tear/mado, so the terminal is a real terminal and banken stays a
+navigator. `open_witnessed_session` is the arm and is wired; what is missing is
+the TUI chord that builds the plan and the resolve-on-exit call.
+`pending-banken: break-glass-exec-chord`.
+
+- **Done-predicate:** a witnessed record exists for every break-glass, and the
+  record is written on the failing path too. **MET for the record half; the
+  effect half is not yet reachable from the TUI.**
+
+### Phase F — the agent surface *(differentiator #2, the biggest)* — **SHIPPED 2026-08-12**
 
 An MCP server over the same postigo gate. This is the item with no competitor.
 
-- OBSERVE tools map to the read seam; DECLARE returns a proposed manifest and a
-  PR; BREAK-GLASS requires an explicit witness argument or refuses.
-- The agent cannot exceed the human because it goes through the same enum. Not
-  "we prompt the agent not to" — there is no tool that mutates.
-- Pairs with the fleet's agentic-observability doctrine: an agent has no
-  preattentive vision, so a typed catalog of queries beats a dashboard.
+`banken mcp --context <name>` (or `--fixture`) serves eight OBSERVE tools over
+stdio: `capabilities`, `views`, `list`, `get`, `logs`, `events`, `readiness`,
+`glass_ledger`. Every one calls a method on `ClusterEnv`, which has no
+unwitnessed-mutate method — so there is no `delete`/`apply`/`scale`/`exec` tool
+to call, and `no_mutating_tool_exists` asserts that against the live router
+rather than against the source.
+
+DECLARE and BREAK-GLASS are **absent, and `banken_capabilities` says so and says
+why.** A DECLARE's honest MCP shape returns a proposed manifest and a branch,
+which is the half Phase D still owes; a break-glass record NAMES the operator
+who authorised it, and inventing a witness so a tool signature type-checks would
+make the record a lie. `pending-banken: mcp-declare` / `mcp-break-glass`. That
+is a narrower surface than this phase originally scoped ("DECLARE returns a
+proposed manifest and a PR; BREAK-GLASS requires an explicit witness argument"),
+and the narrowing is deliberate — both wait on work that has not landed rather
+than shipping a shape that would mislead.
+
+Two invariants worth carrying forward, both found by probing the running server
+rather than by reading the code:
+
+- **`banken mcp` refuses to guess its estate**, which is *stricter* than the
+  TUI. The TUI answers an unnamed run by opening the picker; an MCP server has
+  neither a screen to draw one on nor a human to answer it, so riding
+  `current-context` would serve some other estate's rows to a reader with no way
+  to notice.
+- **A refusal is never shaped like an empty result.** To an agent, `[]` and
+  "I could not look" are opposite claims, and a triage that concludes "the
+  deployment is gone" from a credential expiry is worse than one that stops.
+
 - **Done-predicate:** an agent can triage a failing workload end to end and
-  *cannot* fix it live — only propose a change.
+  *cannot* fix it live — only propose a change. **MET**, verified against a real
+  MCP client over stdio (initialize → tools/list → tools/call).
 
 ### Phase G — fleet convergence
 

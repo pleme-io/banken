@@ -111,6 +111,13 @@ pub mod live;
 #[cfg(feature = "live")]
 pub mod picker;
 
+/// glass — the break-glass ledger, written BEFORE the glass breaks.
+///
+/// Not feature-gated: the durable record is the whole claim BREAK-GLASS makes,
+/// so a build in which it is absent is a build whose witnessed path is not
+/// witnessed.
+pub mod glass;
+
 #[cfg(feature = "tear")]
 pub mod tear_session;
 

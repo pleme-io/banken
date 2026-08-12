@@ -170,11 +170,15 @@ tear-types = { version = "0.1", optional = true }
 # already unreachable. Revisit as a scoped rmcp 1.x migration across every
 # fleet MCP server at once, not as a security fix here.
 rmcp = { version = "0.15", features = ["server", "transport-io"], optional = true }
-# `derive` for the tool-input structs; rmcp's `#[tool]` needs `Deserialize`
-# plus a `schemars::JsonSchema` to publish each tool's parameter schema.
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
 schemars = { version = "1", optional = true }
+
+# NOT optional, and not only for the MCP surface: `crate::glass` serializes the
+# break-glass ledger, and that ledger is the durable half of the one witnessed
+# live-effect path banken has. A feature flag on it would mean a build in which
+# a break-glass leaves no record — which is the exact state the ledger exists to
+# make impossible, so it may not be a build option.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [features]
 # `live` is ON by default (2026-08-07). It was off, and the stated reason —
@@ -220,7 +224,7 @@ tear = ["dep:tear-client", "dep:tear-types"]
 # failed read. A build without it would have to answer readiness with a
 # placeholder, and a placeholder here is exactly the lie the tool exists to
 # prevent.
-mcp = ["live", "dep:rmcp", "dep:serde", "dep:serde_json", "dep:schemars"]
+mcp = ["live", "dep:rmcp", "dep:schemars"]
 
 [lints.clippy]
 pedantic = "warn"
