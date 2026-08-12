@@ -187,21 +187,21 @@ impl PodTable {
                     "view `",
                     view_name,
                     "` reads composed health signals, not a resource kind, so it has no                      resource table",
-                ))
+                ));
             }
             ViewSource::Topology => {
                 return Err(binding_error(
                     "view `",
                     view_name,
                     "` reads a dependency topology, not a resource kind, so it has no                      resource table",
-                ))
+                ));
             }
             ViewSource::Host => {
                 return Err(binding_error(
                     "view `",
                     view_name,
                     "` reads the HOST, which is served by host::HostEnv rather than a                      ClusterEnv resource list — no host table renderer exists yet",
-                ))
+                ));
             }
         };
 

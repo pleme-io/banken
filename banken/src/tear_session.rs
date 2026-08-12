@@ -504,14 +504,7 @@ mod tests {
     /// `execvp`. This is what `pending-banken: tear-argv-spawn` bought.
     #[test]
     fn a_read_pane_is_spawned_as_its_own_argv_not_typed_into_a_shell() {
-        let cmd = observed(&[
-            "kubectl",
-            "--context",
-            "alpha-eks",
-            "logs",
-            "-f",
-            "catch-0",
-        ]);
+        let cmd = observed(&["kubectl", "--context", "alpha-eks", "logs", "-f", "catch-0"]);
         let (prog, args) = program_of(PaneProgram::Observe(&cmd), "/bin/zsh")
             .expect("a resolved read pane spawns");
         assert_eq!(prog, "kubectl", "argv[0] IS the program tear spawns");

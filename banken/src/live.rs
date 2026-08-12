@@ -639,7 +639,10 @@ impl KubeClusterEnv {
             Err(e) => {
                 let code = Self::api_status(&e);
                 if code == Some(403) {
-                    Standing::stopped(Rung::Identity, "authenticated, but not allowed to list pods")
+                    Standing::stopped(
+                        Rung::Identity,
+                        "authenticated, but not allowed to list pods",
+                    )
                 } else {
                     let mut m = String::from("authenticated; the pod list failed: ");
                     m.push_str(&e.to_string());
@@ -1009,7 +1012,14 @@ fn age_cell(created: Option<&k8s_openapi::apimachinery::pkg::apis::meta::v1::Tim
 ///
 /// `None` for an object carrying no `metadata.uid` — see [`pod_to_row`] for
 /// why that is a refusal rather than a synthesised identity.
-fn row_head<K: kube::Resource>(o: &K) -> Option<(banken_spec::env::Uid, String, Option<String>, Option<String>)> {
+fn row_head<K: kube::Resource>(
+    o: &K,
+) -> Option<(
+    banken_spec::env::Uid,
+    String,
+    Option<String>,
+    Option<String>,
+)> {
     let m = o.meta();
     let uid = banken_spec::env::Uid::new(m.uid.clone().unwrap_or_default())?;
     Some((
@@ -1065,11 +1075,7 @@ fn service_to_row(s: k8s_openapi::api::core::v1::Service) -> Option<Row> {
 
 fn deployment_to_row(d: k8s_openapi::api::apps::v1::Deployment) -> Option<Row> {
     let st = d.status.as_ref();
-    let desired = d
-        .spec
-        .as_ref()
-        .and_then(|s| s.replicas)
-        .unwrap_or(0);
+    let desired = d.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
     let ready = st.and_then(|s| s.ready_replicas).unwrap_or(0);
     let up_to_date = st.and_then(|s| s.updated_replicas).unwrap_or(0);
     let available = st.and_then(|s| s.available_replicas).unwrap_or(0);
@@ -1104,7 +1110,9 @@ fn configmap_to_row(c: k8s_openapi::api::core::v1::ConfigMap) -> Option<Row> {
     // recording. The count answers "is it populated"; `:describe` is the
     // deliberate act that shows content.
     let keys = c.data.as_ref().map_or(0, std::collections::BTreeMap::len)
-        + c.binary_data.as_ref().map_or(0, std::collections::BTreeMap::len);
+        + c.binary_data
+            .as_ref()
+            .map_or(0, std::collections::BTreeMap::len);
     row_of(&c, vec![("keys".into(), keys.to_string())])
 }
 
@@ -1408,9 +1416,7 @@ impl ClusterEnv for KubeClusterEnv {
         use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Namespace, Node, Service};
         match kind {
             ResourceKind::Pod => self.block(self.list_pods(ns)),
-            ResourceKind::Service => {
-                self.block(self.list_ns_scoped::<Service>(ns, service_to_row))
-            }
+            ResourceKind::Service => self.block(self.list_ns_scoped::<Service>(ns, service_to_row)),
             ResourceKind::ConfigMap => {
                 self.block(self.list_ns_scoped::<ConfigMap>(ns, configmap_to_row))
             }
@@ -1429,9 +1435,8 @@ impl ClusterEnv for KubeClusterEnv {
                 self.block(self.list_cluster_scoped::<Namespace>(namespace_to_row))
             }
             ResourceKind::Node => self.block(self.list_cluster_scoped::<Node>(node_to_row)),
-            ResourceKind::Event => self.block(
-                self.list_ns_scoped::<k8s_openapi::api::core::v1::Event>(ns, event_to_row),
-            ),
+            ResourceKind::Event => self
+                .block(self.list_ns_scoped::<k8s_openapi::api::core::v1::Event>(ns, event_to_row)),
         }
     }
 
@@ -1468,9 +1473,7 @@ impl ClusterEnv for KubeClusterEnv {
             ResourceKind::Namespace => {
                 self.block(self.get_cluster_scoped::<Namespace>(name, namespace_to_row))
             }
-            ResourceKind::Node => {
-                self.block(self.get_cluster_scoped::<Node>(name, node_to_row))
-            }
+            ResourceKind::Node => self.block(self.get_cluster_scoped::<Node>(name, node_to_row)),
             ResourceKind::Event => self.block(
                 self.get_ns_scoped::<k8s_openapi::api::core::v1::Event>(name, ns, event_to_row),
             ),
@@ -1501,7 +1504,6 @@ impl ClusterEnv for KubeClusterEnv {
     fn events(&self, ns: Option<&str>) -> Result<Vec<Event>, SpecError> {
         self.block(self.list_events(ns))
     }
-
 
     fn topology(&self, _root: &ResourceRef) -> Result<DepTree, SpecError> {
         Err(SpecError::Interp {

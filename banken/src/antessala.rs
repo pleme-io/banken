@@ -417,7 +417,13 @@ impl ConnectingScreen {
         // the block into a paragraph, and the point of the block is that the
         // eye lands on the single line that is currently true.
         if live {
-            x = buf.set_stringn(x, y, &pad_to(stage.label(), 16), width.saturating_sub(x), Style::default());
+            x = buf.set_stringn(
+                x,
+                y,
+                &pad_to(stage.label(), 16),
+                width.saturating_sub(x),
+                Style::default(),
+            );
             x = buf.set_stringn(
                 x,
                 y,
@@ -609,7 +615,11 @@ mod tests {
         tx.reached(Stage::Credentials);
         s.tick();
         let frame = frame_of(&s);
-        assert_eq!(frame.matches('✓').count(), 2, "kubeconfig + configuration: {frame}");
+        assert_eq!(
+            frame.matches('✓').count(),
+            2,
+            "kubeconfig + configuration: {frame}"
+        );
         assert!(frame.contains('·'), "apiserver is still pending: {frame}");
     }
 
@@ -695,7 +705,10 @@ mod tests {
         assert!(caught.is_err(), "the panic really happened");
         s.tick();
         assert_eq!(s.stage(), Stage::Settled);
-        assert!(s.should_quit(), "and the operator is not stranded on a spinner");
+        assert!(
+            s.should_quit(),
+            "and the operator is not stranded on a spinner"
+        );
     }
 
     /// **The wait covers the FIRST READ, not just the connect.** Measured: the

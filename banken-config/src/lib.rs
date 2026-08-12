@@ -85,9 +85,7 @@ pub const DEFAULT_PICKER_STANCE: PickerStance = PickerStance::Normal;
 /// use site converts. An unknown spelling has no typed value, so
 /// `:picker-stance "norml"` is refused when the form compiles rather than
 /// falling back to a default nobody chose.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PickerStance {
     /// Navigate first; `i` starts typing. The prescribed default.

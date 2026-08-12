@@ -365,14 +365,11 @@ impl ContextPicker {
     /// cadence, so the picker keeps painting through a transition even after
     /// the round itself has settled.
     fn lights_settled(&self) -> bool {
-        self.ronda
-            .positions()
-            .into_iter()
-            .all(|(name, target)| {
-                self.lights
-                    .get(&name)
-                    .is_some_and(|l| (l - target).abs() <= 0.004)
-            })
+        self.ronda.positions().into_iter().all(|(name, target)| {
+            self.lights
+                .get(&name)
+                .is_some_and(|l| (l - target).abs() <= 0.004)
+        })
     }
 
     /// How long to wait before repainting, or `None` for "only on a key".
@@ -1638,11 +1635,7 @@ mod tests {
         for (stance, actions) in [
             (
                 "NORMAL",
-                vec![
-                    PickerAction::Up,
-                    PickerAction::Down,
-                    PickerAction::Accept,
-                ],
+                vec![PickerAction::Up, PickerAction::Down, PickerAction::Accept],
             ),
             (
                 "INSERT",
@@ -1767,8 +1760,16 @@ mod tests {
                 .unwrap_or_else(|| panic!("no row for {name}"))
                 .clone()
         };
-        assert!(row("alpha-eks").contains(Rung::Pods.marker()), "{}", row("alpha-eks"));
-        assert!(row("bravo").contains(Rung::Down.marker()), "{}", row("bravo"));
+        assert!(
+            row("alpha-eks").contains(Rung::Pods.marker()),
+            "{}",
+            row("alpha-eks")
+        );
+        assert!(
+            row("bravo").contains(Rung::Down.marker()),
+            "{}",
+            row("bravo")
+        );
         // Not looked at yet, and saying so — never silently optimistic.
         assert!(
             row("jaeger-dev").contains(Rung::Unknown.marker()),
@@ -1807,7 +1808,11 @@ mod tests {
             p.ease_lights();
             seen.push(p.lights.get("alpha-eks").copied().expect("a light"));
         }
-        assert!(seen[0] > 0.0 && seen[0] < 1.0, "it moved, partway: {}", seen[0]);
+        assert!(
+            seen[0] > 0.0 && seen[0] < 1.0,
+            "it moved, partway: {}",
+            seen[0]
+        );
         assert!(
             seen.windows(2).all(|w| w[1] >= w[0]),
             "and only ever upward: {seen:?}",

@@ -660,7 +660,12 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             Ok(t) => {
                 self.table = t;
                 self.view_name = name.to_owned();
-                self.bancadas = self.catalog.bancadas_from(name).into_iter().cloned().collect();
+                self.bancadas = self
+                    .catalog
+                    .bancadas_from(name)
+                    .into_iter()
+                    .cloned()
+                    .collect();
                 true
             }
             Err(e) => {
@@ -2743,11 +2748,7 @@ mod prompt_tests {
         a.type_char('/');
         a.apply_action(Action::Confirm);
         assert_eq!(a.filter(), "");
-        assert_eq!(
-            a.table.view().rows().len(),
-            all,
-            "and every row came back",
-        );
+        assert_eq!(a.table.view().rows().len(), all, "and every row came back",);
     }
 
     /// The prompt owns the status line while it is open — it is the only

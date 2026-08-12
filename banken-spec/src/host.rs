@@ -170,7 +170,6 @@ pub trait HostEnv {
     fn top_processes(&self, limit: usize) -> Result<ProcessTable, SpecError>;
 }
 
-
 /// A live [`HostEnv`] backed by `sysinfo`.
 ///
 /// The counters here are the same ones `pleme-io/tear` reads in its
@@ -265,7 +264,11 @@ pub fn rank(mut rows: Vec<ProcessReading>, limit: usize) -> ProcessTable {
     }
     rows.truncate(limit);
     ProcessTable {
-        ranked_by: if cpu_usable { RankedBy::Cpu } else { RankedBy::RssFallback },
+        ranked_by: if cpu_usable {
+            RankedBy::Cpu
+        } else {
+            RankedBy::RssFallback
+        },
         rows,
     }
 }
@@ -317,8 +320,14 @@ mod tests {
     /// the number is unreadable, which is why `cpu_cores` is not optional.
     #[test]
     fn load_is_only_meaningful_against_the_core_count() {
-        let small = HostReading { cpu_cores: 2, ..reading() };
-        let big = HostReading { cpu_cores: 32, ..reading() };
+        let small = HostReading {
+            cpu_cores: 2,
+            ..reading()
+        };
+        let big = HostReading {
+            cpu_cores: 32,
+            ..reading()
+        };
         assert_eq!(small.load_per_core(), Some(2.0), "saturated");
         assert_eq!(big.load_per_core(), Some(0.125), "idle");
         // Same raw load, opposite conclusions.
@@ -327,7 +336,11 @@ mod tests {
 
     #[test]
     fn a_zero_denominator_yields_none_rather_than_a_divide() {
-        let r = HostReading { cpu_cores: 0, mem_total_bytes: 0, ..reading() };
+        let r = HostReading {
+            cpu_cores: 0,
+            mem_total_bytes: 0,
+            ..reading()
+        };
         assert_eq!(r.load_per_core(), None);
         assert_eq!(r.mem_fraction(), None);
     }
@@ -339,7 +352,10 @@ mod tests {
     #[test]
     fn absent_swap_is_not_zero_swap() {
         assert_eq!(reading().swap_used_bytes, None);
-        let swapped = HostReading { swap_used_bytes: Some(0), ..reading() };
+        let swapped = HostReading {
+            swap_used_bytes: Some(0),
+            ..reading()
+        };
         assert_ne!(swapped.swap_used_bytes, reading().swap_used_bytes);
     }
 
@@ -356,7 +372,11 @@ mod tests {
             processes: vec![p(1, "idle", 0.5), p(2, "hot", 190.0), p(3, "warm", 40.0)],
         };
         let top = env.top_processes(2).unwrap();
-        assert_eq!(top.ranked_by, RankedBy::Cpu, "CPU was readable, so it must be used");
+        assert_eq!(
+            top.ranked_by,
+            RankedBy::Cpu,
+            "CPU was readable, so it must be used"
+        );
         assert_eq!(top.rows.len(), 2, "the limit is respected");
         assert_eq!(top.rows[0].name, "hot", "ranked by CPU descending");
         assert_eq!(top.rows[1].name, "warm");
@@ -386,14 +406,26 @@ mod tests {
             r.swap_used_bytes,
             r.processes
         );
-        assert!(r.cpu_cores > 0, "0 cores means the read failed, not a coreless machine");
-        assert!(r.mem_total_bytes > 0, "0 total memory is not a real reading");
+        assert!(
+            r.cpu_cores > 0,
+            "0 cores means the read failed, not a coreless machine"
+        );
+        assert!(
+            r.mem_total_bytes > 0,
+            "0 total memory is not a real reading"
+        );
         assert!(r.processes > 0, "a machine running this test has processes");
 
         let top = env.top_processes(5).expect("processes");
         println!("   ranked_by: {:?}", top.ranked_by);
         for p in &top.rows {
-            println!("   {:>7} {:<24} cpu {:>6.1}%  rss {} MB", p.pid, p.name, p.cpu_pct, p.rss_bytes / 1_048_576);
+            println!(
+                "   {:>7} {:<24} cpu {:>6.1}%  rss {} MB",
+                p.pid,
+                p.name,
+                p.cpu_pct,
+                p.rss_bytes / 1_048_576
+            );
         }
         assert!(!top.rows.is_empty(), "no processes returned");
         // The table must NAME what it ranked by. On macOS every cpu_usage() is
@@ -424,7 +456,11 @@ mod tests {
             rss_bytes: rss,
         };
         let t = rank(vec![p(1, "small", 0.0, 10), p(2, "big", 0.0, 999)], 5);
-        assert_eq!(t.ranked_by, RankedBy::RssFallback, "no usable CPU, so say RSS");
+        assert_eq!(
+            t.ranked_by,
+            RankedBy::RssFallback,
+            "no usable CPU, so say RSS"
+        );
         assert_eq!(t.rows[0].name, "big", "and actually sort by it");
 
         // One non-zero reading is enough to make CPU the honest metric.
@@ -435,7 +471,10 @@ mod tests {
 
     #[test]
     fn a_limit_larger_than_the_process_list_is_not_an_error() {
-        let env = MockHostEnv { reading: reading(), processes: Vec::new() };
+        let env = MockHostEnv {
+            reading: reading(),
+            processes: Vec::new(),
+        };
         assert_eq!(env.top_processes(10).unwrap().rows.len(), 0);
     }
 }

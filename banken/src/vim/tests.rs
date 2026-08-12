@@ -320,7 +320,11 @@ fn the_caret_after_an_erase_obeys_the_stance() {
     let mut v = Vim::opening_in(Stance::Insert);
     let mut q = at("alpha beta", 10);
     v.stroke(Stroke::EraseWordBack, &mut q);
-    assert_eq!((q.text(), q.caret()), ("alpha ", 6), "Insert rests at the end");
+    assert_eq!(
+        (q.text(), q.caret()),
+        ("alpha ", 6),
+        "Insert rests at the end"
+    );
 
     let mut v = Vim::opening_in(Stance::Normal);
     let mut q = at("alpha beta", 10);
