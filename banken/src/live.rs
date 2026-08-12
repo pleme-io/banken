@@ -1528,13 +1528,55 @@ impl ClusterEnv for KubeClusterEnv {
         })
     }
 
+    /// Open a branch, write the whole manifest, and open a pull request.
+    ///
+    /// Never an apply. banken mutates git; a reconciler converges the cluster,
+    /// which is what makes the change reviewable and revertable by
+    /// construction. See [`crate::declare`] for the plan's three refusals and
+    /// why the head branch is content-addressed.
+    ///
+    /// # Where the repository comes from
+    ///
+    /// `BANKEN_GITOPS_REPO` (`owner/name`) and `BANKEN_GITOPS_BASE` (default
+    /// `main`). Environment rather than a config field for now because the
+    /// answer is genuinely per-estate and banken has no typed fleet map to
+    /// derive it from — `pending-banken: declare-repo-from-fleet-map`. A
+    /// missing value REFUSES rather than defaulting: a DECLARE opened against
+    /// a guessed repository is a PR that looks correct and reconciles nothing.
+    ///
+    /// # Errors
+    ///
+    /// `SpecError::Interp { phase: "declare" }` when the repository is not
+    /// configured, the rail cannot be routed, the plan is refused, or the forge
+    /// rejects a step.
+    #[cfg(feature = "gitops")]
+    fn declare(&self, change: DeclareChange) -> Result<ChangeRef, SpecError> {
+        let repo = std::env::var("BANKEN_GITOPS_REPO").map_err(|_| SpecError::Interp {
+            phase: "declare".into(),
+            message: "BANKEN_GITOPS_REPO is unset (expects `owner/name`) — banken \
+                      will not guess which repository owns this resource, because \
+                      a PR opened against the wrong one looks correct and \
+                      reconciles nothing"
+                .into(),
+        })?;
+        let base = std::env::var("BANKEN_GITOPS_BASE").unwrap_or_else(|_| "main".into());
+        let route = crate::declare::route_for(&change.target, &repo, &base)?;
+        let plan = crate::declare::DeclarePlan::new(route, &change)?;
+        let forge = crate::declare::GitHubForge::from_env()?;
+        crate::declare::submit(&forge, &plan)
+    }
+
+    /// The refusal when the forge was not compiled in.
+    ///
+    /// Typed, and it names the flag — never a silent live effect, and never a
+    /// success that wrote nothing.
+    #[cfg(not(feature = "gitops"))]
     fn declare(&self, _change: DeclareChange) -> Result<ChangeRef, SpecError> {
-        // DECLARE opens a branch+PR against the release.yaml owner (M3,
-        // never direct-to-main). Not wired here; a typed error, never a
-        // silent live effect.
         Err(SpecError::Interp {
             phase: "declare".into(),
-            message: "DECLARE branch+PR flow is M3 (pending-banken: declare-rail)".into(),
+            message: "this binary was built without `--features gitops`, so there \
+                      is no forge to open a pull request against"
+                .into(),
         })
     }
 

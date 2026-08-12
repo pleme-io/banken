@@ -191,6 +191,17 @@ tear-types = { version = "0.1", optional = true }
 rmcp = { version = "1", features = ["server", "transport-io"], optional = true }
 schemars = { version = "1", optional = true }
 
+# ── DECLARE's delivery half (`crate::declare`). ────────────────────
+# The fleet's established GitHub client (caixa-ratatui, convergence-controller,
+# estante, narsil-mcp, retirada-ci-watch) — idiom-first, not a fresh choice.
+#
+# octocrab over `gix` deliberately: a DECLARE needs no working tree. create-ref,
+# put-contents and create-pull are three HTTP calls against a repository banken
+# never clones, on a machine that may not have room for it. A cluster navigator
+# is not a git client. And the NO-SHELL law rules out `git`/`gh` subprocesses
+# either way.
+octocrab = { version = "0.47", optional = true }
+
 # NOT optional, and not only for the MCP surface: `crate::glass` serializes the
 # break-glass ledger, and that ledger is the durable half of the one witnessed
 # live-effect path banken has. A feature flag on it would mean a build in which
@@ -226,7 +237,7 @@ serde_json = "1"
 # off by default is structurally absent from `pkgs.banken`. Every dep it turns
 # on (rmcp / serde / serde_json / schemars) is a registry dep, so the crates.io
 # release shape is unchanged.
-default = ["live", "tear", "mcp"]
+default = ["live", "tear", "mcp", "gitops"]
 # Compile the KubeClusterEnv live-read backend. Heavy dep tree (kube +
 # k8s-openapi + rustls).
 live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow", "dep:rustls", "dep:futures", "dep:http"]
@@ -244,6 +255,11 @@ tear = ["dep:tear-client", "dep:tear-types"]
 # placeholder, and a placeholder here is exactly the lie the tool exists to
 # prevent.
 mcp = ["live", "dep:rmcp", "dep:schemars"]
+# Compile the real DECLARE forge — branch + full manifest + pull request over
+# the GitHub API. The typed plan, its refusals and the `DeclareEnv` seam are
+# unconditional; only the network-facing impl is behind this, so the whole
+# submit path stays testable against a mock in every build.
+gitops = ["dep:octocrab", "dep:http"]
 
 [lints.clippy]
 pedantic = "warn"

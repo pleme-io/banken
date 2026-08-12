@@ -112,6 +112,13 @@ pub mod live;
 #[cfg(feature = "live")]
 pub mod picker;
 
+/// declare — a DECLARE becomes a branch, a full manifest, and a pull request.
+///
+/// The delivery half of the postigo gate's git-mutating class: banken writes
+/// git and a reconciler converges the cluster, so a change is reviewable and
+/// revertable by construction rather than by policy.
+pub mod declare;
+
 /// palette — the fleet's colours, for the places that genuinely need RGB.
 ///
 /// Deliberately narrow: named ANSI slots stay slots so the operator's own
