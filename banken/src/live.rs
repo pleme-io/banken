@@ -967,6 +967,13 @@ fn pod_to_row(pod: Pod) -> Option<Row> {
     })
 }
 
+/// How many log lines a single read may pull.
+///
+/// A pod up for a week can hold hundreds of megabytes; a navigator that pulls
+/// all of it to render one pane has turned a keystroke into an outage. This is
+/// `kubectl logs --tail`'s own default order of magnitude.
+const LOG_TAIL_LINES: i64 = 500;
+
 /// `AGE`, k8s-style, from a creation timestamp.
 ///
 /// This column rendered `-` on every row since the live backend landed, with
@@ -1233,6 +1240,45 @@ impl KubeClusterEnv {
         })
     }
 
+    /// A pod's logs, materialized.
+    ///
+    /// # `follow` is accepted and NOT honoured, and that is reported
+    ///
+    /// [`LogStream`] is a `Vec<String>` — a materialized snapshot with no
+    /// channel to push later lines down. Honouring `follow` here would mean
+    /// blocking the caller forever inside a function that returns a Vec, so
+    /// what this does is take the tail once and set `follow: false` on the
+    /// result. The caller can therefore SEE that it did not get a follow,
+    /// rather than holding a stream that silently never updates.
+    ///
+    /// `pending-banken: follow-logs` — a real follow needs the streaming seam
+    /// [`crate::absorb`] already models for pods, and that is the shape to
+    /// reuse rather than a second one invented here.
+    async fn tail_logs(&self, pod: &str, ns: &str) -> Result<LogStream, SpecError> {
+        use k8s_openapi::api::core::v1::Pod;
+        let api: Api<Pod> = Api::namespaced(self.client.clone(), ns);
+        // Bounded: a pod that has been up for a week can hold hundreds of
+        // megabytes, and a navigator that pulls all of it to render one pane
+        // has turned a keystroke into an outage.
+        let params = kube::api::LogParams {
+            tail_lines: Some(LOG_TAIL_LINES),
+            ..Default::default()
+        };
+        let text = api
+            .logs(pod, &params)
+            .await
+            .map_err(|e| SpecError::Interp {
+                phase: "logs".into(),
+                message: Self::error_chain(&e),
+            })?;
+        Ok(LogStream {
+            pod: pod.to_owned(),
+            lines: text.lines().map(str::to_owned).collect(),
+            // Never claim a follow that is not happening — see above.
+            follow: false,
+        })
+    }
+
     /// Cluster events, newest last (the apiserver's own order).
     async fn list_events(&self, ns: Option<&str>) -> Result<Vec<Event>, SpecError> {
         use k8s_openapi::api::core::v1::Event as K8sEvent;
@@ -1431,13 +1477,23 @@ impl ClusterEnv for KubeClusterEnv {
         }
     }
 
-    fn logs(&self, _pod: &str, _ns: &str, _follow: bool) -> Result<LogStream, SpecError> {
-        // KubeClient has no `log` method (BANKEN.md §II); the interim log
-        // source is the kubernetes MCP. Surface the gap, never a fake tail.
-        Err(SpecError::Interp {
-            phase: "logs".into(),
-            message: "live logs via the kubernetes MCP (pending-banken: native-logs)".into(),
-        })
+    /// A pod's logs, read natively — no `kubectl`, no MCP hop.
+    ///
+    /// The previous body refused with "live logs via the kubernetes MCP",
+    /// which was true when `kube`'s log API was not wired; it is, so the
+    /// refusal outlived its own reason. `follow` is accepted and reported as
+    /// not honoured — see [`Self::tail_logs`].
+    fn logs(&self, pod: &str, ns: &str, follow: bool) -> Result<LogStream, SpecError> {
+        let mut stream = self.block(self.tail_logs(pod, ns))?;
+        if follow {
+            // Said once, in the data, rather than pretended: the caller asked
+            // for a follow and got a snapshot.
+            stream.lines.push(
+                "— follow not yet wired (pending-banken: follow-logs); this is a snapshot —"
+                    .to_owned(),
+            );
+        }
+        Ok(stream)
     }
 
     /// Cluster events — the first place an operator looks when a pod will
