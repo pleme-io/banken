@@ -11,7 +11,7 @@
 ;; `TableRow::identity()`, and banken's identity is the object UID (the `Grip`
 ;; seal: an act must address an object across delete-and-recreate). A NAME
 ;; column on the reserved field therefore draws a uid — measured 2026-08-09
-;; against camelot-eks, 69 rows of `10a69bf6-b039-…`. `object-name` is an
+;; against alpha-eks, 69 rows of `10a69bf6-b039-…`. `object-name` is an
 ;; ordinary field, so it projects through `Row::cell` and renders the name.
 ;; See `banken_spec::env::DISPLAY_NAME_FIELD`.
 

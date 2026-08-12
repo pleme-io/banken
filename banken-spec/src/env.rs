@@ -92,7 +92,7 @@ impl std::fmt::Display for Uid {
 /// where an act must address an object across delete-and-recreate — so a NAME
 /// column on `IDENTITY_FIELD` draws a uid.
 ///
-/// Measured 2026-08-09 against `camelot-eks`: all 69 rows rendered
+/// Measured 2026-08-09 against `alpha-eks`: all 69 rows rendered
 /// `10a69bf6-b039-4731-8cce-28ed6e55c534` under `NAME`. Pointing the authored
 /// column at an ordinary field routes it through `cell`, which is the whole
 /// fix and needs no change to egaku — which banken must not make from this
@@ -126,7 +126,7 @@ pub struct Row {
     /// The object's `metadata.resourceVersion` at the moment it was observed.
     ///
     /// Opaque and **not orderable** — k8s only guarantees ordering from
-    /// apiserver 1.35, and `camelot-eks` is v1.33. Compare it for EQUALITY to
+    /// apiserver 1.35, and `alpha-eks` is v1.33. Compare it for EQUALITY to
     /// answer "has this object moved since I looked", never with `<`.
     pub version: Option<String>,
     /// Column-keyed cell values (`"READY" -> "1/1"`, …). Ordered so a
@@ -222,7 +222,7 @@ impl egaku::TableRow for Row {
         // `IDENTITY_FIELD` straight to `row.identity()` and never calls this
         // method for it (`egaku-0.1.5/src/table.rs:398-404`), so answering
         // `IDENTITY_FIELD` here fixed nothing on the render path — measured
-        // 2026-08-09 against camelot-eks, where every one of 69 rows drew its
+        // 2026-08-09 against alpha-eks, where every one of 69 rows drew its
         // uid. A column pointed at an ordinary field is projected through
         // `cell`, which is how the fix reaches the screen without banken
         // editing egaku from this repo. `pending-banken: egaku-identity-field-

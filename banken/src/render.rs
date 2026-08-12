@@ -35,7 +35,7 @@
 //! in a second place. Before this, banken drew rows from index 0 and stopped at
 //! the bottom edge: on a cluster with more pods than the terminal has rows,
 //! `j` moved the cursor **off screen** and the operator was navigating blind.
-//! That was a live bug against camelot-eks, not a hypothetical.
+//! That was a live bug against alpha-eks, not a hypothetical.
 //!
 //! # What was NOT taken, and why that is inert here
 //!
@@ -364,7 +364,7 @@ mod tests {
 
     /// **THE NAME GATE, and it is a REGRESSION gate measured on a real
     /// cluster.** The NAME column drew the object UID — 69 of 69 rows on
-    /// `camelot-eks`, `10a69bf6-b039-4731-8cce-28ed6e55c534` where the pod
+    /// `alpha-eks`, `10a69bf6-b039-4731-8cce-28ed6e55c534` where the pod
     /// name belonged — because the authored column pointed at
     /// `egaku::IDENTITY_FIELD`, which `TableView::project` short-circuits to
     /// `TableRow::identity()`, which banken defines as the uid (the `Grip`

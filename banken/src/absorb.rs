@@ -5,7 +5,7 @@
 //!
 //! # The measurement that motivates it
 //!
-//! Against `camelot-eks` on 2026-08-08, 191 pods:
+//! Against `alpha-eks` on 2026-08-08, 191 pods:
 //! `Api::list(&ListParams::default())` at `DEFAULT_POLL = 1s` moves **3,580,862
 //! bytes per tick** — 3.4 MiB/s decoded, 12 GiB/hour, **96 GiB per 8-hour day,
 //! per running instance**. A 30-second `watch` against the same cluster at the
@@ -649,7 +649,7 @@ mod identity_tests {
 ///
 /// # Why this is not merely a tuning knob
 ///
-/// Measured against `camelot-eks` (EKS v1.33) 2026-08-08: `Streaming` is what
+/// Measured against `alpha-eks` (EKS v1.33) 2026-08-08: `Streaming` is what
 /// makes the initial set arrive as one `Init`/`InitApply`*/`InitDone` series
 /// and publish ONCE (generation 1 for 83 pods) rather than buffering a whole
 /// list body server-side. But `kube-runtime`'s `ListWatch` path sends **zero**

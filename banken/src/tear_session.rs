@@ -76,7 +76,7 @@
 //! never open a session on the operator's daemon — was run against the live
 //! `tear-daemon` and asserted a real **three-pane** session whose first pane's
 //! *rendered grid* carries the pre-warmed
-//! `kubectl --context camelot-eks … <pod>` line. Fail-once measured: stubbing
+//! `kubectl --context alpha-eks … <pod>` line. Fail-once measured: stubbing
 //! [`TearSessionEnv::type_into`] to send zero bytes turns it red on exactly
 //! that assertion, so it is not checking a shape nothing can violate.
 //!
@@ -507,7 +507,7 @@ mod tests {
         let cmd = observed(&[
             "kubectl",
             "--context",
-            "camelot-eks",
+            "alpha-eks",
             "logs",
             "-f",
             "catch-0",
@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(prog, "kubectl", "argv[0] IS the program tear spawns");
         assert_eq!(
             args,
-            ["--context", "camelot-eks", "logs", "-f", "catch-0"],
+            ["--context", "alpha-eks", "logs", "-f", "catch-0"],
             "argv[1..] reaches execvp as a vector — no shell, so nothing is \
              joined into a command string",
         );

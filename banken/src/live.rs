@@ -1,10 +1,10 @@
 //! `KubeClusterEnv` — the live-cluster OBSERVE backend (BANKEN.md §VI M0
-//! destination-tier / §VII "M0 read for a rio cluster").
+//! destination-tier / §VII "M0 read for a bravo cluster").
 //!
 //! # Tier: PROVEN LIVE (measured 2026-07-31) — `pending-banken: live-read` CLOSED
 //!
 //! This backend's read path has been exercised against a real apiserver:
-//! `camelot-eks` (EKS v1.33, AWS SSO exec-credential auth) returned **109
+//! `alpha-eks` (EKS v1.33, AWS SSO exec-credential auth) returned **109
 //! pods**, matching `kubectl get pods -A` at the same moment, and those rows
 //! rendered through the full `PodTable` → `draw_pod_table` pipeline. Two
 //! independent runs, both recorded in the commit that closed the row:
@@ -13,7 +13,7 @@
 //!   with an assertion at each joint, ending on a golden-frame `TestBackend`
 //!   grid;
 //! - the **binary itself** in a real 120×28 PTY
-//!   (`banken --live --context camelot-eks`), snapshotted mid-run.
+//!   (`banken --live --context alpha-eks`), snapshotted mid-run.
 //!
 //! **What that measurement cost, and why it is the whole point of the row:**
 //! `--features live` had *compiled clean* for weeks while the first live read
@@ -159,8 +159,8 @@ pub enum ContextError {
     /// asks for a name, gets whichever file happened to sort first, and every
     /// row they read is real. Only the cluster is wrong.
     ///
-    /// Measured 2026-08-08: `engenho-local` named a local apiserver in one file
-    /// and `engenho-local.quero.cloud` in `~/.kube/config`. banken read the
+    /// Measured 2026-08-08: `charlie-local` named a local apiserver in one file
+    /// and `charlie-local.example.invalid` in `~/.kube/config`. banken read the
     /// remote one and looked entirely healthy doing it.
     Ambiguous {
         name: String,
@@ -557,6 +557,111 @@ impl KubeClusterEnv {
         })
     }
 
+    /// Climb the access ladder above [`crate::ronda::Rung::Network`] for one
+    /// context — the expensive half of a round.
+    ///
+    /// # Why the ladder is climbed with kube and not by hand
+    ///
+    /// The rungs above `Network` are TLS-against-the-cluster-CA, an apiserver
+    /// that speaks Kubernetes, an accepted identity, and permission to list
+    /// pods. Every one of those is something `kube` already does correctly,
+    /// including the parts that are easy to get subtly wrong — SNI, the CA
+    /// bundle, the exec credential protocol, token caching. Hand-rolling a
+    /// TLS handshake here to "probe more cheaply" would be a second, worse
+    /// implementation of the client banken already ships, and it would drift.
+    ///
+    /// So the climb is the real thing: build the real client, ask the real
+    /// apiserver, and **classify the failure** to learn which rung it stopped
+    /// at. That also means a green light is earned by doing exactly what the
+    /// navigator will do a moment later, rather than by a proxy for it.
+    ///
+    /// # What each rung costs
+    ///
+    /// `Client::try_from` runs the kubeconfig's exec credential helper. On an
+    /// EKS context that is an `aws eks get-token` subprocess and an STS
+    /// round-trip, which is why [`crate::ronda::DEEP_INTERVAL`] is minutes and
+    /// why callers gate this on the cheap probe having already succeeded.
+    ///
+    /// A `limit=1` list is deliberately the last step rather than a
+    /// `SelfSubjectAccessReview`: SSAR asks the cluster's opinion of a verb,
+    /// where this asks the actual question banken cares about and gets a real
+    /// answer from the real path. It reads one pod, so the cost does not grow
+    /// with the size of the estate.
+    #[must_use]
+    pub async fn climb(context: &str) -> crate::ronda::Standing {
+        use crate::ronda::{Rung, Standing};
+
+        ensure_crypto_provider();
+        let options = KubeConfigOptions {
+            context: Some(context.to_owned()),
+            ..Default::default()
+        };
+        let config = match Config::from_kubeconfig(&options).await {
+            Ok(c) => c,
+            Err(e) => {
+                return Standing::stopped(Rung::Network, Self::error_chain(&e));
+            }
+        };
+        // This is the line that spawns the credential helper.
+        let client = match Client::try_from(config) {
+            Ok(c) => c,
+            Err(e) => {
+                let mut m = String::from("credentials: ");
+                m.push_str(&Self::error_chain(&e));
+                return Standing::stopped(Rung::Network, m);
+            }
+        };
+
+        // Rung: does an apiserver answer, and does it accept the identity?
+        //
+        // A 401 is a SUCCESSFUL measurement of a lower rung, not an error to
+        // report as a failure: something Kubernetes-shaped answered and said
+        // "not you", which is strictly more than `Network` and strictly less
+        // than `Identity`.
+        match client.apiserver_version().await {
+            Ok(_) => {}
+            Err(e) => {
+                let code = Self::api_status(&e);
+                return if code == Some(401) {
+                    Standing::stopped(Rung::Serving, "apiserver answered 401 — identity rejected")
+                } else {
+                    let mut m = String::from("no apiserver answer: ");
+                    m.push_str(&e.to_string());
+                    Standing::stopped(Rung::Network, m)
+                };
+            }
+        }
+
+        // Rung: may this identity actually list pods here?
+        let api: Api<Pod> = Api::all(client);
+        match api.list(&ListParams::default().limit(1)).await {
+            Ok(_) => Standing::at(Rung::Pods),
+            Err(e) => {
+                let code = Self::api_status(&e);
+                if code == Some(403) {
+                    Standing::stopped(Rung::Identity, "authenticated, but not allowed to list pods")
+                } else {
+                    let mut m = String::from("authenticated; the pod list failed: ");
+                    m.push_str(&e.to_string());
+                    Standing::stopped(Rung::Identity, m)
+                }
+            }
+        }
+    }
+
+    /// The HTTP status an apiserver returned, when the error carries one.
+    ///
+    /// The distinction the ladder rests on: a transport error means banken
+    /// never got an answer, where a 401/403 means it got a very specific one.
+    /// Reading the code is what keeps "rejected" from being reported as
+    /// "unreachable".
+    fn api_status(e: &kube::Error) -> Option<u16> {
+        match e {
+            kube::Error::Api(response) => Some(response.code),
+            _ => None,
+        }
+    }
+
     /// The apiserver URL this env actually dialled, when it is known.
     ///
     /// A context NAME does not identify a cluster — two files in a `KUBECONFIG`
@@ -600,7 +705,7 @@ impl KubeClusterEnv {
     /// terminated by an `InitialEventsEnd` bookmark). The apiserver never
     /// buffers a whole list body, so the first row reaches the operator at the
     /// first streamed chunk instead of after a 2.0 s full-list round trip.
-    /// Verified serving on `camelot-eks` (v1.33) on 2026-08-08.
+    /// Verified serving on `alpha-eks` (v1.33) on 2026-08-08.
     ///
     /// # Why `default_backoff()` is not optional
     ///
@@ -691,7 +796,7 @@ impl KubeClusterEnv {
     /// The `Accept` header that asks for **aggregated** discovery.
     ///
     /// One request for the whole cluster's resource map, versus kube-rs's
-    /// `Discovery::run()` at N+2 sequential requests (68 against camelot-eks).
+    /// `Discovery::run()` at N+2 sequential requests (68 against alpha-eks).
     /// See `banken_spec::discovery` for why banken owns this at all.
     const AGGREGATED_DISCOVERY_ACCEPT: &'static str =
         "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList";
@@ -712,7 +817,7 @@ impl KubeClusterEnv {
     /// **TWO** requests, not one, and that is a fact about Kubernetes rather
     /// than a shortcoming here: the core group lives at `/api` and the named
     /// groups at `/apis`, and **`/apis` does not contain core at all**.
-    /// Measured against camelot-eks: `/apis` alone yields 53 groups in which
+    /// Measured against alpha-eks: `/apis` alone yields 53 groups in which
     /// `pods` resolves to `metrics.k8s.io/pods` — the wrong resource — and
     /// `po` does not resolve, because core's short names were never fetched.
     /// Still two requests against kube-rs's 68.
@@ -986,6 +1091,32 @@ mod tests {
         ContainerState, ContainerStateWaiting, ContainerStatus, PodStatus,
     };
 
+    /// Climb one context against the operator's REAL kubeconfig and print what
+    /// came back.
+    ///
+    /// `#[ignore]`d because it needs a machine with a kubeconfig, a network,
+    /// and possibly a live SSO session — a manual instrument, not a gate.
+    /// Kept rather than deleted because the ladder's entire value is that its
+    /// rungs match reality, and the only way to check that is against a real
+    /// estate:
+    ///
+    /// ```text
+    /// cargo test -p banken --lib -- --ignored --nocapture climb_against
+    /// BANKEN_CLIMB_CONTEXT=bravo cargo test … climb_against
+    /// ```
+    #[tokio::test]
+    #[ignore = "needs a real kubeconfig and network"]
+    async fn climb_against_the_real_kubeconfig() {
+        let context =
+            std::env::var("BANKEN_CLIMB_CONTEXT").unwrap_or_else(|_| "alpha-eks".to_owned());
+        let started = std::time::Instant::now();
+        let standing = KubeClusterEnv::climb(&context).await;
+        println!("context : {context}");
+        println!("elapsed : {:?}", started.elapsed());
+        println!("rung    : {:?} ({})", standing.rung, standing.rung.label());
+        println!("note    : {}", standing.note);
+    }
+
     fn pod_with(name: &str, phase: &str, waiting_reason: Option<&str>, ready: bool) -> Pod {
         let mut pod = Pod::default();
         // A real apiserver ALWAYS sets these two, so a test double that omits
@@ -1119,7 +1250,7 @@ mod tests {
     /// **THE gate.** Two files in the merge list declaring one context name is
     /// refused — never resolved first-wins.
     ///
-    /// This is the class that bit us for real on 2026-08-08: `engenho-local`
+    /// This is the class that bit us for real on 2026-08-08: `charlie-local`
     /// named a local apiserver in one file and a remote one in `~/.kube/config`,
     /// and banken read the remote cluster while looking perfectly healthy. The
     /// rows were real; only the cluster was wrong.

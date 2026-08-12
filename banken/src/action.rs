@@ -109,7 +109,7 @@ impl RowAction {
                 keys: ActionChord::shifted(Key::S),
                 legality: ActionLegality::BreakGlass {
                     witness: operator.clone(),
-                    runbook: RunbookRef("clusters/rio/RUNBOOK.md".into()),
+                    runbook: RunbookRef("clusters/bravo/RUNBOOK.md".into()),
                 },
                 manifest_scope: ManifestScope::Full,
             },
@@ -396,7 +396,7 @@ pub fn open_bancada<S: SessionEnv>(
     }
 }
 
-/// `"logs      [root ]  kubectl --context camelot-eks …"` — assembled by
+/// `"logs      [root ]  kubectl --context alpha-eks …"` — assembled by
 /// concatenation from typed pieces (★★ TYPED EMISSION), never a `format!()`
 /// of a layout template.
 fn render_pane(pane: &PlannedPane) -> String {

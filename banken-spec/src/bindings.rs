@@ -243,7 +243,7 @@ mod tests {
                 keys: ActionChord::shifted(Key::S),
                 legality: ActionLegality::BreakGlass {
                     witness: OperatorId::new("drzzln").expect("a literal witness is non-blank"),
-                    runbook: RunbookRef("clusters/rio/RUNBOOK.md".into()),
+                    runbook: RunbookRef("clusters/bravo/RUNBOOK.md".into()),
                 },
                 manifest_scope: ManifestScope::Full,
             },

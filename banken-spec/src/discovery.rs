@@ -14,7 +14,7 @@
 //!   proves the server sends. So `po` → pods is *not expressible* through
 //!   kube-rs's discovery API.
 //! - `kube-client` has **zero** aggregated-discovery support; its
-//!   `Discovery::run()` costs N+2 sequential requests (68 against camelot-eks)
+//!   `Discovery::run()` costs N+2 sequential requests (68 against alpha-eks)
 //!   where one aggregated GET returns 53 groups / 66 group-versions / 221
 //!   resources in 243,880 bytes.
 //! - `ApiResource::from_gvk` **guesses** the plural from a hardcoded
@@ -38,7 +38,7 @@
 //! # `pending-banken: alias-group-preference` — an open decision, not a bug
 //!
 //! Strict refusal is right for a *genuine* collision and may be too strict for
-//! the common one. Measured on camelot-eks: `pods` is served by **core/v1 AND
+//! the common one. Measured on alpha-eks: `pods` is served by **core/v1 AND
 //! `metrics.k8s.io/v1beta1`**, so a bare `pods` is `Ambiguous` here — while
 //! `kubectl get pods` happily returns core pods, because client-go applies a
 //! deterministic group preference (core wins).
@@ -345,7 +345,7 @@ impl RestMapper {
     ///
     /// Kubernetes serves the core group at a *different endpoint*. `/apis`
     /// carries the 50-odd named groups and **does not contain core at all**.
-    /// Measured against camelot-eks 2026-08-08: `/apis` returned 53 groups
+    /// Measured against alpha-eks 2026-08-08: `/apis` returned 53 groups
     /// with **zero** core entries, so `pods` resolved to
     /// **`metrics.k8s.io/pods`** — a real resource, the wrong one — and `po`
     /// did not resolve at all, because core's `shortNames: ["po"]` was never

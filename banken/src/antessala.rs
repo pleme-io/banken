@@ -5,7 +5,7 @@
 //! One `eprintln!` on the primary screen and then nothing:
 //!
 //! ```text
-//! banken: connecting to `engenho-local` (kubeconfig → auth → apiserver)…
+//! banken: connecting to `alpha-eks` (kubeconfig → auth → apiserver)…
 //! ```
 //!
 //! …followed by a blank terminal for as long as the connect took. On an EKS
@@ -102,7 +102,7 @@ pub enum Stage {
     ///
     /// **This stage exists because covering only the connect was not enough,
     /// and the difference was measured rather than reasoned.** The first
-    /// version of this screen ended at the connect, and against `cid-k3s` the
+    /// version of this screen ended at the connect, and against an unreachable cluster the
     /// terminal still went blank for a long time afterwards — the antechamber
     /// had closed correctly (`run_async returned ok=true stage=Settled`) and
     /// the wait had simply moved one stage down, into the synchronous
@@ -547,8 +547,8 @@ mod tests {
     fn screen() -> (StageReporter, ConnectingScreen) {
         let (tx, rx) = channel();
         let s = ConnectingScreen::new(
-            "camelot-eks",
-            Some("https://camelot.gr7.us-east-2.eks.amazonaws.com".into()),
+            "alpha-eks",
+            Some("https://EXAMPLE0.gr7.us-east-2.eks.amazonaws.com".into()),
             rx,
         );
         (tx, s)
@@ -567,7 +567,7 @@ mod tests {
     fn the_screen_names_the_cluster_and_the_apiserver() {
         let (_tx, s) = screen();
         let frame = frame_of(&s);
-        assert!(frame.contains("camelot-eks"), "{frame}");
+        assert!(frame.contains("alpha-eks"), "{frame}");
         assert!(frame.contains("eks.amazonaws.com"), "{frame}");
     }
 
@@ -759,9 +759,9 @@ mod tests {
     #[test]
     fn a_screen_without_a_known_apiserver_still_renders() {
         let (_tx, rx) = channel();
-        let s = ConnectingScreen::new("rio", None, rx);
+        let s = ConnectingScreen::new("bravo", None, rx);
         let frame = frame_of(&s);
-        assert!(frame.contains("rio"), "{frame}");
+        assert!(frame.contains("bravo"), "{frame}");
         assert!(frame.contains("kubeconfig"), "{frame}");
     }
 

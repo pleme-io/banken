@@ -104,7 +104,7 @@
   :layout main-horizontal
   :session-prefix "glass"
   :witness "drzzln"
-  :runbook "clusters/rio/RUNBOOK.md"
+  :runbook "clusters/bravo/RUNBOOK.md"
   :panes ((:role logs
            :placement root
            :command (:program "kubectl"

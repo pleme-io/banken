@@ -1,6 +1,6 @@
 //! `FixtureClusterEnv` — the default OBSERVE source this session.
 //!
-//! No Kubernetes cluster is reachable this session (rio/camelot VPN-gated,
+//! No Kubernetes cluster is reachable this session (bravo/alpha VPN-gated,
 //! local k3s down — verified), so banken renders + dispatches against this
 //! fixture source, exactly the sui-spec `MockEnv` discipline: a real,
 //! verifiable increment whose read path is canned data. It implements the

@@ -306,7 +306,7 @@ fn the_pods_table_is_built_from_the_authored_view() {
     // **And it must NOT be the reserved field.** `egaku::TableView` projects
     // `IDENTITY_FIELD` straight to `TableRow::identity()`, which here is the
     // object UID — so a NAME column authored on it renders uids. Measured
-    // 2026-08-09: 69 of 69 rows on camelot-eks. See
+    // 2026-08-09: 69 of 69 rows on alpha-eks. See
     // `banken_spec::env::DISPLAY_NAME_FIELD`.
     assert_ne!(
         fields[0], IDENTITY_FIELD,

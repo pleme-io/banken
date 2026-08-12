@@ -76,7 +76,7 @@ arc-swap = "1"
 # proven this session) stays lean + green. NO `kubectl` subprocess — the
 # NO-SHELL rule holds; this is a typed apiserver client. The code is real
 # (never a fake `Ok`), but is UNTESTED-LIVE this session (no cluster
-# reachable — rio/camelot VPN-gated, local k3s down). `pending-banken:
+# reachable — bravo/alpha VPN-gated, local k3s down). `pending-banken:
 # live-read` — the row lights up the instant a cluster returns.
 # *** `runtime` added 2026-08-08 — the watch informer was never missing upstream. ***
 # BANKEN.md's C-watch ceiling read as "unbuilt substrate banken must build", and
@@ -86,7 +86,7 @@ arc-swap = "1"
 # (`:823`), and the whole resourceVersion/410-Gone machine. Turning the feature on
 # is the entire acquisition.
 #
-# What it replaces, measured against camelot-eks (191 pods) on 2026-08-08:
+# What it replaces, measured against alpha-eks (191 pods) on 2026-08-08:
 # `Api::list(&ListParams::default())` at 1 Hz moves 3,580,862 B per tick —
 # 3.4 MiB/s decoded, 12 GiB/hour, 96 GiB per 8-hour day, per instance. A 30 s
 # watch on the same cluster at the same moment moved 0 bytes. Delta traffic is

@@ -47,7 +47,7 @@ fn shell_action() -> K8sActionSpec {
         keys: ActionChord::shifted(Key::S),
         legality: ActionLegality::BreakGlass {
             witness: OperatorId::new("drzzln").expect("a literal witness is non-blank"),
-            runbook: RunbookRef("clusters/rio/RUNBOOK.md".into()),
+            runbook: RunbookRef("clusters/bravo/RUNBOOK.md".into()),
         },
         manifest_scope: ManifestScope::Full,
     }
@@ -174,7 +174,7 @@ fn break_glass_is_the_only_live_arm_and_is_witnessed() {
             );
             assert_eq!(
                 record.action.runbook,
-                RunbookRef("clusters/rio/RUNBOOK.md".into())
+                RunbookRef("clusters/bravo/RUNBOOK.md".into())
             );
             assert!(record.action.selector.contains("catch"));
         }

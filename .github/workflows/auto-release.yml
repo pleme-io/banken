@@ -1,6 +1,6 @@
 # ★★ AUTO-RELEASE — ship on merge, default-on (the canonical 3-line consumer
 # shim over the substrate polymorphic reusable). Runs through the pleme-io
-# fleet pipeline (rio runners + crates.io as the repo type dictates).
+# fleet pipeline (bravo runners + crates.io as the repo type dictates).
 #
 # TIER-HONEST (banken, 2026-07-29): a committed shim proves ADOPTION, never a
 # RUN. Until Actions is enabled on pleme-io/banken and a green run exists, this

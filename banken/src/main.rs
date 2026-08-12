@@ -24,7 +24,7 @@
 //! Usage:
 //! ```text
 //! banken                                  # choose a cluster, then :pods
-//! banken --context camelot-eks            # :pods on that cluster directly
+//! banken --context alpha-eks            # :pods on that cluster directly
 //! banken --fixture                        # the canned source, explicitly
 //! banken --help                           # usage
 //! ```
@@ -126,12 +126,20 @@ async fn run_pick(
     // screen.
     let (ronda, publisher) = banken::ronda::channel();
     let _rounds = banken::live::enumerate_contexts().ok().map(|contexts| {
+        // The expensive half of the ladder, injected. `ronda` holds no opinion
+        // about kube — which is what lets its orchestration be tested with a
+        // mock climber and no cluster, and keeps the one place that spawns
+        // credential helpers inside `live`.
+        let climb: banken::ronda::DeepClimb = std::sync::Arc::new(|context: String| {
+            Box::pin(async move { banken::live::KubeClusterEnv::climb(&context).await })
+        });
         banken::ronda::spawn_rounds(
             contexts
                 .into_iter()
                 .map(|c| (c.name, c.server))
                 .collect::<Vec<_>>(),
             publisher,
+            Some(climb),
         )
     });
 
@@ -329,7 +337,7 @@ async fn run_live_from(
         let label = banken::absorb::live_source_label(&cluster, env.server(), strategy);
         let receipt = env.server().map(str::to_owned);
         // The WATCH producer, not the poll. This is the whole M0 payoff:
-        // against camelot-eks (191 pods) the poll moved 3,580,862 B every
+        // against alpha-eks (191 pods) the poll moved 3,580,862 B every
         // second — 96 GiB per 8-hour day — where a watch over the same 30 s
         // moved 0 bytes, because delta traffic is proportional to CHANGE and
         // poll traffic to STATE SIZE.

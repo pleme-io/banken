@@ -20,7 +20,7 @@
 //!   dispatch integration tests. This is the sui-spec `MockEnv` discipline:
 //!   a real, verifiable increment whose read is canned data.
 //! - **PROVEN LIVE (2026-07-31, feature `live`):** the live-cluster **pod
-//!   read** ([`KubeClusterEnv`](live::KubeClusterEnv)). `camelot-eks` returned
+//!   read** ([`KubeClusterEnv`](live::KubeClusterEnv)). `alpha-eks` returned
 //!   109 pods — matching `kubectl get pods -A` at the same moment — and they
 //!   rendered through the same pipeline the fixture rows do, both from
 //!   `tests/live_read.rs` and from the binary in a real PTY.

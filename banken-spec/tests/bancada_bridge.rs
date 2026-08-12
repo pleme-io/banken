@@ -22,10 +22,10 @@ use banken_spec::{
     types::{ActionLegality, LegalityClass, ResourceKind},
 };
 
-/// A concrete broken-pod context: camelot-eks, namespace `catch`, one pod.
+/// A concrete broken-pod context: alpha-eks, namespace `catch`, one pod.
 fn ctx() -> BancadaContext {
     BancadaContext {
-        cluster: "camelot-eks".into(),
+        cluster: "alpha-eks".into(),
         selection: Selection {
             kind: ResourceKind::Pod,
             name: "catch-7d9f4c".into(),
@@ -118,7 +118,7 @@ fn the_authored_triage_recipe_plans_the_right_session() {
     let triage = gs.iter().find(|g| g.name == "pod-triage").expect("triage");
     let p = plan(triage, &ctx()).expect("plans");
 
-    assert_eq!(p.session_name(), "triage-camelot-eks-catch-catch-7d9f4c");
+    assert_eq!(p.session_name(), "triage-alpha-eks-catch-catch-7d9f4c");
     assert_eq!(p.layout(), SessionLayout::MainVertical);
     assert_eq!(p.legality().class(), LegalityClass::Observe);
     assert!(p.witnessed_action().is_none());
@@ -129,7 +129,7 @@ fn the_authored_triage_recipe_plans_the_right_session() {
         vec![
             "kubectl",
             "--context",
-            "camelot-eks",
+            "alpha-eks",
             "-n",
             "catch",
             "logs",
@@ -240,8 +240,8 @@ fn opening_the_break_glass_recipe_routes_the_exec_through_the_witnessed_arm() {
         "the witnessed argv is the resolved exec: {argv:?}",
     );
     assert_eq!(action.witness.as_str(), "drzzln");
-    assert_eq!(action.runbook.0, "clusters/rio/RUNBOOK.md");
-    assert_eq!(action.selector, "glass-camelot-eks-catch-catch-7d9f4c");
+    assert_eq!(action.runbook.0, "clusters/bravo/RUNBOOK.md");
+    assert_eq!(action.selector, "glass-alpha-eks-catch-catch-7d9f4c");
 }
 
 /// The recipes join the ONE resolved catalog: reachable from a declared view,

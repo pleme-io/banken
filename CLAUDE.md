@@ -64,7 +64,7 @@ same value. And picking beats typing on two counts the CLI never could:
 1. the row shows the **apiserver URL** before it is dialled — a name is a label
    to trust, a URL is what actually gets connected to;
 2. an **ambiguous** name (declared by >1 file in the `KUBECONFIG` merge list —
-   the 2026-08-08 `engenho-local` hazard) is marked `⚠ declared by N kubeconfig
+   the 2026-08-08 `charlie-local` hazard) is marked `⚠ declared by N kubeconfig
    files` and **cannot be chosen**. Typing it was accepted at the CLI and
    refused later by `ContextError::Ambiguous`, i.e. after the operator had
    already committed. Measured with two synthetic kubeconfigs declaring `twin`.
@@ -142,7 +142,7 @@ the label, which is exactly when the unhealthy one stops being read.
 
 ## The NAME column was drawing UIDs — measured live, hidden by three vacuous tests
 
-**69 of 69 rows on `camelot-eks` rendered `10a69bf6-b039-4731-8cce-28ed6e55c534`
+**69 of 69 rows on `alpha-eks` rendered `10a69bf6-b039-4731-8cce-28ed6e55c534`
 under `NAME`.** Cause: the authored column pointed at `egaku::IDENTITY_FIELD`,
 and `egaku::TableView::project` short-circuits that field to
 `TableRow::identity()` **without ever calling `TableRow::cell`**
@@ -397,7 +397,7 @@ thing, the chord namespace, and `Catalog::resolve` checks it.
 **bancada** (pt-BR: a workbench — tools already laid out, work starts the
 instant you sit down). Renamed from `guarita` 2026-07-31: that word was
 already double-claimed (`theory/NAMING.md:88`), and on Law 2 it belongs to
-the per-request credential check in `akeyless-vpn`'s SHAAR design, whose
+the per-request credential check in `the host org-vpn`'s SHAAR design, whose
 "gatehouse sentry checking papers per visit" gloss teaches that job exactly.
 This domain took the *container* half of the metaphor and dropped the
 *checking-papers* half — and the checking here is `postigo`'s, not its own.
@@ -471,9 +471,9 @@ emitted `--context ""`. Same for `namespace` / `container`.
 `banken --live` rode `Client::try_default()` — i.e. the kubeconfig's
 `current-context` — so banken could render a real pod table from an entirely
 different estate than the operator meant, and nothing would look wrong: the
-read succeeds, the rows are real, only the cluster is wrong. Measured on cid
-that day: current-context was `us-east-2-staging-eks` (akeyless) while the
-cluster under inspection was `camelot-eks`. `--context <name>` is now
+read succeeds, the rows are real, only the cluster is wrong. Measured on workstation
+that day: current-context was `beta-eks` (a different estate) while the
+cluster under inspection was `alpha-eks`. `--context <name>` is now
 **REQUIRED** for `--live` (`banken::cli`, `Invocation::Live` carries a
 non-optional `String`, so an unnamed live run has no representation past the
 parser — **parse-time-rejected**, not truly-unrepresentable: the library's
@@ -496,9 +496,9 @@ was ambiguous is **gone**. The flag narrowed the hazard from "whatever
 current-context happens to be" to "whichever file sorted first" — the same
 false calm, one layer over.
 
-Measured that day: the operator kubeconfig declares `engenho-local` → a LOCAL
-apiserver, while `~/.kube/config` declares `engenho-local` →
-`engenho-local.quero.cloud`, a **remote** cluster. banken read the remote one
+Measured that day: the operator kubeconfig declares `charlie-local` → a LOCAL
+apiserver, while `~/.kube/config` declares `charlie-local` →
+`charlie-local.example.invalid`, a **remote** cluster. banken read the remote one
 and rendered a perfectly healthy table doing it. Four protocol-layer
 hypotheses (Ed25519 client certs, ALPN/h2, IPv6, TLS handshake) were chased
 and all were wrong; `lsof` showing `SYN_SENT` to a public IP is what exposed
@@ -929,7 +929,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
   - **`pending-banken: pathology-taxonomy-backfill`** — three rules ship; the
     autorevivy taxonomy is 35 classes. Authoring rules whose evidence nothing
     supplies would be a catalog of rules that can never fire, so the backfill
-    is gated on autorevivy's detection stream deploying beyond camelot-shadow
+    is gated on autorevivy's detection stream deploying beyond alpha-shadow
     (BANKEN.md §V's ~15% live-data-reuse note).
   - **`pending-banken: per-dimension-band-evidence`** /
     **`pending-banken: drill-step-view-resolution`** /
@@ -941,7 +941,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
 - **SHIPPED + PROVEN LIVE (2026-07-31):** the live-cluster **pod read**
   (`live::KubeClusterEnv`, feature `live`) — a real typed `kube`/`k8s-openapi`
   apiserver client (NO `kubectl` subprocess) behind the same `ClusterEnv` seam.
-  **`pending-banken: live-read` CLOSED.** `camelot-eks` (EKS v1.33, AWS SSO
+  **`pending-banken: live-read` CLOSED.** `alpha-eks` (EKS v1.33, AWS SSO
   exec-credential auth) returned **109 pods**, matching `kubectl get pods -A` at
   the same moment, rendered through the whole pipeline. Two runs:
   `banken/tests/live_read.rs` (`#[ignore]`d; refuses to guess a context —
@@ -971,7 +971,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
   `pending-banken: live-watch` CLOSED.** `banken/src/absorb.rs` +
   `KubeClusterEnv::spawn_pod_absorber` replace the 1 Hz poll with
   `kube::runtime::watcher` under `Config::streaming_lists()` +
-  `.default_backoff()`. Measured on `camelot-eks`: **absorbed 83 pods by watch,
+  `.default_backoff()`. Measured on `alpha-eks`: **absorbed 83 pods by watch,
   generation 1, matching `kubectl get pods -A` at the same moment (83)**
   (`tests/live_read.rs::the_watch_plane_absorbs_from_a_real_cluster`,
   `#[ignore]`d, refuses to guess a context). 224 workspace tests green with and

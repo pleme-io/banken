@@ -53,8 +53,8 @@ fn text(start: &str, keys: &str) -> String {
 /// only if unbound keys are genuinely inert rather than typed.
 #[test]
 fn an_unbound_key_in_normal_types_nothing() {
-    let (v, q, fx) = run("camelot", "zZ%");
-    assert_eq!(q.text(), "camelot", "not one character reached the query");
+    let (v, q, fx) = run("alpha", "zZ%");
+    assert_eq!(q.text(), "alpha", "not one character reached the query");
     assert_eq!(v.stance(), Stance::Normal);
     assert!(fx.iter().all(|e| *e == Effect::Inert), "{fx:?}");
 }
@@ -102,8 +102,8 @@ fn a_and_capital_a_place_the_caret_where_vim_does() {
 /// one thing about a picker that no editor has an opinion on.
 #[test]
 fn jk_move_rows_and_leave_the_query_alone() {
-    let (_, q, fx) = run("camelot", "jjk");
-    assert_eq!(q.text(), "camelot");
+    let (_, q, fx) = run("alpha", "jjk");
+    assert_eq!(q.text(), "alpha");
     assert_eq!(fx, vec![Effect::Rows(1), Effect::Rows(1), Effect::Rows(-1)]);
 }
 
@@ -200,8 +200,8 @@ fn ci_quote_changes_inside_quotes() {
 /// linewise in a model with no linewise.
 #[test]
 fn dd_is_refused_rather_than_clearing_the_query() {
-    let (_, q, fx) = run("camelot-eks", "0dd");
-    assert_eq!(q.text(), "camelot-eks", "untouched");
+    let (_, q, fx) = run("alpha-eks", "0dd");
+    assert_eq!(q.text(), "alpha-eks", "untouched");
     assert_eq!(fx.last(), Some(&Effect::Inert));
 }
 

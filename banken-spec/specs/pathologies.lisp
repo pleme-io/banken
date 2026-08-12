@@ -14,7 +14,7 @@
 ;; verified) and Tendril names more. THREE ship here. This file is the
 ;; vocabulary and the first three instances of it — not the taxonomy.
 ;; `pending-banken: pathology-taxonomy-backfill` (the remaining 32 need
-;; autorevivy's detection stream deployed beyond camelot-shadow first, per
+;; autorevivy's detection stream deployed beyond alpha-shadow first, per
 ;; §V's ~15% live-data-reuse note; authoring rules whose evidence nothing
 ;; supplies would be a catalog of rules that can never fire).
 

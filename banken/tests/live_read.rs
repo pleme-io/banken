@@ -7,7 +7,7 @@
 //! must never do that. Run it deliberately:
 //!
 //! ```text
-//! BANKEN_LIVE_CONTEXT=camelot-eks \
+//! BANKEN_LIVE_CONTEXT=alpha-eks \
 //!   cargo test -p banken --features live --test live_read -- --ignored --nocapture
 //! ```
 //!
@@ -200,14 +200,14 @@ async fn a_named_context_renders_real_pod_rows() {
 /// real connection through a real exec-credential plugin.
 ///
 /// ```text
-/// BANKEN_LIVE_CONTEXT=camelot-eks \
+/// BANKEN_LIVE_CONTEXT=alpha-eks \
 ///   cargo test -p banken --features live --test live_read -- --ignored --nocapture
 /// ```
 ///
 /// # What this proves that `list_resources` cannot
 ///
 /// That banken's rows arrive by **streamed delta** rather than by re-reading the
-/// world. The distinction is not stylistic: measured against `camelot-eks` on
+/// world. The distinction is not stylistic: measured against `alpha-eks` on
 /// 2026-08-08, the poll moved 3,580,862 B *per second* (96 GiB per 8-hour day)
 /// while a 30-second watch over the same cluster moved **0 bytes**.
 ///
@@ -233,7 +233,7 @@ async fn the_watch_plane_absorbs_from_a_real_cluster() {
     // strategy change would make it assert something else while staying green.
     // The strategy is an INPUT, so this test is a differential harness across
     // read paths rather than an assertion about one. Measured 2026-08-08: the
-    // same binary reaches `Synced` against camelot-eks on either strategy, and
+    // same binary reaches `Synced` against alpha-eks on either strategy, and
     // against a local engenho ONLY on `list-watch` — because engenho does not
     // negotiate `sendInitialEvents`, so `streaming` degrades to a live tail
     // whose terminating bookmark never arrives and `InitDone` never fires.

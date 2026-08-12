@@ -293,7 +293,7 @@ mod tests {
 
     fn reading() -> HostReading {
         HostReading {
-            host: "cid".into(),
+            host: "workstation".into(),
             uptime_secs: 3_600,
             cpu_cores: 8,
             load_avg: (4.0, 3.0, 2.0),

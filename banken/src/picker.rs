@@ -29,7 +29,7 @@
 //!   [`crate::live::ContextError::Ambiguous`], after the operator had already
 //!   committed to it.
 //!
-//! That third point is the 2026-08-08 `engenho-local` hazard (one name, a
+//! That third point is the 2026-08-08 `charlie-local` hazard (one name, a
 //! local apiserver in one file and a remote one in another) surfaced at the
 //! moment of *choosing* rather than at the moment of connecting.
 //!
@@ -171,6 +171,14 @@ pub struct ContextPicker {
     /// than a column of optimistic dots. See [`crate::ronda`] for what a
     /// marker does and does not claim.
     ronda: crate::ronda::Ronda,
+    /// Where each row's light currently IS, as opposed to where the ladder
+    /// says it belongs.
+    ///
+    /// The light eases toward its rung instead of jumping, which is what makes
+    /// the climb legible: a row that walks red → orange → amber → green over a
+    /// second reads as *progress being made*, where four instant recolours
+    /// read as flicker and tell the operator nothing about direction.
+    lights: std::collections::HashMap<String, f32>,
     /// The kubeconfig's `current-context`, annotated on its row.
     ///
     /// Shown, never pre-selected. Pre-selecting it would rebuild "whatever
@@ -261,6 +269,7 @@ impl ContextPicker {
             vim: crate::vim::Vim::opening_in(Self::OPENING_STANCE),
             query: crate::vim::QueryLine::default(),
             ronda: crate::ronda::Ronda::inert(),
+            lights: std::collections::HashMap::new(),
             current: kubeconfig_current_context(),
             refusal: None,
             notice: None,
@@ -310,6 +319,47 @@ impl ContextPicker {
         self
     }
 
+    /// Ease every light one step toward the rung its context has reached.
+    ///
+    /// Exponential, not linear: a light moves fastest when it is furthest from
+    /// where it belongs, so a big jump (nothing → full access) reads as a
+    /// decisive climb and a small correction settles without a visible crawl.
+    ///
+    /// Runs in `on_wake`, which is the `&mut self` half of the wakeup and
+    /// therefore never dropped part-way — a light cannot be left stranded
+    /// between two colours by a keystroke arriving mid-ease.
+    fn ease_lights(&mut self) {
+        /// How much of the remaining distance to close per frame.
+        const RATE: f32 = 0.22;
+        /// Below this, snap. Chasing a limit forever costs a repaint per frame
+        /// to move by a fraction of a colour step nobody can see.
+        const SNAP: f32 = 0.004;
+
+        for (name, target) in self.ronda.positions() {
+            let light = self.lights.entry(name).or_insert(target);
+            let delta = target - *light;
+            if delta.abs() <= SNAP {
+                *light = target;
+            } else {
+                *light += delta * RATE;
+            }
+        }
+    }
+
+    /// Whether any light is still moving — the other half of the repaint
+    /// cadence, so the picker keeps painting through a transition even after
+    /// the round itself has settled.
+    fn lights_settled(&self) -> bool {
+        self.ronda
+            .positions()
+            .into_iter()
+            .all(|(name, target)| {
+                self.lights
+                    .get(&name)
+                    .is_some_and(|l| (l - target).abs() <= 0.004)
+            })
+    }
+
     /// How long to wait before repainting, or `None` for "only on a key".
     ///
     /// Fast while answers are still landing, slow once the round has settled,
@@ -320,10 +370,13 @@ impl ContextPicker {
         if self.ronda.covered() == 0 {
             return None;
         }
-        Some(if self.ronda.all_settled() {
+        // A moving light keeps the fast cadence even after the round settled
+        // — otherwise the ease would be drawn at 1 fps and the "smooth" change
+        // would be five visible steps, which is exactly what easing is for.
+        Some(if self.ronda.all_settled() && self.lights_settled() {
             std::time::Duration::from_millis(1000)
         } else {
-            std::time::Duration::from_millis(120)
+            std::time::Duration::from_millis(60)
         })
     }
 
@@ -556,8 +609,14 @@ impl ContextPicker {
         }
 
         // ── Rows ──
+        //
+        // The standing line costs the list one row, and earns it: a marker
+        // says how far the climb got, and only prose can say *why it stopped
+        // there*. "port open, no apiserver reached — credentials: SSO session
+        // expired" is a fix; an orange dot is a mood.
+        let standing_line = if self.ronda.covered() > 0 { 1 } else { 0 };
         let first_row = 3;
-        let footer = height.saturating_sub(1);
+        let footer = height.saturating_sub(1 + standing_line);
         let visible = usize::from(footer.saturating_sub(first_row));
         if visible > 0 {
             // Bottom-anchored viewport, the same pure function of
@@ -604,8 +663,43 @@ impl ContextPicker {
             }
         }
 
+        // ── The selected row's standing ──
+        if standing_line == 1 && height > 2 {
+            self.draw_standing(buf, width, height.saturating_sub(2));
+        }
+
         // ── Footer ──
         self.draw_footer(buf, width, height);
+    }
+
+    /// What the highlighted context's climb reached, and why it stopped.
+    fn draw_standing(&self, buf: &mut Buffer, width: u16, y: u16) {
+        let Some(item) = self.picker.selected_item() else {
+            return;
+        };
+        let standing = self.ronda.standing(&item.key.name);
+        let style = Style::default().fg(Color::DarkGrey);
+
+        let mut x = buf.set_stringn(0, y, "  ", width, style);
+        x = buf.set_stringn(
+            x,
+            y,
+            standing.rung.marker(),
+            width.saturating_sub(x),
+            match standing.rung.position() {
+                Some(p) => {
+                    let (r, g, b) = crate::ronda::ramp(p);
+                    Style::default().fg(Color::Rgb { r, g, b })
+                }
+                None => style,
+            },
+        );
+        x = buf.set_stringn(x, y, " ", width.saturating_sub(x), style);
+        x = buf.set_stringn(x, y, standing.rung.label(), width.saturating_sub(x), style);
+        if !standing.note.is_empty() {
+            x = buf.set_stringn(x, y, " — ", width.saturating_sub(x), style);
+            buf.set_stringn(x, y, &standing.note, width.saturating_sub(x), style);
+        }
     }
 
     fn draw_row(&self, buf: &mut Buffer, y: u16, width: u16, ctx: &ContextChoice, selected: bool) {
@@ -627,20 +721,27 @@ impl ContextPicker {
         // glyph is what survives a colour-blind operator and a `TestBackend`
         // frame, so neither is load-bearing alone.
         if self.ronda.covered() > 0 {
-            let reach = self.ronda.reach(&ctx.name);
+            let rung = self.ronda.rung(&ctx.name);
             let style = if selected {
+                // The selected row is already inverted; a ramp colour on top of
+                // it fights the highlight and reads as a rendering fault.
                 base
             } else {
-                base.fg(match reach {
-                    crate::ronda::Reach::Open => Color::Green,
-                    crate::ronda::Reach::Refused => Color::Yellow,
-                    crate::ronda::Reach::Unreachable => Color::Red,
-                    crate::ronda::Reach::Probing | crate::ronda::Reach::Unprobeable => {
-                        Color::DarkGrey
+                // The light is drawn from the EASED position, not from the
+                // rung — that is the whole difference between a colour that
+                // slides up the ramp and five presets that blink.
+                match self.lights.get(&ctx.name).copied() {
+                    Some(p) => {
+                        let (r, g, b) = crate::ronda::ramp(p);
+                        base.fg(Color::Rgb { r, g, b })
                     }
-                })
+                    // Not probed: absence of a measurement, never the bottom
+                    // of the ramp. Deep red here would say "this cluster is
+                    // down" about a cluster banken has not looked at yet.
+                    None => base.fg(Color::DarkGrey),
+                }
             };
-            x = buf.set_stringn(x, y, reach.marker(), width.saturating_sub(x), style);
+            x = buf.set_stringn(x, y, rung.marker(), width.saturating_sub(x), style);
             x = buf.set_stringn(x, y, " ", width.saturating_sub(x), base);
         }
 
@@ -1065,6 +1166,13 @@ impl AsyncApp for ContextPicker {
         }
     }
 
+    /// Advance the lights one step. The `&mut self` half of the wakeup, so an
+    /// ease can never be left half-applied by a keystroke winning the select.
+    async fn on_wake(&mut self) -> TermResult<()> {
+        self.ease_lights();
+        Ok(())
+    }
+
     async fn draw(&self, frame: &mut Buffer) -> TermResult<()> {
         self.render(frame);
         Ok(())
@@ -1107,8 +1215,8 @@ mod tests {
 
     fn three() -> ContextPicker {
         picker(vec![
-            ctx("camelot-eks", "https://camelot.eks.amazonaws.com"),
-            ctx("rio", "https://rio.internal:6443"),
+            ctx("alpha-eks", "https://alpha.eks.amazonaws.com"),
+            ctx("bravo", "https://bravo.internal:6443"),
             ctx("jaeger-dev", "https://jaeger.dev:6443"),
         ])
     }
@@ -1205,17 +1313,17 @@ mod tests {
     #[test]
     fn the_erase_chords_edit_the_query_in_insert() {
         for (chord, expect) in [
-            (PickerAction::EraseWord, "camelot-"),
+            (PickerAction::EraseWord, "alpha-"),
             (PickerAction::EraseToStart, ""),
             // The caret is at the end after typing, so the two forward
             // deletions have nothing to take — inert, and the query is
             // untouched. That is the honest expectation, not a weaker one.
-            (PickerAction::EraseToEnd, "camelot-eks"),
-            (PickerAction::EraseForward, "camelot-eks"),
+            (PickerAction::EraseToEnd, "alpha-eks"),
+            (PickerAction::EraseForward, "alpha-eks"),
         ] {
             let mut p = three();
-            filter(&mut p, "camelot-eks");
-            assert_eq!(p.query.text(), "camelot-eks", "typed");
+            filter(&mut p, "alpha-eks");
+            assert_eq!(p.query.text(), "alpha-eks", "typed");
             p.dispatch(chord);
             assert_eq!(p.query.text(), expect, "{chord:?}");
         }
@@ -1273,16 +1381,16 @@ mod tests {
         let mut p = three();
         filter(&mut p, "amazon");
         assert!(p.dispatch(PickerAction::Accept));
-        assert_eq!(p.chosen().map(|c| c.name.as_str()), Some("camelot-eks"));
+        assert_eq!(p.chosen().map(|c| c.name.as_str()), Some("alpha-eks"));
     }
 
-    /// **THE AMBIGUITY GATE.** This is the 2026-08-08 `engenho-local` hazard —
+    /// **THE AMBIGUITY GATE.** This is the 2026-08-08 `charlie-local` hazard —
     /// one name, two real clusters — caught at the moment of *choosing*. Left
     /// unguarded, the picker would hand `main` a name that `resolve_context`
     /// then refuses, i.e. it would offer a choice banken cannot honour.
     #[test]
     fn an_ambiguous_context_cannot_be_chosen() {
-        let mut p = picker(vec![ambiguous("engenho-local")]);
+        let mut p = picker(vec![ambiguous("charlie-local")]);
         assert!(p.dispatch(PickerAction::Accept));
         assert!(
             p.chosen().is_none(),
@@ -1290,7 +1398,7 @@ mod tests {
         );
         assert!(!p.should_quit(), "and the screen stays up to say why");
         let refusal = p.refusal().expect("the refusal is shown");
-        assert!(refusal.contains("engenho-local"));
+        assert!(refusal.contains("charlie-local"));
         assert!(
             refusal.contains("/home/op/.kube/config"),
             "and it names the files, so the fix is on screen: {refusal}",
@@ -1303,7 +1411,7 @@ mod tests {
     /// half that says which one to remove. Both paths must survive the frame.
     #[test]
     fn a_long_refusal_wraps_instead_of_clipping() {
-        let mut p = picker(vec![ambiguous("engenho-local")]);
+        let mut p = picker(vec![ambiguous("charlie-local")]);
         p.dispatch(PickerAction::Accept);
         let mut backend = TestBackend::new(80, 14);
         backend.draw(|buf| p.render(buf));
@@ -1329,7 +1437,7 @@ mod tests {
             "the reason must be on the screen the operator lands on:\n{frame}",
         );
         assert!(
-            frame.contains("camelot-eks"),
+            frame.contains("alpha-eks"),
             "and the list must still be there — that is the whole point:\n{frame}",
         );
     }
@@ -1349,7 +1457,7 @@ mod tests {
     /// the next one would make it look like it described that one instead.
     #[test]
     fn the_next_keystroke_clears_a_refusal() {
-        let mut p = picker(vec![ambiguous("engenho-local")]);
+        let mut p = picker(vec![ambiguous("charlie-local")]);
         p.dispatch(PickerAction::Accept);
         assert!(p.refusal().is_some());
         p.type_char('e');
@@ -1477,9 +1585,9 @@ mod tests {
         let mut backend = TestBackend::new(100, 10);
         backend.draw(|buf| p.render(buf));
         let frame = backend.to_lines().join("\n");
-        assert!(frame.contains("camelot-eks"), "{frame}");
+        assert!(frame.contains("alpha-eks"), "{frame}");
         assert!(
-            frame.contains("https://camelot.eks.amazonaws.com"),
+            frame.contains("https://alpha.eks.amazonaws.com"),
             "the apiserver is on the row: {frame}",
         );
     }
@@ -1488,8 +1596,8 @@ mod tests {
     #[test]
     fn an_ambiguous_row_is_marked_on_screen() {
         let p = picker(vec![
-            ctx("camelot-eks", "https://camelot.eks.amazonaws.com"),
-            ambiguous("engenho-local"),
+            ctx("alpha-eks", "https://alpha.eks.amazonaws.com"),
+            ambiguous("charlie-local"),
         ]);
         let mut backend = TestBackend::new(110, 10);
         backend.draw(|buf| p.render(buf));
@@ -1621,18 +1729,19 @@ mod tests {
         assert_eq!(p.picker.view().selected, 0);
     }
 
-    /// **The rounds reach the row.** Choosing used to be a guess: eighteen
+    /// **The ladder reaches the row.** Choosing used to be a guess: eighteen
     /// contexts, all equally choosable-looking, and the only way to find out
-    /// which were actually there was to pick one and wait.
+    /// how far you would actually get was to pick one and wait.
     #[test]
-    fn the_rounds_mark_the_rows() {
+    fn the_ladder_marks_the_rows() {
+        use crate::ronda::{Rung, Standing};
         let (ronda, publisher) = crate::ronda::channel();
-        publisher.seed(&["camelot-eks".into(), "rio".into(), "jaeger-dev".into()]);
-        publisher.report("camelot-eks", crate::ronda::Reach::Open);
-        publisher.report("rio", crate::ronda::Reach::Unreachable);
+        publisher.seed(&["alpha-eks".into(), "bravo".into(), "jaeger-dev".into()]);
+        publisher.report("alpha-eks", Standing::at(Rung::Pods));
+        publisher.report("bravo", Standing::at(Rung::Down));
 
         let p = three().with_ronda(ronda);
-        let mut backend = TestBackend::new(110, 10);
+        let mut backend = TestBackend::new(110, 12);
         backend.draw(|buf| p.render(buf));
         let lines = backend.to_lines();
 
@@ -1643,22 +1752,106 @@ mod tests {
                 .unwrap_or_else(|| panic!("no row for {name}"))
                 .clone()
         };
+        assert!(row("alpha-eks").contains(Rung::Pods.marker()), "{}", row("alpha-eks"));
+        assert!(row("bravo").contains(Rung::Down.marker()), "{}", row("bravo"));
+        // Not looked at yet, and saying so — never silently optimistic.
         assert!(
-            row("camelot-eks").contains(crate::ronda::Reach::Open.marker()),
-            "{}",
-            row("camelot-eks"),
-        );
-        assert!(
-            row("rio").contains(crate::ronda::Reach::Unreachable.marker()),
-            "{}",
-            row("rio"),
-        );
-        // Still outstanding, and saying so — not silently optimistic.
-        assert!(
-            row("jaeger-dev").contains(crate::ronda::Reach::Probing.marker()),
+            row("jaeger-dev").contains(Rung::Unknown.marker()),
             "{}",
             row("jaeger-dev"),
         );
+    }
+
+    /// **The light is a function of the ladder, drawn from the EASED position
+    /// — not from the rung.** That is the difference between a colour that
+    /// slides up the ramp and five presets that blink.
+    #[test]
+    fn the_light_eases_toward_the_rung_rather_than_jumping() {
+        use crate::ronda::{Rung, Standing};
+        let (ronda, publisher) = crate::ronda::channel();
+        publisher.seed(&["alpha-eks".into()]);
+        publisher.report("alpha-eks", Standing::at(Rung::Pods));
+
+        let mut p = three().with_ronda(ronda);
+        p.ease_lights();
+        let first = p.lights.get("alpha-eks").copied().expect("a light");
+        assert!(
+            (first - 1.0).abs() < f32::EPSILON,
+            "a light with no history starts AT its rung, not at zero — a new \
+             row must not animate up from `down`, which would read as a climb \
+             that never happened",
+        );
+
+        // Now a real climb: from the floor to the top.
+        publisher.report("alpha-eks", Standing::at(Rung::Down));
+        p.lights.insert("alpha-eks".into(), 0.0);
+        publisher.report("alpha-eks", Standing::at(Rung::Pods));
+
+        let mut seen = Vec::new();
+        for _ in 0..40 {
+            p.ease_lights();
+            seen.push(p.lights.get("alpha-eks").copied().expect("a light"));
+        }
+        assert!(seen[0] > 0.0 && seen[0] < 1.0, "it moved, partway: {}", seen[0]);
+        assert!(
+            seen.windows(2).all(|w| w[1] >= w[0]),
+            "and only ever upward: {seen:?}",
+        );
+        assert!(
+            (seen.last().copied().unwrap_or_default() - 1.0).abs() < f32::EPSILON,
+            "and it arrives rather than chasing the limit forever",
+        );
+    }
+
+    /// A moving light holds the FAST cadence even after the round settled —
+    /// otherwise the ease would be drawn at 1 fps and the "smooth" change
+    /// would be a handful of visible steps.
+    #[test]
+    fn a_moving_light_keeps_the_fast_cadence() {
+        use crate::ronda::{Rung, Standing};
+        let (ronda, publisher) = crate::ronda::channel();
+        publisher.seed(&["a".into()]);
+        let mut p = three().with_ronda(ronda);
+        let unsettled = p.repaint_after().expect("a round repaints");
+
+        publisher.report("a", Standing::at(Rung::Pods));
+        p.lights.insert("a".into(), 0.0); // mid-transition
+        assert_eq!(
+            p.repaint_after(),
+            Some(unsettled),
+            "the round settled but the light has not",
+        );
+
+        for _ in 0..60 {
+            p.ease_lights();
+        }
+        let settled = p.repaint_after().expect("still repaints, more slowly");
+        assert!(
+            settled > unsettled,
+            "settled ({settled:?}) must be slower than moving ({unsettled:?})",
+        );
+    }
+
+    /// **The selected row's standing says WHY the climb stopped.** A marker
+    /// gives the level; only prose gives the fix. "port open, no apiserver
+    /// reached — credentials: SSO session expired" is actionable; an orange
+    /// dot is a mood.
+    #[test]
+    fn the_standing_line_says_why_the_climb_stopped() {
+        use crate::ronda::{Rung, Standing};
+        let (ronda, publisher) = crate::ronda::channel();
+        publisher.seed(&["alpha-eks".into()]);
+        publisher.report(
+            "alpha-eks",
+            Standing::stopped(Rung::Network, "credentials: SSO session expired"),
+        );
+
+        let p = three().with_ronda(ronda);
+        let mut backend = TestBackend::new(110, 12);
+        backend.draw(|buf| p.render(buf));
+        let frame = backend.to_lines().join("\n");
+        assert!(frame.contains(Rung::Network.label()), "{frame}");
+        assert!(frame.contains("SSO session expired"), "{frame}");
     }
 
     /// **A picker with no rounds draws no markers**, rather than a column of
@@ -1669,38 +1862,21 @@ mod tests {
         let mut backend = TestBackend::new(110, 10);
         backend.draw(|buf| p.render(buf));
         let frame = backend.to_lines().join("\n");
-        for reach in [
-            crate::ronda::Reach::Open,
-            crate::ronda::Reach::Unreachable,
-            crate::ronda::Reach::Refused,
-            crate::ronda::Reach::Probing,
-        ] {
+        for rung in crate::ronda::Rung::ALL {
             assert!(
-                !frame.contains(reach.marker()),
-                "`{}` ({reach:?}) must not appear without a round:\n{frame}",
-                reach.marker(),
+                !frame.contains(rung.marker()),
+                "`{}` ({rung:?}) must not appear without a round:\n{frame}",
+                rung.marker(),
             );
         }
     }
 
-    /// **The redraw cadence is adaptive, and OFF without a round.** A picker
-    /// waking five times a second forever because it might learn something is
-    /// a busy loop with a good excuse.
+    /// **The redraw cadence is OFF without a round.** A picker waking many
+    /// times a second forever because it might learn something is a busy loop
+    /// with a good excuse.
     #[test]
-    fn the_repaint_cadence_follows_the_round() {
+    fn without_a_round_the_picker_is_input_only() {
         assert_eq!(three().repaint_after(), None, "no round, no repaint");
-
-        let (ronda, publisher) = crate::ronda::channel();
-        publisher.seed(&["a".into()]);
-        let p = three().with_ronda(ronda);
-        let probing = p.repaint_after().expect("a round repaints");
-
-        publisher.report("a", crate::ronda::Reach::Open);
-        let settled = p.repaint_after().expect("still repaints, more slowly");
-        assert!(
-            settled > probing,
-            "settled ({settled:?}) must be slower than probing ({probing:?})",
-        );
     }
 
     /// A narrow terminal must not panic or drop the screen.

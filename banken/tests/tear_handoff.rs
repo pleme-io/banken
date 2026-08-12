@@ -37,7 +37,7 @@ use tear_types::control::MultiplexerControl;
 
 fn ctx() -> BancadaContext {
     BancadaContext {
-        cluster: "camelot-eks".into(),
+        cluster: "alpha-eks".into(),
         selection: Selection {
             kind: ResourceKind::Pod,
             name: "banken-bancada-selftest".into(),
@@ -87,7 +87,7 @@ fn the_triage_recipe_opens_a_real_three_pane_tear_session() {
         "the daemon really holds three panes — the splits landed",
     );
     assert!(
-        session.name.starts_with("triage-camelot-eks-"),
+        session.name.starts_with("triage-alpha-eks-"),
         "the session carries the planned name: {}",
         session.name,
     );
@@ -126,7 +126,7 @@ fn the_triage_recipe_opens_a_real_three_pane_tear_session() {
          restart it (there is no protocol version to reject on)",
     );
     assert!(
-        root.args.contains(&"camelot-eks".to_owned()),
+        root.args.contains(&"alpha-eks".to_owned()),
         "the spawned argv targets the cluster banken was reading: {:?}",
         root.args,
     );

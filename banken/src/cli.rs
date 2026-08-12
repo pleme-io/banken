@@ -27,8 +27,8 @@
 //! the kubeconfig's `current-context`. On an operator workstation with a
 //! merged `KUBECONFIG` that is routinely a *different estate* than the one
 //! they mean to look at — measured 2026-07-31 on this machine: the
-//! current-context was `us-east-2-staging-eks` (an akeyless cluster) while the
-//! cluster under inspection was `camelot-eks`. banken would have rendered a
+//! current-context was `beta-eks` (a different estate) while the
+//! cluster under inspection was `alpha-eks`. banken would have rendered a
 //! pod table from the wrong estate and reported nothing unusual, because from
 //! the inside there IS nothing unusual: the read succeeds, the rows are real,
 //! only the *cluster* is wrong.
@@ -343,7 +343,7 @@ mod tests {
             Err(CliError::ConflictingSources),
         );
         assert_eq!(
-            parse(&["--fixture", "--context", "camelot-eks"]),
+            parse(&["--fixture", "--context", "alpha-eks"]),
             Err(CliError::ConflictingSources),
         );
     }
@@ -369,24 +369,24 @@ mod tests {
     #[test]
     fn a_named_context_selects_the_live_source() {
         assert_eq!(
-            parse(&["--live", "--context", "camelot-eks"]),
+            parse(&["--live", "--context", "alpha-eks"]),
             Ok(Invocation::Live {
-                context: "camelot-eks".into(),
+                context: "alpha-eks".into(),
                 strategy: crate::absorb::ListStrategy::Streaming,
             }),
         );
         assert_eq!(
-            parse(&["--live", "--context=camelot-eks"]),
+            parse(&["--live", "--context=alpha-eks"]),
             Ok(Invocation::Live {
-                context: "camelot-eks".into(),
+                context: "alpha-eks".into(),
                 strategy: crate::absorb::ListStrategy::Streaming,
             }),
         );
         // Order-independent, and a `:view` token does not disturb it.
         assert_eq!(
-            parse(&[":pods", "--context", "rio", "--live"]),
+            parse(&[":pods", "--context", "bravo", "--live"]),
             Ok(Invocation::Live {
-                context: "rio".into(),
+                context: "bravo".into(),
                 strategy: crate::absorb::ListStrategy::Streaming,
             }),
         );
@@ -396,7 +396,7 @@ mod tests {
     /// mean "read whatever the kubeconfig's current-context happens to be",
     /// which on this machine was an entirely different estate
     /// (`us-east-2-staging-eks`) than the one under inspection
-    /// (`camelot-eks`). banken still never guesses — it now *asks*, which is
+    /// (`alpha-eks`). banken still never guesses — it now *asks*, which is
     /// strictly more than the old refusal did and still produces a name the
     /// operator chose.
     ///
@@ -417,8 +417,8 @@ mod tests {
         for args in [
             vec!["--live"],
             vec![],
-            vec!["--live", "--context", "camelot-eks"],
-            vec!["--context", "rio"],
+            vec!["--live", "--context", "alpha-eks"],
+            vec!["--context", "bravo"],
             vec!["--fixture"],
         ] {
             if let Ok(Invocation::Live { context, .. }) = parse(&args) {
@@ -433,9 +433,9 @@ mod tests {
     #[test]
     fn a_context_alone_selects_the_live_source() {
         assert_eq!(
-            parse(&["--context", "camelot-eks"]),
+            parse(&["--context", "alpha-eks"]),
             Ok(Invocation::Live {
-                context: "camelot-eks".into(),
+                context: "alpha-eks".into(),
                 strategy: crate::absorb::ListStrategy::Streaming,
             }),
         );
@@ -468,12 +468,12 @@ mod tests {
     }
 
     /// An unknown flag is refused, never ignored. A silently-dropped
-    /// `--contxt camelot-eks` would have run against the fixture while the
+    /// `--contxt alpha-eks` would have run against the fixture while the
     /// operator believed they had selected a cluster — the same
     /// wrong-source class one typo away.
     #[test]
     fn an_unknown_flag_is_refused_by_name() {
-        match parse(&["--contxt", "camelot-eks"]) {
+        match parse(&["--contxt", "alpha-eks"]) {
             Err(CliError::UnknownFlag(f)) => assert_eq!(f, "--contxt"),
             other => panic!("expected UnknownFlag, got {other:?}"),
         }
@@ -492,9 +492,9 @@ mod list_strategy_cli_tests {
     #[test]
     fn the_strategy_defaults_to_streaming_when_unnamed() {
         assert_eq!(
-            parse(&["--live", "--context", "camelot-eks"]),
+            parse(&["--live", "--context", "alpha-eks"]),
             Ok(Invocation::Live {
-                context: "camelot-eks".into(),
+                context: "alpha-eks".into(),
                 strategy: ListStrategy::Streaming,
             })
         );

@@ -46,7 +46,7 @@
   :keys "shift+s"
   :legality (:class break-glass
              :witness "drzzln"
-             :runbook "clusters/rio/RUNBOOK.md")
+             :runbook "clusters/bravo/RUNBOOK.md")
   :manifest-scope full)
 
 ;; *** A plugin that tries to live-mutate is UN-AUTHORABLE:            ***

@@ -834,7 +834,7 @@ mod tests {
 
     fn ctx() -> BancadaContext {
         BancadaContext {
-            cluster: "camelot-eks".into(),
+            cluster: "alpha-eks".into(),
             selection: selection(),
             container: Some("catch".into()),
         }
@@ -904,7 +904,7 @@ mod tests {
                 exec_pane(PanePlacement::Below),
             ],
             witness: Some(OperatorId::new("drzzln").expect("a literal witness is non-blank")),
-            runbook: Some(RunbookRef("clusters/rio/RUNBOOK.md".into())),
+            runbook: Some(RunbookRef("clusters/bravo/RUNBOOK.md".into())),
         }
     }
 
@@ -1003,7 +1003,7 @@ mod tests {
     #[test]
     fn the_plan_resolves_the_context_into_the_argv() {
         let p = plan(&observe_recipe(), &ctx()).expect("plans");
-        assert_eq!(p.session_name(), "triage-camelot-eks-catch-catch-7d9f");
+        assert_eq!(p.session_name(), "triage-alpha-eks-catch-catch-7d9f");
         assert_eq!(p.layout(), SessionLayout::MainVertical);
         assert_eq!(p.panes().len(), 2);
         assert_eq!(
@@ -1011,7 +1011,7 @@ mod tests {
             vec![
                 "kubectl",
                 "--context",
-                "camelot-eks",
+                "alpha-eks",
                 "-n",
                 "catch",
                 "logs",
@@ -1110,7 +1110,7 @@ mod tests {
         assert_eq!(
             env.sessions.borrow().as_slice(),
             &[(
-                "triage-camelot-eks-catch-catch-7d9f".to_string(),
+                "triage-alpha-eks-catch-catch-7d9f".to_string(),
                 SessionLayout::MainVertical
             )],
         );
@@ -1164,7 +1164,7 @@ mod tests {
         assert_eq!(action.witness.as_str(), "drzzln");
         assert!(action.runbook.0.contains("RUNBOOK"));
         assert_eq!(
-            action.selector, "glass-camelot-eks-catch-catch-7d9f",
+            action.selector, "glass-alpha-eks-catch-catch-7d9f",
             "the RUNBOOK entry names the session that was opened",
         );
     }

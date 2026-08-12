@@ -101,7 +101,7 @@ pub struct BankenConfig {
     /// kubeconfig's own `current-context` resolves to (banken never
     /// writes a context, so "follow the kubeconfig" is the safe floor).
     ///
-    /// Lisp face: `:context "camelot-eks"`.
+    /// Lisp face: `:context "alpha-eks"`.
     pub context: String,
 
     /// The namespace to scope reads to. Empty ⇒ all namespaces.
@@ -600,7 +600,7 @@ specDir: banken-spec/specs
     fn lisp_face_rejects_a_missing_required_kwarg() {
         // The Lisp face IS strict about *required* kwargs (only about
         // *unknown* ones is it loose — see the next test).
-        let err = BankenConfig::from_lisp("(defbanken :context \"camelot-eks\")")
+        let err = BankenConfig::from_lisp("(defbanken :context \"alpha-eks\")")
             .expect_err("a missing required kwarg must fail");
         assert!(
             err.to_string().contains("required"),

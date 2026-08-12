@@ -52,7 +52,7 @@ use egaku::{Column, SortKey, SortOrder, TableError, TableView};
 /// act addresses an object across delete-and-recreate), and
 /// `TableView::project` short-circuits this field to `identity()` without
 /// consulting `cell` — so a NAME column on it renders uids. Measured
-/// 2026-08-09 against camelot-eks: 69 of 69 rows. The NAME column is authored
+/// 2026-08-09 against alpha-eks: 69 of 69 rows. The NAME column is authored
 /// on [`banken_spec::env::DISPLAY_NAME_FIELD`] instead.
 ///
 /// It stays exported because it is what a test asserts *against* — the

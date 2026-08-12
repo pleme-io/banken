@@ -1627,7 +1627,7 @@ mod tests {
     /// whole point of the bridge.
     #[test]
     fn the_bancada_chord_plans_a_prewarmed_session_on_the_right_cluster() {
-        let mut a = app_on("camelot-eks");
+        let mut a = app_on("alpha-eks");
         a.apply_action(Action::OpenBancada(0));
         match a.overlay() {
             Some(ActionResult::BancadaPlan {
@@ -1639,12 +1639,12 @@ mod tests {
                 assert_eq!(recipe, "pod-triage");
                 assert_eq!(legality, "OBSERVE", "a recipe of pure reads is OBSERVE");
                 assert!(
-                    session_name.starts_with("triage-camelot-eks-"),
+                    session_name.starts_with("triage-alpha-eks-"),
                     "got: {session_name}"
                 );
                 assert_eq!(lines.len(), 3, "three panes");
                 assert!(
-                    lines[0].contains("--context camelot-eks"),
+                    lines[0].contains("--context alpha-eks"),
                     "the log pane targets the cluster banken is reading: {}",
                     lines[0],
                 );
@@ -1660,7 +1660,7 @@ mod tests {
     /// present a live-effect session as a convenience.
     #[test]
     fn the_break_glass_bancada_overlay_states_the_gate_it_crosses() {
-        let mut a = app_on("camelot-eks");
+        let mut a = app_on("alpha-eks");
         a.apply_action(Action::OpenBancada(1));
         match a.overlay() {
             Some(ActionResult::BancadaPlan {
@@ -1722,7 +1722,7 @@ mod tests {
     /// so it is checking the wire, not a shape nothing can violate.
     #[test]
     fn confirming_a_bancada_opens_it_through_the_session_seam() {
-        let mut a = app_on("camelot-eks");
+        let mut a = app_on("alpha-eks");
 
         // Resolving alone touches NOTHING. This half is what makes the
         // confirm step meaningful rather than decorative.
@@ -1747,7 +1747,7 @@ mod tests {
             .session_name()
             .to_owned();
         assert!(
-            previewed.starts_with("triage-camelot-eks-"),
+            previewed.starts_with("triage-alpha-eks-"),
             "the session name carries the cluster banken reads: {previewed}",
         );
 
@@ -1776,7 +1776,7 @@ mod tests {
         // The spawned argv is the pre-warmed one, on the cluster banken reads.
         let spawned = a.session().spawned.borrow();
         assert!(
-            spawned[0].1.contains(&"camelot-eks".to_string()),
+            spawned[0].1.contains(&"alpha-eks".to_string()),
             "the first pane targets the cluster banken is reading: {:?}",
             spawned[0].1,
         );
@@ -1808,7 +1808,7 @@ mod tests {
     /// the keystroke intact.
     #[test]
     fn confirming_a_break_glass_bancada_stages_through_the_witnessed_arm() {
-        let mut a = app_on("camelot-eks");
+        let mut a = app_on("alpha-eks");
         a.apply_action(Action::OpenBancada(1));
 
         // M0 has no container picker, so a recipe naming `(:context
@@ -1856,7 +1856,7 @@ mod tests {
     /// not open anything, and it must not raise an error panel either.
     #[test]
     fn confirm_outside_a_preview_opens_nothing() {
-        let mut a = app_on("camelot-eks");
+        let mut a = app_on("alpha-eks");
         a.apply_action(Action::Confirm);
         assert_eq!(a.session().sessions.borrow().len(), 0);
         assert!(a.overlay().is_none(), "and it raises no panel");
@@ -1871,7 +1871,7 @@ mod tests {
     /// real escape hatch.
     #[test]
     fn dismissing_a_preview_opens_nothing() {
-        let mut a = app_on("camelot-eks");
+        let mut a = app_on("alpha-eks");
         a.apply_action(Action::OpenBancada(0));
         a.apply_action(Action::Dismiss);
         assert!(a.pending_bancada().is_none());
@@ -1901,7 +1901,7 @@ mod tests {
     #[test]
     fn opening_a_bancada_is_repeat_gated() {
         assert!(Action::OpenBancada(0).is_repeat_gated());
-        let mut a = app_on("camelot-eks");
+        let mut a = app_on("alpha-eks");
         let t0 = Instant::now();
         assert!(a.dispatch_action_at(Action::OpenBancada(0), t0));
         assert!(
