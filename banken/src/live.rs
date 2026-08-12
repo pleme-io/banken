@@ -967,6 +967,259 @@ fn pod_to_row(pod: Pod) -> Option<Row> {
     })
 }
 
+/// `AGE`, k8s-style, from a creation timestamp.
+///
+/// This column rendered `-` on every row since the live backend landed, with
+/// the note that the derivation "needs a clock". It needs a clock the same way
+/// every age does; what it actually needed was a decision about which unit to
+/// show, and `kubectl`'s answer is the one operators already read: the largest
+/// unit that leaves a number, never two units, never a fraction.
+///
+/// `None` (absent timestamp) still renders `-`, because "banken does not know
+/// how old this is" and "this is zero seconds old" are different facts.
+fn age_cell(created: Option<&k8s_openapi::apimachinery::pkg::apis::meta::v1::Time>) -> String {
+    let Some(t) = created else {
+        return "-".into();
+    };
+    let secs = (k8s_openapi::chrono::Utc::now() - t.0).num_seconds();
+    if secs < 0 {
+        // A clock skew between here and the apiserver. `-` beats a negative
+        // age, which reads as a bug in the cluster rather than in the clock.
+        return "-".into();
+    }
+    let (n, unit) = match secs {
+        s if s < 60 => (s, 's'),
+        s if s < 3600 => (s / 60, 'm'),
+        s if s < 86_400 => (s / 3600, 'h'),
+        s => (s / 86_400, 'd'),
+    };
+    let mut out = n.to_string();
+    out.push(unit);
+    out
+}
+
+/// The common head of every projection: identity, name, namespace, version.
+///
+/// `None` for an object carrying no `metadata.uid` — see [`pod_to_row`] for
+/// why that is a refusal rather than a synthesised identity.
+fn row_head<K: kube::Resource>(o: &K) -> Option<(banken_spec::env::Uid, String, Option<String>, Option<String>)> {
+    let m = o.meta();
+    let uid = banken_spec::env::Uid::new(m.uid.clone().unwrap_or_default())?;
+    Some((
+        uid,
+        m.name.clone().unwrap_or_default(),
+        m.namespace.clone(),
+        m.resource_version.clone(),
+    ))
+}
+
+/// Build a [`Row`] from an object plus the cells its authored view names.
+fn row_of<K: kube::Resource>(o: &K, cells: Vec<(String, String)>) -> Option<Row> {
+    let (uid, name, namespace, version) = row_head(o)?;
+    let mut cells = cells;
+    cells.push(("age".into(), age_cell(o.meta().creation_timestamp.as_ref())));
+    Some(Row {
+        uid,
+        name,
+        namespace,
+        version,
+        cells,
+    })
+}
+
+fn service_to_row(s: k8s_openapi::api::core::v1::Service) -> Option<Row> {
+    let spec = s.spec.as_ref();
+    let ty = spec
+        .and_then(|s| s.type_.clone())
+        .unwrap_or_else(|| "ClusterIP".into());
+    let cluster_ip = spec
+        .and_then(|s| s.cluster_ip.clone())
+        .unwrap_or_else(|| "-".into());
+    let ports = spec
+        .and_then(|s| s.ports.as_ref())
+        .map(|ps| {
+            let mut out = String::new();
+            for (i, p) in ps.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&p.port.to_string());
+            }
+            out
+        })
+        .unwrap_or_else(|| "-".into());
+    let cells = vec![
+        ("type".into(), ty),
+        ("cluster-ip".into(), cluster_ip),
+        ("ports".into(), ports),
+    ];
+    row_of(&s, cells)
+}
+
+fn deployment_to_row(d: k8s_openapi::api::apps::v1::Deployment) -> Option<Row> {
+    let st = d.status.as_ref();
+    let desired = d
+        .spec
+        .as_ref()
+        .and_then(|s| s.replicas)
+        .unwrap_or(0);
+    let ready = st.and_then(|s| s.ready_replicas).unwrap_or(0);
+    let up_to_date = st.and_then(|s| s.updated_replicas).unwrap_or(0);
+    let available = st.and_then(|s| s.available_replicas).unwrap_or(0);
+    let mut ready_cell = ready.to_string();
+    ready_cell.push('/');
+    ready_cell.push_str(&desired.to_string());
+    let cells = vec![
+        ("ready".into(), ready_cell),
+        ("up-to-date".into(), up_to_date.to_string()),
+        ("available".into(), available.to_string()),
+    ];
+    row_of(&d, cells)
+}
+
+fn replicaset_to_row(r: k8s_openapi::api::apps::v1::ReplicaSet) -> Option<Row> {
+    let st = r.status.as_ref();
+    let desired = r.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
+    let current = st.map_or(0, |s| s.replicas);
+    let ready = st.and_then(|s| s.ready_replicas).unwrap_or(0);
+    let cells = vec![
+        ("desired".into(), desired.to_string()),
+        ("current".into(), current.to_string()),
+        ("ready".into(), ready.to_string()),
+    ];
+    row_of(&r, cells)
+}
+
+fn configmap_to_row(c: k8s_openapi::api::core::v1::ConfigMap) -> Option<Row> {
+    // KEY COUNT, never the values. A ConfigMap routinely carries credentials
+    // that were put there by mistake, and a navigator that renders them into a
+    // terminal has published them to a scrollback, a screen share and a
+    // recording. The count answers "is it populated"; `:describe` is the
+    // deliberate act that shows content.
+    let keys = c.data.as_ref().map_or(0, std::collections::BTreeMap::len)
+        + c.binary_data.as_ref().map_or(0, std::collections::BTreeMap::len);
+    row_of(&c, vec![("keys".into(), keys.to_string())])
+}
+
+fn endpoints_to_row(e: k8s_openapi::api::core::v1::Endpoints) -> Option<Row> {
+    let addresses: usize = e
+        .subsets
+        .as_ref()
+        .map(|ss| {
+            ss.iter()
+                .map(|s| s.addresses.as_ref().map_or(0, Vec::len))
+                .sum()
+        })
+        .unwrap_or(0);
+    row_of(&e, vec![("endpoints".into(), addresses.to_string())])
+}
+
+fn namespace_to_row(n: k8s_openapi::api::core::v1::Namespace) -> Option<Row> {
+    let phase = n
+        .status
+        .as_ref()
+        .and_then(|s| s.phase.clone())
+        .unwrap_or_else(|| "Unknown".into());
+    row_of(&n, vec![("phase".into(), phase)])
+}
+
+fn node_to_row(n: k8s_openapi::api::core::v1::Node) -> Option<Row> {
+    let st = n.status.as_ref();
+    // A node's STATUS is the Ready condition, and `Unschedulable` on the spec
+    // is what a cordon looks like — reporting only Ready would show a cordoned
+    // node as healthy, which is the one moment an operator is looking at this
+    // column on purpose.
+    let ready = st
+        .and_then(|s| s.conditions.as_ref())
+        .and_then(|cs| cs.iter().find(|c| c.type_ == "Ready"))
+        .map(|c| {
+            if c.status == "True" {
+                "Ready".to_owned()
+            } else {
+                "NotReady".to_owned()
+            }
+        })
+        .unwrap_or_else(|| "Unknown".into());
+    let status = if n.spec.as_ref().and_then(|s| s.unschedulable) == Some(true) {
+        let mut s = ready.clone();
+        s.push_str(",SchedulingDisabled");
+        s
+    } else {
+        ready
+    };
+    let version = st
+        .and_then(|s| s.node_info.as_ref())
+        .map(|i| i.kubelet_version.clone())
+        .unwrap_or_else(|| "-".into());
+    let cells = vec![("phase".into(), status), ("version".into(), version)];
+    row_of(&n, cells)
+}
+
+impl KubeClusterEnv {
+    /// List a namespaced kind and project each object into a [`Row`].
+    ///
+    /// The generic that ends the pod-shaped era: `list_pods` was the only
+    /// listing, so every kind past `Pod` was a typed refusal. What varies per
+    /// kind is exactly the projection — which is why it is the parameter and
+    /// the plumbing is not.
+    async fn list_ns_scoped<K>(
+        &self,
+        ns: Option<&str>,
+        project: fn(K) -> Option<Row>,
+    ) -> Result<Vec<Row>, SpecError>
+    where
+        K: kube::Resource<Scope = kube::core::NamespaceResourceScope>
+            + Clone
+            + std::fmt::Debug
+            // Reached through k8s-openapi's re-export: `serde` is not a direct
+            // dependency of this crate and adding one for a single trait bound
+            // would widen the closure for nothing.
+            + k8s_openapi::serde::de::DeserializeOwned,
+        K::DynamicType: Default,
+    {
+        let api: Api<K> = match ns {
+            Some(ns) => Api::namespaced(self.client.clone(), ns),
+            None => Api::all(self.client.clone()),
+        };
+        let list = api
+            .list(&ListParams::default())
+            .await
+            .map_err(|e| SpecError::Interp {
+                phase: "list-resources".into(),
+                message: Self::error_chain(&e),
+            })?;
+        Ok(list.items.into_iter().filter_map(project).collect())
+    }
+
+    /// The cluster-scoped peer. Separate because `Api::namespaced` does not
+    /// exist for a cluster-scoped kind — the scope is in the type, so asking
+    /// for a namespaced Node is a compile error rather than a runtime 404.
+    async fn list_cluster_scoped<K>(
+        &self,
+        project: fn(K) -> Option<Row>,
+    ) -> Result<Vec<Row>, SpecError>
+    where
+        K: kube::Resource<Scope = kube::core::ClusterResourceScope>
+            + Clone
+            + std::fmt::Debug
+            // Reached through k8s-openapi's re-export: `serde` is not a direct
+            // dependency of this crate and adding one for a single trait bound
+            // would widen the closure for nothing.
+            + k8s_openapi::serde::de::DeserializeOwned,
+        K::DynamicType: Default,
+    {
+        let api: Api<K> = Api::all(self.client.clone());
+        let list = api
+            .list(&ListParams::default())
+            .await
+            .map_err(|e| SpecError::Interp {
+                phase: "list-resources".into(),
+                message: Self::error_chain(&e),
+            })?;
+        Ok(list.items.into_iter().filter_map(project).collect())
+    }
+}
+
 impl ClusterEnv for KubeClusterEnv {
     /// A REAL re-read, at the instant of the act.
     ///
@@ -994,19 +1247,39 @@ impl ClusterEnv for KubeClusterEnv {
         id.grip_against(&rows)
     }
 
+    /// Every [`ResourceKind`] reads live.
+    ///
+    /// **A TOTAL match, and that is the point.** This was `Pod => …, other =>
+    /// Err("not yet wired")`, which meant a kind added to the enum compiled
+    /// clean and refused at runtime. Listing every arm makes a new kind a
+    /// compile error here until someone writes its projection — the gap moves
+    /// from an operator's screen to the build.
     fn list_resources(&self, kind: ResourceKind, ns: Option<&str>) -> Result<Vec<Row>, SpecError> {
+        use k8s_openapi::api::apps::v1::{Deployment, ReplicaSet};
+        use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Namespace, Node, Service};
         match kind {
             ResourceKind::Pod => self.block(self.list_pods(ns)),
-            // Other kinds land as views are added (BANKEN.md §VI M1). A
-            // typed error, never a fake empty `Ok` that hides the gap.
-            other => Err(SpecError::Interp {
-                phase: "list-resources".into(),
-                message: {
-                    let mut m = String::from(other.label());
-                    m.push_str(" live read not yet wired (pending-banken: live-read M1)");
-                    m
-                },
-            }),
+            ResourceKind::Service => {
+                self.block(self.list_ns_scoped::<Service>(ns, service_to_row))
+            }
+            ResourceKind::ConfigMap => {
+                self.block(self.list_ns_scoped::<ConfigMap>(ns, configmap_to_row))
+            }
+            ResourceKind::Endpoints => {
+                self.block(self.list_ns_scoped::<Endpoints>(ns, endpoints_to_row))
+            }
+            ResourceKind::Deployment => {
+                self.block(self.list_ns_scoped::<Deployment>(ns, deployment_to_row))
+            }
+            ResourceKind::ReplicaSet => {
+                self.block(self.list_ns_scoped::<ReplicaSet>(ns, replicaset_to_row))
+            }
+            // Cluster-scoped: `ns` is not applicable and is deliberately not
+            // silently accepted-and-ignored.
+            ResourceKind::Namespace => {
+                self.block(self.list_cluster_scoped::<Namespace>(namespace_to_row))
+            }
+            ResourceKind::Node => self.block(self.list_cluster_scoped::<Node>(node_to_row)),
         }
     }
 

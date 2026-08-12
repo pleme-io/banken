@@ -19,7 +19,11 @@ use banken_spec::{
 #[test]
 fn authored_views_compile_into_typed_values() {
     let views = load_views().expect("canonical views must compile");
-    assert_eq!(views.len(), 3, "pods + svc + ward");
+    assert_eq!(
+        views.len(),
+        9,
+        "pods + svc + ward + deploy + rs + no + ns + cm + ep",
+    );
 
     let pods = views.iter().find(|v| v.name == "pods").expect("pods view");
     assert_eq!(pods.kind, ViewKind::ResourceTable);
@@ -94,4 +98,34 @@ fn authored_declare_action_drives_apply_to_a_full_manifest() {
     assert_eq!(declared.len(), 1);
     assert!(declared[0].full_manifest.contains("dryRun"));
     assert_eq!(declared[0].scope, ManifestScope::Full);
+}
+
+/// **Every resource kind the backend can read is reachable from a view.**
+///
+/// The count assertion above catches a view landing without its catalog
+/// entry. This catches the opposite and more likely drift: a `ResourceKind`
+/// gaining a live read while no `(defk8sview …)` names it, leaving a kind
+/// that the backend serves and nothing can navigate to. That is invisible —
+/// everything compiles, every test passes, and the operator simply has no
+/// way to ask for it.
+///
+/// `ResourceKind::ALL` is the denominator, so a kind added to the enum fails
+/// here until it is either given a view or explicitly excused below.
+#[test]
+fn every_resource_kind_is_reachable_from_some_view() {
+    let views = load_views().expect("canonical views must compile");
+    let mut unreachable = Vec::new();
+    for kind in ResourceKind::ALL {
+        let reachable = views
+            .iter()
+            .any(|v| v.source == ViewSource::Resource(*kind));
+        if !reachable {
+            unreachable.push(kind.label());
+        }
+    }
+    assert!(
+        unreachable.is_empty(),
+        "these kinds read live but no (defk8sview) names them, so nothing can \
+         navigate to them: {unreachable:?}",
+    );
 }

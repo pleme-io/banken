@@ -47,3 +47,79 @@
             (:header "STATUS" :field phase))
   :default-sort (:column "STATUS" :order desc)
   :drill-to "diagnose")
+
+;; ── The kinds the live backend gained when `list_resources` stopped being
+;; pod-shaped (2026-08-12). Each is a view because the read exists; a kind
+;; that reads live and has no `(defk8sview)` is navigable by nothing, which
+;; `every_resource_kind_is_reachable_from_some_view` now refuses.
+;;
+;; Columns mirror `kubectl get <kind>` where the mapping is unambiguous — an
+;; operator should not have to learn a second column vocabulary to read the
+;; same object.
+;;
+;; `:resource` values are the SERDE variant names (`replica_set`, not
+;; `replicaset`); a typo is a compile error naming the legal set, which is
+;; how the first draft of this block was caught.
+
+(defk8sview
+  :name "deploy"
+  :kind ResourceTable
+  :source (:resource deployment)
+  :columns ((:header "NAME" :field object-name)
+            (:header "READY" :field ready)
+            (:header "UP-TO-DATE" :field up-to-date)
+            (:header "AVAILABLE" :field available)
+            (:header "AGE" :field age))
+  :default-sort (:column "NAME" :order asc))
+
+(defk8sview
+  :name "rs"
+  :kind ResourceTable
+  :source (:resource replica_set)
+  :columns ((:header "NAME" :field object-name)
+            (:header "DESIRED" :field desired)
+            (:header "CURRENT" :field current)
+            (:header "READY" :field ready)
+            (:header "AGE" :field age))
+  :default-sort (:column "NAME" :order asc))
+
+(defk8sview
+  :name "no"
+  :kind ResourceTable
+  :source (:resource node)
+  :columns ((:header "NAME" :field object-name)
+            (:header "STATUS" :field phase)
+            (:header "VERSION" :field version)
+            (:header "AGE" :field age))
+  :default-sort (:column "STATUS" :order desc))
+
+(defk8sview
+  :name "ns"
+  :kind ResourceTable
+  :source (:resource namespace)
+  :columns ((:header "NAME" :field object-name)
+            (:header "STATUS" :field phase)
+            (:header "AGE" :field age))
+  :default-sort (:column "NAME" :order asc))
+
+;; KEYS, not values — the projection deliberately carries a count. A
+;; ConfigMap routinely holds a credential someone put there by mistake, and
+;; rendering it into a terminal publishes it to a scrollback, a screen share
+;; and a recording. See `configmap_to_row`.
+(defk8sview
+  :name "cm"
+  :kind ResourceTable
+  :source (:resource config_map)
+  :columns ((:header "NAME" :field object-name)
+            (:header "KEYS" :field keys)
+            (:header "AGE" :field age))
+  :default-sort (:column "NAME" :order asc))
+
+(defk8sview
+  :name "ep"
+  :kind ResourceTable
+  :source (:resource endpoints)
+  :columns ((:header "NAME" :field object-name)
+            (:header "ENDPOINTS" :field endpoints)
+            (:header "AGE" :field age))
+  :default-sort (:column "NAME" :order asc))

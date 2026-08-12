@@ -243,7 +243,7 @@ fn authored_nav_keys_compile_into_typed_values() {
 #[test]
 fn the_shipped_vocabulary_cross_resolves() {
     let c = load_catalog().expect("the shipped vocabulary must cross-resolve");
-    assert_eq!(c.views().len(), 3);
+    assert_eq!(c.views().len(), 9);
     assert_eq!(c.actions().len(), 4);
     assert_eq!(c.pathologies().len(), 3);
     assert_eq!(c.wards().len(), 1);
