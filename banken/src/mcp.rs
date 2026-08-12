@@ -87,13 +87,30 @@ pub struct BankenMcp {
     tool_router: ToolRouter<Self>,
 }
 
+/// A successful read, rendered through [`kotae::Answer`].
+///
+/// The helpers below used to hand-roll this, and hand-rolling is what the
+/// fleet measured 197 times across five MCP servers. What kotae adds beyond
+/// deduplication is the `outcome` discriminant: a reader can now tell a found
+/// answer from an empty one from a refusal by ONE field, instead of inferring
+/// it from which keys happen to be present.
 fn ok(v: &Value) -> String {
-    serde_json::to_string_pretty(v)
-        .unwrap_or_else(|e| json!({ "error": format!("serialize: {e}") }).to_string())
+    kotae::Answer::found_value(v.clone()).render()
 }
 
+/// A read that could not be performed.
+///
+/// `blind`, deliberately — a `SpecError` from the env means banken could not
+/// LOOK, which is not a denial and not an absence. That distinction was
+/// carried in prose before ("a refusal is never shaped like an empty list");
+/// it is now carried by the type, where a reader can act on it.
 fn fail(e: &banken_spec::error::SpecError) -> String {
-    json!({ "error": e.to_string() }).to_string()
+    kotae::Answer::blind(e.to_string()).render()
+}
+
+/// The caller named something banken does not know, and here is what it does.
+fn refuse_unknown_kind(got: &str) -> String {
+    kotae::Answer::refused(format!("unknown kind `{got}`"), legal_kinds()).render()
 }
 
 /// Resolve an authored view name or a wire label to a [`ResourceKind`].
@@ -263,10 +280,7 @@ impl BankenMcp {
     )]
     pub async fn banken_list(&self, Parameters(p): Parameters<ListInput>) -> String {
         let Some(kind) = kind_of(&p.kind) else {
-            return ok(&json!({
-                "error": format!("unknown kind `{}`", p.kind),
-                "legal": legal_kinds(),
-            }));
+            return refuse_unknown_kind(&p.kind);
         };
         match self.env.list_resources(kind, p.namespace.as_deref()) {
             Ok(rows) => ok(&json!({
@@ -284,10 +298,7 @@ impl BankenMcp {
     )]
     pub async fn banken_get(&self, Parameters(p): Parameters<GetInput>) -> String {
         let Some(kind) = kind_of(&p.kind) else {
-            return ok(&json!({
-                "error": format!("unknown kind `{}`", p.kind),
-                "legal": legal_kinds(),
-            }));
+            return refuse_unknown_kind(&p.kind);
         };
         match self.env.get_resource(kind, &p.name, p.namespace.as_deref()) {
             Ok(row) => ok(&json!({
@@ -382,10 +393,7 @@ impl BankenMcp {
         // the environmental limitation instead would send an agent to debug
         // banken's wiring over its own misspelling.
         let Some(kind) = kind_of(&p.kind) else {
-            return ok(&json!({
-                "error": format!("unknown kind `{}`", p.kind),
-                "legal": legal_kinds(),
-            }));
+            return refuse_unknown_kind(&p.kind);
         };
         let Some(permits) = self.permits.as_ref() else {
             return ok(&json!({
@@ -700,8 +708,13 @@ mod tests {
             }))
             .await;
         let v: Value = serde_json::from_str(&s).expect("valid json");
+        // The DISCRIMINANT is the assertion now. Before kotae a reader had to
+        // infer "this was refused" from which keys happened to be present;
+        // `outcome` says it in one field, so a refusal and an empty read can
+        // no longer render alike even by accident.
+        assert_eq!(v["outcome"], "refused", "{s}");
         assert!(
-            v["error"].as_str().unwrap_or_default().contains("poddz"),
+            v["because"].as_str().unwrap_or_default().contains("poddz"),
             "{s}",
         );
         assert!(v["legal"].as_array().is_some_and(|a| !a.is_empty()), "{s}");
@@ -820,8 +833,13 @@ mod tests {
             }))
             .await;
         let v: Value = serde_json::from_str(&s).expect("valid json");
+        // The DISCRIMINANT is the assertion now. Before kotae a reader had to
+        // infer "this was refused" from which keys happened to be present;
+        // `outcome` says it in one field, so a refusal and an empty read can
+        // no longer render alike even by accident.
+        assert_eq!(v["outcome"], "refused", "{s}");
         assert!(
-            v["error"].as_str().unwrap_or_default().contains("poddz"),
+            v["because"].as_str().unwrap_or_default().contains("poddz"),
             "{s}"
         );
         assert_ne!(v["permit"], "denied", "{s}");
