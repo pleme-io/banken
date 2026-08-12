@@ -223,8 +223,12 @@ impl ContextPicker {
     /// the next row and gets the letter `j` in their filter has been told the
     /// screen is modal and then handed a screen that is not.
     ///
-    /// One constant, one call site — the seam a `(defbanken :opening-stance …)`
-    /// field writes to. `pending-banken: opening-stance-config`.
+    /// One constant, one call site — and the value a
+    /// `(defbanken :picker-stance …)` field overrides. It stays as the
+    /// PRESCRIBED default rather than being deleted: a picker built without
+    /// config (every test, `--fixture`) still needs an answer, and reading
+    /// the config from inside a constructor would make that answer depend on
+    /// what is on disk. `pending-banken: opening-stance-config` — CLOSED.
     pub const OPENING_STANCE: unsoku::Stance = unsoku::Stance::Normal;
 
     /// The same picker over a supplied context list — the seam a test drives,
@@ -313,6 +317,17 @@ impl ContextPicker {
     /// eighteen contexts would otherwise be re-probed from scratch on every
     /// retry, and the markers would blink back to `probing` at exactly the
     /// moment the operator is looking for the one that is up.
+    /// Open in the stance the operator authored.
+    ///
+    /// Builder-style, like every other optional input here: a caller that has
+    /// read a `(defbanken …)` passes it, and one that has not keeps
+    /// [`Self::OPENING_STANCE`].
+    #[must_use]
+    pub fn opening_in(mut self, stance: unsoku::Stance) -> Self {
+        self.vim = crate::vim::Vim::opening_in(stance);
+        self
+    }
+
     #[must_use]
     pub fn with_ronda(mut self, ronda: crate::ronda::Ronda) -> Self {
         self.ronda = ronda;
@@ -1887,5 +1902,34 @@ mod tests {
             let mut backend = TestBackend::new(w, h);
             backend.draw(|buf| p.render(buf));
         }
+    }
+}
+
+#[cfg(test)]
+mod stance_config_tests {
+    use super::*;
+
+    /// The authored stance actually reaches the screen — a config field
+    /// nothing reads is the exact trap this workspace already paid for once,
+    /// when `:refresh-interval-ms` was authored, tested and ignored for the
+    /// whole life of the crate.
+    #[test]
+    fn the_builder_overrides_the_prescribed_stance() {
+        let catalog = banken_spec::load_catalog().expect("the shipped vocabulary must load");
+        let ctxs = vec![ContextChoice {
+            name: "alpha-eks".into(),
+            server: Some("https://k8s.example.invalid:6443".into()),
+            files: vec![std::path::PathBuf::from("/home/op/.kube/config")],
+        }];
+
+        let p = ContextPicker::with_contexts(&catalog, ctxs.clone());
+        assert_eq!(p.stance_badge(), "NORMAL", "the prescribed default");
+
+        let p = ContextPicker::with_contexts(&catalog, ctxs).opening_in(unsoku::Stance::Insert);
+        assert_eq!(
+            p.stance_badge(),
+            "INSERT",
+            "an authored `:picker-stance \"insert\"` must reach the screen",
+        );
     }
 }

@@ -71,6 +71,32 @@ use tatara_lisp::DeriveTataraDomain;
 pub const DEFAULT_REFRESH_INTERVAL_MS: u64 = 1_000;
 
 /// The default authored-spec directory, relative to the repo root.
+/// The prescribed opening stance: NORMAL.
+///
+/// Operator decision 2026-08-12. The screen draws a stance badge and binds
+/// vim keys, so opening in INSERT meant `j` typed a `j` — a screen that
+/// advertises a mode and then ignores it.
+pub const DEFAULT_PICKER_STANCE: PickerStance = PickerStance::Normal;
+
+/// Which stance a modal filter box opens in.
+///
+/// Mirrors `unsoku::Stance`'s two inhabitants without depending on it: this
+/// crate is the CONFIG face and has no business pulling in an editor, and the
+/// use site converts. An unknown spelling has no typed value, so
+/// `:picker-stance "norml"` is refused when the form compiles rather than
+/// falling back to a default nobody chose.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PickerStance {
+    /// Navigate first; `i` starts typing. The prescribed default.
+    #[default]
+    Normal,
+    /// Open typing; `esc` reaches NORMAL.
+    Insert,
+}
+
 pub const DEFAULT_SPEC_DIR: &str = "banken-spec/specs";
 
 // NOTE: there is deliberately **no** `DEFAULT_THEME` / `DEFAULT_SCROLLBACK_LINES`
@@ -114,6 +140,31 @@ pub struct BankenConfig {
     ///
     /// Lisp face: `:refresh-interval-ms 1000`.
     pub refresh_interval_ms: u64,
+
+    /// Which stance the cluster picker's filter opens in.
+    ///
+    /// A knob because it is a genuine preference with two defensible answers
+    /// — a chooser's primary act is typing, and a screen that draws a stance
+    /// badge must honour the stance — and burying a preference in a
+    /// constructor is what made it unaskable. It was
+    /// `pending-banken: opening-stance-config`.
+    ///
+    /// A typed enum rather than a bool, for two reasons. The authoring
+    /// surface has no bool atom, so `:picker-opens-in-normal true` is refused
+    /// with "expected bool" (measured); and `"normal"` says at the call site
+    /// what `true` cannot, so an unknown spelling has no typed value instead
+    /// of silently meaning `false`.
+    ///
+    /// Lisp face: `:picker-stance "normal"`.
+    ///
+    /// `#[serde(default)]` because an OVERLAY may legitimately omit it: a
+    /// `banken-local.yaml` that sets only a namespace must not be required to
+    /// restate every field, and without this every partial overlay fails with
+    /// `missing field pickerStance`. The default is `Normal`, which is the
+    /// same value the prescribed tier carries, so an omission and an explicit
+    /// `"normal"` mean the same thing.
+    #[serde(default)]
+    pub picker_stance: PickerStance,
 
     /// The selected theme — the typed `ishou_tokens::FleetTheme`, **not** a
     /// string. An unknown theme name has no typed value, so
@@ -257,6 +308,10 @@ impl shikumi::TieredConfig for BankenConfig {
             context: String::new(),
             namespace: String::new(),
             refresh_interval_ms: 0,
+            // NORMAL is the zero-opinion value, not a preference: it is
+            // `unsoku::Stance::default()`. Opening in INSERT would be this
+            // tier expressing exactly the opinion it exists not to have.
+            picker_stance: PickerStance::Normal,
             theme: FleetTheme::Bare,
             scrollback_lines: 0,
             spec_dir: PathBuf::new(),
@@ -278,6 +333,7 @@ impl shikumi::TieredConfig for BankenConfig {
     fn prescribed_default() -> Self {
         Self {
             refresh_interval_ms: DEFAULT_REFRESH_INTERVAL_MS,
+            picker_stance: DEFAULT_PICKER_STANCE,
             spec_dir: PathBuf::from(DEFAULT_SPEC_DIR),
             // Visual fields (theme, scrollback) + the empty context/namespace
             // floor come from the fleet-derived base.

@@ -23,6 +23,16 @@
   ;; BANKEN.md §VI M0: a 1 Hz POLL. True watch is M1 unbuilt substrate
   ;; (§IX C-watch) — this knob is not renamed until the informer exists.
   :refresh-interval-ms 1000
+  ;; Which stance the cluster picker's filter opens in. `"normal"` ⇒ —
+  ;; vim-true: `j`/`k` move rows, `i` starts typing, `esc` never leaves.
+  ;; `"insert"` ⇒ open typing;, where the screen opens typing.
+  ;;
+  ;; A real preference with two defensible answers: a chooser's primary act
+  ;; IS typing, and a screen that draws a stance badge must honour the
+  ;; stance. NORMAL won because the second argument is about honesty and the
+  ;; first is about convenience. Authored rather than hardcoded so the answer
+  ;; can change without a rebuild of the argument.
+  :picker-stance "normal"
   ;; The typed ishou_tokens::FleetTheme, DERIVED from
   ;; FleetDefaults::prescribed() — never a locally-chosen palette. Note the
   ;; snake_case wire name: FleetTheme's serde repr is rename_all =

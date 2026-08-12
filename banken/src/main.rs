@@ -147,6 +147,7 @@ async fn run_pick(
     loop {
         let mut picker = banken::picker::ContextPicker::try_new(&catalog)
             .map_err(|e| e.to_string())?
+            .opening_in(opening_stance())
             .with_ronda(ronda.clone());
         if let Some(n) = notice.take() {
             picker = picker.with_notice(n);
@@ -423,6 +424,20 @@ async fn run_live_from(
 /// the feed has no manual-only mode yet; that gap is
 /// `pending-banken: manual-refresh-mode` rather than a silent reinterpretation
 /// of an authored zero.
+/// The stance the picker opens in, from the AUTHORED config.
+///
+/// A discovery failure falls back to the prescribed default rather than
+/// refusing to start, the same rule [`refresh_interval`] follows: banken must
+/// run on a machine that has never configured it.
+#[cfg(feature = "live")]
+fn opening_stance() -> unsoku::Stance {
+    match banken_config::BankenConfig::discover_effective().map(|c| c.picker_stance) {
+        Ok(banken_config::PickerStance::Insert) => unsoku::Stance::Insert,
+        Ok(banken_config::PickerStance::Normal) => unsoku::Stance::Normal,
+        Err(_) => banken::picker::ContextPicker::OPENING_STANCE,
+    }
+}
+
 fn refresh_interval() -> std::time::Duration {
     let ms = banken_config::BankenConfig::discover_effective()
         .map(|c| c.refresh_interval_ms)
