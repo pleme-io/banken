@@ -1511,7 +1511,9 @@ dependencies = [
 
 [[package]]
 name = "kotae"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1194689d317921722f9793d9d803d96801777c0359784ab33f2870ac9c040b04"
 dependencies = [
  "serde",
  "serde_json",
@@ -1815,7 +1817,9 @@ dependencies = [
 
 [[package]]
 name = "okiba"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68f9c1a09ac313282383bd44d48fda567bcfeff7afcd1b18ab65e55fde6720f7"
 
 [[package]]
 name = "once_cell"

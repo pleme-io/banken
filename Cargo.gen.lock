@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "e8d6abd305292af626990cbfb7ef7842d17be3035cc8135f6b9bb54fd9e11c73",
+  "cargo_lock_sha256": "068689d4d1777eb8a1696827366b075cb22e1ac8983ca788d9b3b9f9defc1a72",
   "manifest_sha256": {
-    "Cargo.toml": "d49beab13f4ec8e0f1445a14759dbd6ff5b049afe1a68acd6c1721126254cb4a",
+    "Cargo.toml": "1a0a8b2e0549a20578467eb6d00895cb20c21a742b3bdd789b35e82393448e00",
     "banken-config/Cargo.toml": "ad2de374a20edfaf584decc7ef42646b90e39a09fedbba54f24fd5aff8d2c4df",
     "banken-spec/Cargo.toml": "2e3390f4a2ef74b5c85792f176bc679e7e340f96600c6901afceb1063bd8798c",
-    "banken/Cargo.toml": "e349f8e455cbe28c7252319fd512253266dad401c4f82a8e5d8e6adc1e30bfa6"
+    "banken/Cargo.toml": "4934b148d97a9369fad2edde90c17973c13d0ab516e2bade32ad2c2fc950feb2"
   },
   "target_resolves": {
     "base": {
@@ -610,6 +610,16 @@
             "tree": "target"
           },
           {
+            "name": "kotae",
+            "package_key": "kotae-0.1.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
             "name": "kube",
             "package_key": "kube-0.99.0",
             "kind": "normal",
@@ -630,6 +640,16 @@
             "features": [],
             "uses_default_features": true,
             "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "okiba",
+            "package_key": "okiba-0.1.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
             "target": null,
             "tree": "target"
           },
@@ -4956,6 +4976,34 @@
           "v1_32"
         ]
       },
+      "kotae-0.1.1": {
+        "runtime_dependencies": [
+          {
+            "name": "serde",
+            "package_key": "serde-1.0.229",
+            "kind": "normal",
+            "features": [
+              "derive"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde_json",
+            "package_key": "serde_json-1.0.150",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "kube-0.99.0": {
         "runtime_dependencies": [
           {
@@ -6218,6 +6266,11 @@
           "tokio",
           "tracing"
         ]
+      },
+      "okiba-0.1.1": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
       },
       "once_cell-1.21.4": {
         "runtime_dependencies": [],
@@ -15290,6 +15343,9 @@
       "build_script": "build.rs",
       "links": "k8s-openapi-0.24.0"
     },
+    "kotae-0.1.1": {
+      "edition": "2024"
+    },
     "kqueue-1.2.0": {
       "edition": "2021"
     },
@@ -15357,6 +15413,9 @@
     },
     "octocrab-0.47.1": {
       "edition": "2018"
+    },
+    "okiba-0.1.1": {
+      "edition": "2024"
     },
     "once_cell-1.21.4": {
       "edition": "2021"
