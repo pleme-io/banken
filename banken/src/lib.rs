@@ -91,6 +91,11 @@ pub mod table;
 /// The picker's modal editing — `unsoku` wired to the query line.
 pub mod vim;
 
+/// antessala — the antechamber: the connect, made into a place you can watch
+/// and leave. Behind `live` because there is nothing to wait for without it.
+#[cfg(feature = "live")]
+pub mod antessala;
+
 #[cfg(feature = "live")]
 pub mod live;
 

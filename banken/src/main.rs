@@ -65,7 +65,12 @@ fn main() {
             }
             Invocation::Fixture => run_fixture(operator).await,
             Invocation::Pick { strategy } => run_pick(operator, strategy).await,
-            Invocation::Live { context, strategy } => run_live(operator, &context, strategy).await,
+            // `.map(|_| ())` on purpose: a cancelled connect is a decision,
+            // not a failure, so `--context` exits 0 in silence exactly as a
+            // successful run does. Both arms of the `live` cfg satisfy this.
+            Invocation::Live { context, strategy } => run_live(operator, &context, strategy)
+                .await
+                .map(|_landed| ()),
         }
     });
 
@@ -119,12 +124,29 @@ async fn run_pick(
         let Some(choice) = picker.chosen().cloned() else {
             return Ok(());
         };
-        match run_live(operator.clone(), &choice.name, strategy).await {
-            Ok(()) => return Ok(()),
+        match run_live_from(operator.clone(), &choice.name, choice.server.clone(), strategy).await {
+            Ok(Landed::Opened) => return Ok(()),
+            // The operator changed their mind mid-connect. Back to the list
+            // with NO notice: a cancel is a decision, and captioning it with
+            // an error would read as though something had gone wrong.
+            Ok(Landed::Cancelled) => notice = None,
             // Back to the list with the reason, rather than out to a prompt.
             Err(e) => notice = Some(e),
         }
     }
+}
+
+/// Whether a live run reached the navigator.
+///
+/// A cancelled connect is NOT an error and must not be reported as one — the
+/// distinction is why this is a typed outcome rather than `Result<(), String>`
+/// with a magic message. `--context` exits 0 in silence; the picker loop
+/// re-enters the list without a red footer.
+#[cfg(feature = "live")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Landed {
+    Opened,
+    Cancelled,
 }
 
 /// Without the `live` feature there are no clusters to choose between, so the
@@ -219,50 +241,136 @@ async fn run_live(
     operator: OperatorId,
     context: &str,
     strategy: banken::absorb::ListStrategy,
-) -> Result<(), String> {
-    use banken::live::KubeClusterEnv;
-    // Printed BEFORE the alt-screen is entered, so it survives on the primary
-    // screen after banken exits — the durable receipt of which estate was
-    // read. The status line carries it live while banken is running.
-    //
-    // It is also the only thing on screen during the connect, which is not
-    // instant: an EKS context runs an exec-credential helper (an AWS SSO
-    // round-trip) before the first byte moves. A bare terminal for several
-    // seconds reads as a hang, so the line names the step rather than the
-    // intent — "connecting" is what is actually happening.
-    eprintln!("banken: connecting to `{context}` (kubeconfig → auth → apiserver)…");
+) -> Result<Landed, String> {
+    run_live_from(operator, context, None, strategy).await
+}
 
-    let env = KubeClusterEnv::connect_with_context(context)
+/// Run the navigator over the live kube source, against the **named**
+/// kubeconfig context, waiting in [`banken::antessala`].
+///
+/// `server` is the apiserver URL when the caller already knows it — the picker
+/// does, from the row that was chosen. It is passed in rather than resolved
+/// again so the wait screen can show the URL from its first frame.
+///
+/// # The connect runs as a TASK, and that is the whole change
+///
+/// It used to be awaited inline behind one `eprintln!`, which made the wait
+/// structurally un-drawable and un-cancellable: there was no loop to paint a
+/// frame from and no other future to select against. Now the connect owns a
+/// task publishing [`banken::antessala::Stage`]s, and the antechamber is an
+/// ordinary `AsyncApp` watching them — so the wait gets a screen, a timer, and
+/// an `esc`.
+///
+/// The context banken connected with is the context banken reports: it is
+/// carried into the status line and into every `(defbancada)`'s
+/// `(:context cluster)` from the same `String` that selected the apiserver, so
+/// the two cannot drift.
+#[cfg(feature = "live")]
+async fn run_live_from(
+    operator: OperatorId,
+    context: &str,
+    server: Option<String>,
+    strategy: banken::absorb::ListStrategy,
+) -> Result<Landed, String> {
+    use banken::antessala::{ConnectingScreen, SettleOnDrop, Stage, Waited, channel};
+    use banken::live::KubeClusterEnv;
+
+    let (reporter, watch) = channel();
+    let owned = context.to_owned();
+
+    // EVERYTHING up to the first drawable frame happens in here, not just the
+    // connect. Ending the task at the connect is what the first version did,
+    // and it left the operator staring at a blank terminal through
+    // `try_new`'s synchronous pod listing — the wait relocated rather than
+    // removed. The rule this encodes: the antechamber closes when there is
+    // something to draw, never when one named step finishes.
+    let build = tokio::spawn(async move {
+        // Armed for the whole body. Whatever happens from here — an error, a
+        // panic, an `abort()` dropping this future mid-poll — `Settled` is
+        // published and the screen cannot hang.
+        let settle = SettleOnDrop::new(reporter);
+        let env = KubeClusterEnv::connect_with_context_staged(&owned, settle.reporter())
+            .await
+            .map_err(|e| {
+                let mut m = String::from("live connect failed (VPN/kubeconfig?): ");
+                m.push_str(&e.to_string());
+                m
+            })?;
+        // The env reports the context it was CONSTRUCTED with, so this is the
+        // same value throughout. An empty one is impossible here (the CLI
+        // rejects it), which is what makes the bancada `(:context cluster)`
+        // resolution trustworthy rather than merely populated.
+        let cluster = env.context_name().unwrap_or_default();
+        let label = banken::absorb::live_source_label(&cluster, env.server(), strategy);
+        let receipt = env.server().map(str::to_owned);
+        // The WATCH producer, not the poll. This is the whole M0 payoff:
+        // against camelot-eks (191 pods) the poll moved 3,580,862 B every
+        // second — 96 GiB per 8-hour day — where a watch over the same 30 s
+        // moved 0 bytes, because delta traffic is proportional to CHANGE and
+        // poll traffic to STATE SIZE.
+        //
+        // The app is handed a `Despensa` and never learns which producer
+        // filled it; the fixture path uses `with_feed`, which drives the SAME
+        // reader through a poll. One reader type, two producers — a consumer
+        // adapts by reading a declared capability, never by branching on its
+        // backend.
+        let (despensa, publisher) = banken::absorb::channel();
+        let absorber = env.spawn_pod_absorber(publisher, strategy);
+        // `try_new` lists pods synchronously (`app.rs:309`). Against an
+        // unreachable cluster that is the longest wait in the whole startup,
+        // and it used to happen with the terminal already handed back.
+        settle.reporter().reached(Stage::FirstRead);
+        let app = BankenApp::try_new(env, session_env(), operator, label)
+            .map_err(|e| e.to_string())?
+            .with_cluster(cluster.clone())
+            .with_absorber(despensa);
+        Ok::<_, String>((app, absorber, cluster, receipt))
+    });
+
+    let mut waiting = ConnectingScreen::new(context, server, watch);
+    egaku_term::run_async(&mut waiting)
         .await
+        .map_err(|e| e.to_string())?;
+
+    if waiting.outcome() == Waited::Cancelled {
+        // Abort rather than detach. A credential helper left running would
+        // keep a subprocess and an SSO round-trip alive behind a screen the
+        // operator has already left, and its result would have nowhere to go.
+        build.abort();
+        return Ok(Landed::Cancelled);
+    }
+
+    let (mut app, _absorber, cluster, receipt) = build
+        .await
+        // A panic inside the build task must surface as an error, never as a
+        // silent fall-through to a navigator with no cluster behind it.
         .map_err(|e| {
-            let mut m = String::from("live connect failed (VPN/kubeconfig?): ");
+            let mut m = String::from("the connect task did not finish: ");
             m.push_str(&e.to_string());
             m
-        })?;
-    // The env reports the context it was CONSTRUCTED with, so this is the
-    // same value throughout. An empty one is impossible here (the CLI rejects
-    // it), which is what makes the bancada `(:context cluster)` resolution
-    // trustworthy rather than merely populated.
-    let cluster = env.context_name().unwrap_or_default();
-    let label = banken::absorb::live_source_label(&cluster, env.server(), strategy);
-    // The WATCH producer, not the poll. This is the whole M0 payoff: against
-    // camelot-eks (191 pods) the poll moved 3,580,862 B every second — 96 GiB
-    // per 8-hour day — where a watch over the same 30 s moved 0 bytes, because
-    // delta traffic is proportional to CHANGE and poll traffic to STATE SIZE.
-    //
-    // The app is handed a `Despensa` and never learns which producer filled it;
-    // the fixture path below uses `with_feed`, which drives the SAME reader
-    // through a poll. One reader type, two producers — a consumer adapts by
-    // reading a declared capability, never by branching on its backend.
-    let (despensa, publisher) = banken::absorb::channel();
-    let _absorber = env.spawn_pod_absorber(publisher, strategy);
-    let mut app = BankenApp::try_new(env, session_env(), operator, label)
-        .map_err(|e| e.to_string())?
-        .with_cluster(cluster)
-        .with_absorber(despensa);
+        })??;
+
     egaku_term::run_async(&mut app)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // ── The receipt, on the way OUT ──
+    //
+    // It used to be printed on the way IN, before the alt-screen, so that it
+    // would survive on the primary screen after banken exited. That instinct
+    // was right and the placement was not: written before the connect, it
+    // recorded the estate banken was ABOUT TO attempt — so a run that failed
+    // to connect, or one the operator cancelled, still left a line claiming
+    // it. Printed here it records the estate that was actually read, which is
+    // the thing a receipt is for. It also stops the wait screen having to
+    // fight a stray line above it.
+    eprint!("banken: read `");
+    eprint!("{cluster}");
+    match receipt {
+        Some(server) => eprintln!("` ({server})"),
+        None => eprintln!("`"),
+    }
+    Ok(Landed::Opened)
 }
 
 /// The `:pods` refresh period, read from the AUTHORED config.

@@ -482,6 +482,39 @@ impl KubeClusterEnv {
     /// for — never a silent fall back to the current one, which would defeat
     /// the entire point of the flag.
     pub async fn connect_with_context(context: &str) -> Result<Self, SpecError> {
+        // The unobserved connect is the observed one with the reports thrown
+        // away, never a second copy of the sequence. A `channel()` here costs
+        // one allocation and buys the guarantee that the path a test drives
+        // and the path an operator watches cannot drift.
+        let (reporter, _watch) = crate::antessala::channel();
+        Self::connect_with_context_staged(context, &reporter).await
+    }
+
+    /// [`Self::connect_with_context`], reporting each stage as it begins.
+    ///
+    /// The stages are published at the CALL BOUNDARIES rather than inferred
+    /// from inside: `Client::try_from` is one opaque call that both
+    /// authenticates and builds the client, so banken can honestly say "I am
+    /// about to run the credential helper" and cannot honestly say how far
+    /// through it is. Three observations beat an interpolated percentage.
+    ///
+    /// **This function never publishes [`Stage::Settled`].** The connect is
+    /// not the last thing standing between an operator and their first frame —
+    /// the initial pod read is — so settling here would close the screen one
+    /// stage early and hand the remaining wait back to a blank terminal. The
+    /// caller owns the terminal and therefore owns the terminal stage; it
+    /// arms an [`crate::antessala::SettleOnDrop`] around the whole build.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::connect_with_context`]'s — this is that function.
+    pub async fn connect_with_context_staged(
+        context: &str,
+        reporter: &crate::antessala::StageReporter,
+    ) -> Result<Self, SpecError> {
+        use crate::antessala::Stage;
+
+        reporter.reached(Stage::Kubeconfig);
         ensure_crypto_provider();
         // Resolve BEFORE connecting. An ambiguous name has no path past this
         // line, so "banken read the wrong cluster and looked fine doing it"
@@ -490,6 +523,7 @@ impl KubeClusterEnv {
             phase: "connect".into(),
             message: e.to_string(),
         })?;
+        reporter.reached(Stage::Configuration);
         let options = KubeConfigOptions {
             context: Some(context.to_owned()),
             ..Default::default()
@@ -506,6 +540,11 @@ impl KubeClusterEnv {
                     m
                 },
             })?;
+        // THE slow one — this is where the `exec` credential helper runs, with
+        // a blocking `cmd.output()` on an AWS SSO round-trip for an EKS
+        // context. Announced BEFORE the call, which is the only useful moment:
+        // announcing it after would name the stage that already finished.
+        reporter.reached(Stage::Credentials);
         let client = Client::try_from(config).map_err(|e| SpecError::Interp {
             phase: "connect".into(),
             message: Self::error_chain(&e),
