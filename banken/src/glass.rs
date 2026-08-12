@@ -152,18 +152,32 @@ impl GlassLedger {
 
     /// The default ledger location for this operator.
     ///
-    /// `$XDG_STATE_HOME/banken/glass.jsonl`, falling back to
-    /// `$HOME/.local/state/banken/glass.jsonl`. State, not cache and not
-    /// config: it is durable, it is not the operator's to hand-edit, and it
-    /// must survive a cache wipe — which is exactly the XDG state tier.
+    /// `$XDG_STATE_HOME/banken/glass.jsonl`. State, not cache and not config:
+    /// it is durable, it is not the operator's to hand-edit, and it must
+    /// survive a cache wipe — which is exactly the XDG state tier.
+    ///
+    /// # Why this delegates rather than resolving
+    ///
+    /// The hand-rolled version here did `std::env::var_os("XDG_STATE_HOME")
+    /// .map(PathBuf::from)` and used whatever came back — which the XDG spec
+    /// forbids: *"If an implementation encounters a relative path in any of
+    /// these variables it should consider the path invalid and ignore it."*
+    ///
+    /// A relative `XDG_STATE_HOME` was therefore resolved against the current
+    /// working directory, so **the record of a break-glass could land in a
+    /// different place depending on where banken was started from** — an
+    /// audit trail that cannot be audited, which is the one property this
+    /// ledger exists to have. `okiba` refuses a relative override and cannot
+    /// return a relative path from any arm.
+    ///
+    /// Two other fleet resolvers had the same bug (tear's praca store,
+    /// escriba's plugin dir), which is why it became a crate rather than a
+    /// fix here.
     #[must_use]
     pub fn default_path() -> Option<PathBuf> {
-        let base = std::env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("state"))
-            })?;
-        Some(base.join("banken").join("glass.jsonl"))
+        okiba::Okiba::for_app("banken")
+            .try_path(okiba::Tier::State, "glass.jsonl")
+            .ok()
     }
 
     /// The path this ledger writes to.

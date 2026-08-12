@@ -220,6 +220,15 @@ serde_json = "1"
 # other fleet MCP server can hold.
 kotae = "0.1"
 
+# okiba (置き場) — the place where a program puts things.
+#
+# `GlassLedger::default_path` hand-rolled the XDG state lookup and had the bug
+# the crate exists to remove: a RELATIVE `XDG_STATE_HOME` was resolved against
+# the cwd rather than ignored per the spec, so a break-glass record could land
+# somewhere that depends on where banken was started. An audit trail that moves
+# with the operator's shell is not one.
+okiba = "0.1"
+
 [features]
 # `live` is ON by default (2026-08-07). It was off, and the stated reason —
 # "the fixture path is fast" — was a producer-side convenience that the

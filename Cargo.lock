@@ -223,6 +223,7 @@ dependencies = [
  "kotae",
  "kube",
  "octocrab",
+ "okiba",
  "rmcp",
  "rustls",
  "schemars 1.2.2",
@@ -1811,6 +1812,10 @@ dependencies = [
  "url",
  "web-time",
 ]
+
+[[package]]
+name = "okiba"
+version = "0.1.0"
 
 [[package]]
 name = "once_cell"
