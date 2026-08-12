@@ -99,19 +99,40 @@ only implementation.
 - **Done-predicate:** every `ClusterEnv` OBSERVE method is live, or documented
   as deliberately absent with a reason.
 
-### Phase D — DECLARE becomes real *(differentiator #1)*
+### Phase D — DECLARE becomes real *(differentiator #1)* — **delivery SHIPPED 2026-08-12**
 
-Today DECLARE renders a full-manifest preview and stops. That preview is the
-hard half; the remaining half is delivery.
+`crate::declare` is the typed plan, its refusals, a mockable `DeclareEnv` seam,
+and a real GitHub forge. `KubeClusterEnv::declare` was a typed refusal and now
+opens a branch, writes the whole manifest, and opens a PR.
 
-- Resolve the resource's owning repo + path from the GitOps tree.
-- Open a branch, write the **full manifest** (never a patch — the fleet rule),
-  open a PR, return a `ChangeRef` the overlay can follow.
-- Show reconciliation: the PR merges, the reconciler converges, the row changes.
-  Closing that loop *visibly* is what makes GitOps feel faster than `kubectl`
-  rather than slower — and slowness is the only reason people reach for `kubectl`.
+Three properties worth carrying forward:
+
+- **The head branch is content-addressed.** Re-declaring the same change targets
+  the same branch and updates the existing PR, so a retry after a network
+  failure is not a duplicate a reviewer must reconcile. The forge treats
+  422-already-exists as success on both the branch and the PR for the same
+  reason.
+- **Order is the safety property** — base sha, branch, file, PR. A failure
+  before the file leaves a branch (harmless, reused by the retry) rather than a
+  PR describing a file that was never written, which is worse than no PR because
+  a reviewer approves it.
+- **It refuses rather than guesses.** Only the `flux-helm-values` rail carries
+  its own path; the other four name a *reference* whose owning repository banken
+  does not hold, and an unset `:gitops-repo` refuses too. A PR opened against a
+  guessed repository looks correct and reconciles nothing — worse than an error,
+  because it spends a reviewer's trust.
+
+`octocrab` over `gix` deliberately: a DECLARE needs no working tree, and a
+cluster navigator is not a git client.
+
+**REMAINING — the visible loop.** Showing reconciliation in the TUI (the PR
+merges, the reconciler converges, the row moves) is not built.
+`pending-banken: declare-watch-reconciliation`. And four of the five rails still
+cannot be routed: `pending-banken: declare-rail-routing`.
+
 - **Done-predicate:** scaling a Deployment in banken produces a reviewed commit,
-  and the operator watches the row move without leaving the tool.
+  and the operator watches the row move without leaving the tool. **The commit
+  half is MET; the watch half is not.**
 
 ### Phase E — BREAK-GLASS becomes real *(the ledger half SHIPPED 2026-08-12)*
 
@@ -188,26 +209,59 @@ rather than by reading the code:
   *cannot* fix it live — only propose a change. **MET**, verified against a real
   MCP client over stdio (initialize → tools/list → tools/call).
 
-### Phase G — fleet convergence
+### Phase G — fleet convergence — **visuals + config SHIPPED 2026-08-12**
 
-- **Visuals:** replace hand-picked colours with `ishou` tokens via
-  `FleetThemedConfig::from_fleet`, plus a `convergence::Guard` drift test. The
-  ronda ramp becomes a token ramp, so one fleet edit moves every app.
-- **Config:** grow `(defbanken …)` from one field to the real surface — opening
-  stance, ronda intervals, columns per view, theme — on shikumi's tiered fold.
-  `pending-banken: opening-stance-config` is already open against this.
-- **Tests:** adopt the `dojo` facet vocabulary as it lands.
+- **Visuals: DONE, and narrower than this line originally read.** The ronda
+  ramp's five hardcoded RGB triples now come from the fleet theme's own
+  error/warning/success via `crate::palette`; three anchors replaced five, so
+  the intermediate rungs are genuine interpolations. Two guards assert the ramp
+  *follows* the theme rather than merely reading from something named after it.
 
-### Phase H — ronda deepens
+  **Named ANSI slots deliberately stay slots.** `Color::Green` is not a
+  hand-picked value — it is an index into the *operator's* terminal theme, so
+  banken's green is their green. Converting those to fleet hexes would look like
+  convergence and be a regression. That is the convergence decision, not an
+  omission from it.
+- **Config: DONE.** `(defbanken …)` grew `:gitops-repo`, `:gitops-base`,
+  `:ronda-round-ms`, `:ronda-climb-ms` alongside `:picker-stance`. The GitOps
+  target was an environment variable for exactly one commit — the untyped,
+  unauthored, undiscoverable surface the fleet config rule exists to eliminate.
+  `prescribed_mirrors_the_authored_lisp` caught the struct/Lisp drift the moment
+  the fields landed, which is the forcing function working. Remaining:
+  per-view columns are still authored in `(defk8sview …)` rather than
+  overridable per-deployment, which is correct and not debt.
+- **Clippy: 88 warnings → 0**, workspace-wide. The debt was invisible because
+  the lint never ran on this machine (the system profile ships only `cargo`, and
+  the "no such command" error's ANSI prefix slipped past a `grep "^error"`).
+  Every run is now `nix develop --command cargo clippy`.
+- **Tests:** adopt the `dojo` facet vocabulary as it lands. Not started —
+  `dojo`'s repo is empty (theory only), so there is nothing to adopt yet.
 
-- Warm authenticated client pool, so a chosen context opens instantly rather
-  than climbing on demand. This is the "maintain connections" half deliberately
-  deferred, and it carries real background SSO cost — an opt-in, not a default.
-- Per-namespace and per-verb readiness: "may list pods here" is one question;
-  "may I read secrets in `kube-system`" is the one that decides whether a view
-  will be empty or forbidden **before** the operator opens it.
-- Ladder rungs for the resource plane, so a view can grey out what this identity
-  cannot reach instead of showing an empty table.
+### Phase H — ronda deepens — **per-verb readiness SHIPPED 2026-08-12**
+
+- **Per-namespace and per-verb readiness: DONE.** `crate::permit` asks the
+  apiserver directly via `SelfSubjectAccessReview` — one POST, same RBAC the
+  real request would hit, no side effect, no dependence on the object existing.
+  It separates *forbidden* from *empty* before a table is drawn, which is the
+  distinction a navigator otherwise cannot make: the two look identical, and
+  rendering them the same way sends an operator to debug a healthy workload.
+
+  `Permit::Unknown` is a variant rather than an error, and `should_render()`
+  returns true for it — hiding a readable view on an inconclusive check is the
+  failure the type exists to prevent. `describe()` claims *authorization*, never
+  success, because RBAC is one gate among several.
+
+  Exposed as `banken_can_i`. Safe for destructive verbs by construction: asking
+  "may I delete pods" changes nothing, which is what lets an agent learn the
+  shape of its own access without exercising any of it.
+- **Ladder rungs for the resource plane** — the primitive is built; wiring a
+  view to grey itself out on a `Denied` permit is not.
+  `pending-banken: view-greys-out-on-denied`.
+- **Warm authenticated client pool** — NOT built, and deliberately not.
+  It re-runs each context's credential helper on a timer, which on an EKS estate
+  is a recurring `aws eks get-token` per context: real background SSO traffic.
+  That is an operator decision, not a default, and it has not been made.
+  `pending-banken: ronda-credentials`.
 
 ## IV. What this deliberately does NOT chase
 
