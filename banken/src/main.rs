@@ -363,10 +363,23 @@ async fn run_live_from(
         // unreachable cluster that is the longest wait in the whole startup,
         // and it used to happen with the terminal already handed back.
         settle.reporter().reached(Stage::FirstRead);
-        let app = BankenApp::try_new(env, session_env(), operator, label)
-            .map_err(|e| e.to_string())?
-            .with_cluster(cluster.clone())
-            .with_absorber(despensa);
+        // ONE env answers reads and authorization questions, so a view's
+        // "you cannot read this" can never disagree with the read it gates
+        // about which identity is asking.
+        let shared = std::sync::Arc::new(env);
+        // The turbofish is required, not decorative: `try_new` takes
+        // `impl Into<Arc<E>>`, and `Arc<T>` itself implements `ClusterEnv`,
+        // so an `Arc` argument leaves E ambiguous between the two.
+        let app = BankenApp::<banken::live::KubeClusterEnv, _>::try_new(
+            shared.clone(),
+            session_env(),
+            operator,
+            label,
+        )
+        .map_err(|e| e.to_string())?
+        .with_cluster(cluster.clone())
+        .with_permits(shared as std::sync::Arc<dyn banken::permit::PermitEnv + Send + Sync>)
+        .with_absorber(despensa);
         Ok::<_, String>((app, absorber, cluster, receipt))
     });
 

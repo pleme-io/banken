@@ -214,6 +214,13 @@ pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
     /// Every constructor takes `impl Into<Arc<E>>`, so a caller still passes
     /// a plain env and nothing at the call sites changed.
     env: Arc<E>,
+    /// The per-verb authorization checker, when one is available.
+    ///
+    /// `Option` because only a live cluster can answer an authorization
+    /// question. A fixture that answered "allowed" would be inventing an
+    /// authorization result, and a view gated on an invented permit is worse
+    /// than an ungated one.
+    permits: Option<Arc<dyn crate::permit::PermitEnv + Send + Sync>>,
     /// Where a confirmed bancada is opened. See [`crate::session`].
     session: S,
     operator: OperatorId,
@@ -408,6 +415,10 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             .unwrap_or_default();
         Ok(Self {
             env,
+            // Attached by `with_permits` when the source can answer an
+            // authorization question. Absent means "do not gate", never
+            // "denied".
+            permits: None,
             session,
             operator,
             cluster: String::new(),
@@ -642,6 +653,30 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             self.panel = Panel::Notice(m);
             return true;
         };
+        // ── May this identity read it at all? ──
+        //
+        // Asked BEFORE the read, because the two failures it separates are
+        // indistinguishable afterwards: a forbidden list and an empty
+        // namespace both return zero rows. Without this, an operator opening a
+        // view their RBAC excludes sees an empty table and goes off to debug a
+        // workload that is running perfectly.
+        //
+        // Only a DENIAL stops the switch. `Unknown` — the check could not be
+        // performed — falls through to the read, because an inconclusive
+        // answer is not evidence the operator lacks access, and refusing on it
+        // would hide a view they can use.
+        if let Some(permits) = self.permits.as_ref() {
+            let ask = crate::permit::Ask::to_list(kind, None);
+            if let Ok(permit @ crate::permit::Permit::Denied { .. }) = permits.may(&ask) {
+                let mut m = String::from("`");
+                m.push_str(name);
+                m.push_str("` is not readable by this identity — ");
+                m.push_str(&permit.describe());
+                m.push_str(". This is NOT an empty cluster.");
+                self.panel = Panel::Notice(m);
+                return true;
+            }
+        }
         // The read happens BEFORE the table is replaced, so a failed switch
         // leaves the operator on the view they had rather than on an empty
         // one captioned with an error.
@@ -682,6 +717,20 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         if let Ok(rows) = self.env.list_resources(kind, None) {
             self.set_rows(rows);
         }
+    }
+
+    /// Attach the per-verb authorization checker.
+    ///
+    /// Opt-in, and absence means *do not gate* rather than *denied*: only a
+    /// live cluster can answer the question, and a view gated on a fabricated
+    /// permit would be worse than an ungated one.
+    #[must_use]
+    pub fn with_permits(
+        mut self,
+        permits: Arc<dyn crate::permit::PermitEnv + Send + Sync>,
+    ) -> Self {
+        self.permits = Some(permits);
+        self
     }
 
     /// Attach a background absorb plane reading the same env every
@@ -1779,6 +1828,105 @@ impl<E: ClusterEnv + Send + Sync, S: SessionEnv + Send + Sync> AsyncApp for Bank
 
     fn should_quit(&self) -> bool {
         BankenApp::should_quit(self)
+    }
+}
+
+#[cfg(test)]
+mod permit_gate_tests {
+    use super::*;
+    use crate::fixture::FixtureClusterEnv;
+    use crate::permit::{Ask, Permit, PermitEnv};
+    use banken_spec::testing::MockSessionEnv;
+    use std::sync::Arc;
+
+    struct Fixed(Permit);
+    impl PermitEnv for Fixed {
+        fn may(&self, _ask: &Ask) -> Result<Permit, banken_spec::error::SpecError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn app_with(permit: Option<Permit>) -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
+        let a = BankenApp::try_new(
+            FixtureClusterEnv::new(),
+            MockSessionEnv::new(),
+            OperatorId::new("drzzln").expect("non-blank"),
+            "fixture".to_owned(),
+        )
+        .expect("app");
+        match permit {
+            Some(p) => a.with_permits(Arc::new(Fixed(p)) as Arc<dyn PermitEnv + Send + Sync>),
+            None => a,
+        }
+    }
+
+    /// **The distinction the gate exists for.** A DENIED view must say so
+    /// rather than draw an empty table — the two are indistinguishable
+    /// afterwards, and an empty one sends the operator to debug a healthy
+    /// workload.
+    #[test]
+    fn a_denied_view_says_so_instead_of_drawing_an_empty_table() {
+        let mut a = app_with(Some(Permit::Denied {
+            reason: "no RBAC for services".into(),
+        }));
+        let before = a.view_name().to_owned();
+        a.switch_view("svc");
+
+        match &a.panel {
+            Panel::Notice(m) => {
+                assert!(m.contains("not readable"), "{m}");
+                assert!(
+                    m.contains("no RBAC for services"),
+                    "the reason survives: {m}"
+                );
+                assert!(m.contains("NOT an empty cluster"), "{m}");
+            }
+            other => panic!("expected a notice, got {other:?}"),
+        }
+        assert_eq!(
+            a.view_name(),
+            before,
+            "a denied switch must not move the view"
+        );
+    }
+
+    /// **`Unknown` must NOT gate.** An inconclusive check is not evidence the
+    /// operator lacks access, and refusing on it would hide a view they can
+    /// use — with no way for them to tell why.
+    #[test]
+    fn an_unknown_permit_lets_the_view_through() {
+        let mut a = app_with(Some(Permit::Unknown {
+            why: "the review request timed out".into(),
+        }));
+        a.switch_view("svc");
+        assert!(
+            !matches!(&a.panel, Panel::Notice(m) if m.contains("not readable")),
+            "an inconclusive check must not block the view",
+        );
+    }
+
+    /// No checker attached means DO NOT GATE, never "denied". The fixture has
+    /// no apiserver, and a view gated on a fabricated permit is worse than an
+    /// ungated one.
+    #[test]
+    fn an_absent_checker_does_not_gate() {
+        let mut a = app_with(None);
+        a.switch_view("svc");
+        assert!(
+            !matches!(&a.panel, Panel::Notice(m) if m.contains("not readable")),
+            "absence of a checker must not read as a denial",
+        );
+    }
+
+    /// An ALLOWED permit is transparent — the switch behaves exactly as it did
+    /// before the gate existed.
+    #[test]
+    fn an_allowed_permit_is_transparent() {
+        let mut gated = app_with(Some(Permit::Allowed));
+        let mut ungated = app_with(None);
+        gated.switch_view("svc");
+        ungated.switch_view("svc");
+        assert_eq!(gated.view_name(), ungated.view_name());
     }
 }
 

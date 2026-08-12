@@ -254,9 +254,12 @@ rather than by reading the code:
   Exposed as `banken_can_i`. Safe for destructive verbs by construction: asking
   "may I delete pods" changes nothing, which is what lets an agent learn the
   shape of its own access without exercising any of it.
-- **Ladder rungs for the resource plane** — the primitive is built; wiring a
-  view to grey itself out on a `Denied` permit is not.
-  `pending-banken: view-greys-out-on-denied`.
+- **Ladder rungs for the resource plane: DONE.** `switch_view` asks before it
+  reads, and a `Denied` permit stops the switch with "`svc` is not readable by
+  this identity — forbidden by RBAC: … This is NOT an empty cluster." Only a
+  denial gates: `Unknown` falls through to the read, and an absent checker means
+  *do not gate* rather than *denied*, because a view gated on a fabricated
+  permit is worse than an ungated one. Four tests pin all three arms.
 - **Warm authenticated client pool** — NOT built, and deliberately not.
   It re-runs each context's credential helper on a timer, which on an EKS estate
   is a recurring `aws eks get-token` per context: real background SSO traffic.
