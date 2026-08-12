@@ -43,7 +43,7 @@ use awase::repeat_gate::KeyRepeatGate;
 use banken_spec::chord::ActionChord;
 use banken_spec::env::{ClusterEnv, Row};
 use banken_spec::nav::NavIntent;
-use banken_spec::types::{OperatorId, ResourceKind};
+use banken_spec::types::{OperatorId, ResourceKind, ViewSource};
 use banken_spec::{Catalog, SpecError};
 use egaku_term::crossterm::style::Color;
 use egaku_term::{__re::KeyMap, AsyncApp, Buffer, Result as TermResult, Style};
@@ -104,6 +104,16 @@ pub enum Action {
     Help,
     /// Dismiss the action-result overlay (`esc`).
     Dismiss,
+    /// Erase backwards in an open prompt (`backspace`).
+    PromptErase,
+    /// Erase the word before the caret in an open prompt (`ctrl+w`).
+    PromptEraseWord,
+    /// Erase to the start of an open prompt (`ctrl+u`).
+    PromptEraseToStart,
+    /// Erase to the end of an open prompt (`ctrl+k`).
+    PromptEraseToEnd,
+    /// Erase the character at the caret in an open prompt (`delete`).
+    PromptEraseForward,
     /// Quit (`q`).
     Quit,
 }
@@ -150,6 +160,13 @@ impl Action {
 enum Panel {
     /// The `:pods` table (the default landing).
     Table,
+    /// A one-line message from the `:` command bar — an unknown view name, a
+    /// read that failed, a view that is not a resource table.
+    ///
+    /// A NOTICE rather than an error overlay: these are all "that command did
+    /// not do anything, here is why", and a full-screen panel for a mistyped
+    /// view name would cost more attention than the mistake did.
+    Notice(String),
     /// An overlay showing the result of the last postigo action.
     ActionOverlay(ActionResult),
     /// A resolved `(defbancada)` awaiting the operator's `enter`.
@@ -259,6 +276,84 @@ pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
     /// Starts at `0`, which is `Snapshot::empty()`'s generation, so a freshly
     /// built app whose absorber has not published yet does no work.
     applied_generation: u64,
+    /// The authored vocabulary, kept so `:` can switch views at runtime.
+    ///
+    /// Held rather than re-loaded per command: a `:` that re-read the spec
+    /// directory would let the vocabulary change under a running session, so
+    /// the views an operator can reach would depend on when they pressed the
+    /// key rather than on what the app was built with.
+    catalog: Catalog,
+    /// Which `(defk8sview)` is on screen.
+    view_name: String,
+    /// The open `:`/`/` prompt, if any. `None` is the table's normal state.
+    prompt: Option<Prompt>,
+    /// The keymap that applies **while a prompt is open** — see
+    /// [`Self::hotkey_map`] for why a second map rather than a mode flag.
+    prompt_keys: awase::KeyMode<Action>,
+    /// The active `/` filter. Empty means unfiltered.
+    filter: String,
+}
+
+/// Which prompt is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    /// `:` — switch view.
+    Command,
+    /// `/` — filter rows.
+    Filter,
+}
+
+impl PromptKind {
+    /// The character that opens it, and the sigil drawn at the prompt.
+    #[must_use]
+    pub fn sigil(self) -> char {
+        match self {
+            Self::Command => ':',
+            Self::Filter => '/',
+        }
+    }
+}
+
+/// An open prompt: a one-line modal editor over the table.
+///
+/// The SAME [`crate::vim`] editor the picker's query uses — second consumer,
+/// which is what earns its promotion into egaku
+/// (`pending-banken: promote-query-line-to-egaku`). Reusing it means `ctrl+w`,
+/// `dw`, `ci"` and the rest work identically in both places, rather than the
+/// table growing a second, worse text field.
+#[derive(Debug)]
+pub struct Prompt {
+    kind: PromptKind,
+    vim: crate::vim::Vim,
+    line: crate::vim::QueryLine,
+}
+
+impl Prompt {
+    fn new(kind: PromptKind) -> Self {
+        Self {
+            kind,
+            // A prompt opens TYPING — unlike the picker's landing screen,
+            // where the operator arrives to navigate. Here they have just
+            // pressed `:` or `/`, which is an explicit request to type.
+            vim: crate::vim::Vim::opening_in(unsoku::Stance::Insert),
+            line: crate::vim::QueryLine::default(),
+        }
+    }
+
+    /// What the operator has typed.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        self.line.text()
+    }
+
+    /// The rendered prompt line, sigil included.
+    #[must_use]
+    pub fn rendered(&self) -> String {
+        let mut s = String::new();
+        s.push(self.kind.sigil());
+        s.push_str(self.line.text());
+        s
+    }
 }
 
 impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
@@ -342,6 +437,11 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             absorb: None,
             absorb_stop: None,
             applied_generation: 0,
+            catalog: catalog.clone(),
+            view_name: VIEW_NAME.to_owned(),
+            prompt: None,
+            prompt_keys: prompt_keymap(),
+            filter: String::new(),
         })
     }
 
@@ -391,9 +491,192 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     }
 
     /// Install `rows` as the table contents. The single write path, so the
-    /// inline refresh and the feed's apply cannot drift apart.
+    /// inline refresh and the feed's apply cannot drift apart — which is also
+    /// why the `/` filter is applied HERE and nowhere else: every route into
+    /// the table passes through this one function, so a filtered view cannot
+    /// be silently refilled with unfiltered rows by the next absorb tick.
     fn set_rows(&mut self, rows: Vec<Row>) {
+        let rows = self.filtered(rows);
         self.table.view_mut().set_rows(rows);
+    }
+
+    /// Apply the active `/` filter.
+    ///
+    /// Matches the object NAME, case-insensitively, as a substring — the
+    /// behaviour every operator already expects from `grep`. Deliberately not
+    /// fuzzy: the picker is a chooser where fuzzy saves keystrokes, and this
+    /// is a filter over live rows where a surprising match reads as a wrong
+    /// reading of the cluster.
+    fn filtered(&self, rows: Vec<Row>) -> Vec<Row> {
+        if self.filter.is_empty() {
+            return rows;
+        }
+        let needle = self.filter.to_lowercase();
+        rows.into_iter()
+            .filter(|r| r.name.to_lowercase().contains(&needle))
+            .collect()
+    }
+
+    /// The keymap that applies to the CURRENT screen state.
+    ///
+    /// Inherent as well as on the trait so a test can ask "which chords are
+    /// live right now" without owning a terminal — the same reason
+    /// [`crate::picker::ContextPicker::keymap`] is inherent.
+    #[must_use]
+    pub fn active_keymap(&self) -> &awase::KeyMode<Action> {
+        if self.prompt.is_some() {
+            &self.prompt_keys
+        } else {
+            BankenApp::keymap(self)
+        }
+    }
+
+    /// The active filter, for a test and for the status line.
+    #[must_use]
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// The view currently on screen.
+    #[must_use]
+    pub fn view_name(&self) -> &str {
+        &self.view_name
+    }
+
+    /// The open prompt, if any.
+    #[must_use]
+    pub fn prompt(&self) -> Option<&Prompt> {
+        self.prompt.as_ref()
+    }
+
+    /// Open a prompt. Idempotent per kind — pressing `:` twice does not nest.
+    fn open_prompt(&mut self, kind: PromptKind) {
+        self.prompt = Some(Prompt::new(kind));
+    }
+
+    /// Feed one character to the open prompt, or open one on `:` / `/`.
+    ///
+    /// Returns `true` when the keystroke was consumed. A printable with no
+    /// prompt open is INERT — the table's vocabulary is chords, and letting
+    /// stray letters do something is how a navigator surprises an operator.
+    pub fn type_char(&mut self, c: char) -> bool {
+        if self.prompt.is_some() {
+            self.prompt_stroke(crate::vim::Stroke::Char(c));
+            return true;
+        }
+        match c {
+            ':' => {
+                self.open_prompt(PromptKind::Command);
+                true
+            }
+            '/' => {
+                self.open_prompt(PromptKind::Filter);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Route a stroke into the open prompt.
+    fn prompt_stroke(&mut self, s: crate::vim::Stroke) -> bool {
+        let Some(p) = self.prompt.as_mut() else {
+            return false;
+        };
+        let effect = p.vim.stroke(s, &mut p.line);
+        !matches!(effect, crate::vim::Effect::Inert)
+    }
+
+    /// Commit the open prompt: switch view, or apply the filter.
+    fn commit_prompt(&mut self) -> bool {
+        let Some(p) = self.prompt.take() else {
+            return false;
+        };
+        let text = p.text().trim().to_owned();
+        match p.kind {
+            PromptKind::Filter => {
+                self.filter = text;
+                // ALWAYS re-read, never filter the table's current rows.
+                // Those rows are already filtered, so filtering them again can
+                // only narrow — a widened or cleared filter would silently
+                // fail to bring anything back. The full set has to come from
+                // the source.
+                self.refresh_current_view();
+                true
+            }
+            PromptKind::Command => {
+                if text.is_empty() {
+                    return true;
+                }
+                self.switch_view(&text)
+            }
+        }
+    }
+
+    /// Switch to the named `(defk8sview)`.
+    ///
+    /// An unknown name is a typed refusal **naming the legal set**, never a
+    /// silent no-op: an operator who mistypes `:deploys` should learn that the
+    /// view is `deploy`, not wonder whether the key registered.
+    fn switch_view(&mut self, name: &str) -> bool {
+        let known: Vec<&str> = self
+            .catalog
+            .views()
+            .iter()
+            .map(|v| v.name.as_str())
+            .collect();
+        if !known.contains(&name) {
+            let mut m = String::from("no view named `");
+            m.push_str(name);
+            m.push_str("` — try: ");
+            m.push_str(&known.join(", "));
+            self.panel = Panel::Notice(m);
+            return true;
+        }
+        let Some(view) = self.catalog.views().iter().find(|v| v.name == name) else {
+            return true;
+        };
+        let ViewSource::Resource(kind) = view.source else {
+            let mut m = String::from("`");
+            m.push_str(name);
+            m.push_str("` is not a resource table, so there is nothing to list");
+            self.panel = Panel::Notice(m);
+            return true;
+        };
+        // The read happens BEFORE the table is replaced, so a failed switch
+        // leaves the operator on the view they had rather than on an empty
+        // one captioned with an error.
+        let rows = match self.env.list_resources(kind, None) {
+            Ok(rows) => rows,
+            Err(e) => {
+                let mut m = String::from("cannot read `");
+                m.push_str(name);
+                m.push_str("`: ");
+                m.push_str(&e.to_string());
+                self.panel = Panel::Notice(m);
+                return true;
+            }
+        };
+        match PodTable::from_view(&self.catalog, name, self.filtered(rows)) {
+            Ok(t) => {
+                self.table = t;
+                self.view_name = name.to_owned();
+                self.bancadas = self.catalog.bancadas_from(name).into_iter().cloned().collect();
+                true
+            }
+            Err(e) => {
+                self.panel = Panel::Notice(e.to_string());
+                true
+            }
+        }
+    }
+
+    /// Re-read the CURRENT view's kind — the generic peer of [`Self::refresh`],
+    /// which is pinned to pods.
+    fn refresh_current_view(&mut self) {
+        let kind = self.table.kind();
+        if let Ok(rows) = self.env.list_resources(kind, None) {
+            self.set_rows(rows);
+        }
     }
 
     /// Attach a background absorb plane reading the same env every
@@ -554,6 +837,41 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     /// Apply an action to the app state. Public so tests can drive the app
     /// without a terminal (the pure state transition, ungated).
     pub fn apply_action(&mut self, action: Action) {
+        // An open prompt OWNS the keyboard, and is handled before anything
+        // else. While it is up `hotkey_map` has already narrowed the bindings
+        // to chords nobody can type, so the only actions that arrive here are
+        // the prompt's own — but routing them first is what makes that a
+        // property of this function rather than a coincidence of the keymap.
+        if self.prompt.is_some() {
+            match action {
+                Action::Confirm => {
+                    let _committed = self.commit_prompt();
+                }
+                // Cancel WITHOUT applying. A `/` typed and abandoned must
+                // leave the previous filter alone, not clear it.
+                Action::Dismiss => self.prompt = None,
+                Action::PromptErase => {
+                    let _ = self.prompt_stroke(crate::vim::Stroke::Backspace);
+                }
+                Action::PromptEraseWord => {
+                    let _ = self.prompt_stroke(crate::vim::Stroke::EraseWordBack);
+                }
+                Action::PromptEraseToStart => {
+                    let _ = self.prompt_stroke(crate::vim::Stroke::EraseToStart);
+                }
+                Action::PromptEraseToEnd => {
+                    let _ = self.prompt_stroke(crate::vim::Stroke::EraseToEnd);
+                }
+                Action::PromptEraseForward => {
+                    let _ = self.prompt_stroke(crate::vim::Stroke::EraseForward);
+                }
+                Action::Quit => self.done = true,
+                // Nothing else can reach here through `prompt_keys`.
+                _ => {}
+            }
+            return;
+        }
+
         // Any navigation/action dismisses a stale overlay first, except the
         // explicit Dismiss/Quit which are handled below.
         // While help is up it OWNS the navigation keys: `j`/`k` scroll the
@@ -590,6 +908,14 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         }
 
         match action {
+            // Reachable only through `prompt_keys`, which is consulted only
+            // while a prompt is open — and that case returned above. Listed
+            // rather than wildcarded so a new Action must state its answer.
+            Action::PromptErase
+            | Action::PromptEraseWord
+            | Action::PromptEraseToStart
+            | Action::PromptEraseToEnd
+            | Action::PromptEraseForward => {}
             Action::Help => {
                 self.panel = Panel::Help { scroll: 0 };
             }
@@ -691,7 +1017,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     pub fn pending_bancada(&self) -> Option<&PendingBancada> {
         match &self.panel {
             Panel::BancadaPreview(p) => Some(p),
-            Panel::Table | Panel::ActionOverlay(_) | Panel::Help { .. } => None,
+            Panel::Table | Panel::ActionOverlay(_) | Panel::Help { .. } | Panel::Notice(_) => None,
         }
     }
 
@@ -707,7 +1033,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         match &self.panel {
             Panel::ActionOverlay(r) => Some(r.clone()),
             Panel::BancadaPreview(p) => Some(preview_bancada(p)),
-            Panel::Table | Panel::Help { .. } => None,
+            Panel::Table | Panel::Help { .. } | Panel::Notice(_) => None,
         }
     }
 
@@ -747,6 +1073,14 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         // ── Action overlay (drawn last, on top) ──
         match &self.panel {
             Panel::ActionOverlay(result) => draw_overlay(buf, width, height, result, false),
+            // One line, bottom of the screen — the weight the mistake
+            // deserves. A mistyped view name is not worth a full overlay.
+            Panel::Notice(msg) => {
+                let y = height.saturating_sub(1);
+                let style = Style::default().fg(Color::Black).bg(Color::Yellow);
+                buf.blank(0, y, width, style);
+                buf.set_stringn(0, y, msg, width, style);
+            }
             // The one screen with a confirm affordance — the footer says so.
             Panel::BancadaPreview(pending) => {
                 draw_overlay(buf, width, height, &preview_bancada(pending), true);
@@ -763,6 +1097,22 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
 
     fn draw_status_line(&self, buf: &mut Buffer, width: u16, height: u16) {
         let y = height - 1;
+
+        // An OPEN PROMPT takes the status line entirely. It is the only thing
+        // the operator is doing, and a prompt sharing a bar with a sync phase
+        // and a key legend is a prompt they cannot find. Drawn with a caret so
+        // an empty `:` reads as "type here" rather than as a stuck key.
+        if let Some(p) = &self.prompt {
+            let style = Style::default().fg(Color::Black).bg(Color::Cyan);
+            buf.blank(0, y, width, style);
+            let line = p.rendered();
+            let x = buf.set_stringn(0, y, &line, width, style);
+            if x < width {
+                buf.set_char(x, y, '▏', style);
+            }
+            return;
+        }
+
         let phase = self.sync_phase();
         // A dead feed must not render like a live one. The bar is the only
         // always-visible surface, so a degraded replica takes it over: the
@@ -1364,8 +1714,24 @@ impl<E: ClusterEnv + Send + Sync, S: SessionEnv + Send + Sync> AsyncApp for Bank
     /// The authored chord (`awase::Hotkey`, conflict-checked by the catalog)
     /// and the delivered chord (now also `awase::Hotkey`) are one type, so
     /// this is a direct borrow with no projection in between.
+    /// The keymap for the CURRENT screen state.
+    ///
+    /// `&self`, read once per event, so a modal app answers from whatever it
+    /// currently is — which is exactly what an open prompt needs: the table's
+    /// letter chords must stop claiming keystrokes the moment `:` is pressed,
+    /// or typing a view name would sort, declare and quit on the way through.
     fn hotkey_map(&self) -> Option<&awase::KeyMode<Action>> {
-        Some(BankenApp::keymap(self))
+        Some(self.active_keymap())
+    }
+
+    /// A printable no binding claimed.
+    ///
+    /// Opens `:` / `/`, or feeds an open prompt. Anything else is INERT: the
+    /// table's vocabulary is chords, and letting a stray letter act is how a
+    /// navigator surprises the person driving it.
+    async fn on_text(&mut self, c: char) -> TermResult<()> {
+        let _consumed = self.type_char(c);
+        Ok(())
     }
 
     async fn handle(&mut self, action: &Action) -> TermResult<()> {
@@ -2181,5 +2547,219 @@ mod tests {
         assert!(!Action::SelectNext.is_repeat_gated());
         assert!(!Action::Quit.is_repeat_gated());
         assert!(Action::DeclareScale.is_repeat_gated());
+    }
+}
+
+/// The keymap that applies **while a `:` or `/` prompt is open**.
+///
+/// A second map rather than a mode flag inside dispatch, because the table's
+/// own vocabulary is letters — `o` sorts, `s` declares, `q` quits — and those
+/// bindings are consulted before `on_text` ever runs. Typing `pods` at a `:`
+/// prompt under the table's keymap would toggle the sort on the `o` and quit
+/// on nothing else reaching the line. So while a prompt is open the app
+/// answers `hotkey_map()` with this map, which claims ONLY chords no one can
+/// type: the prompt gets every printable by default.
+///
+/// The same rule the picker's `is_control_chord` filter encodes, arrived at
+/// from the other direction: there the typable chords are removed from one
+/// map, here a map is chosen that never had them.
+fn prompt_keymap() -> awase::KeyMode<Action> {
+    let mut km: awase::KeyMode<Action> = awase::KeyMode::typed("banken-prompt", false);
+    for (hotkey, action) in [
+        (
+            awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::Return),
+            Action::Confirm,
+        ),
+        (
+            awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::Escape),
+            Action::Dismiss,
+        ),
+        (
+            awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::Backspace),
+            Action::PromptErase,
+        ),
+        (
+            awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::Delete),
+            Action::PromptEraseForward,
+        ),
+        (
+            awase::Hotkey::new(awase::Modifiers::CTRL, awase::Key::W),
+            Action::PromptEraseWord,
+        ),
+        (
+            awase::Hotkey::new(awase::Modifiers::CTRL, awase::Key::U),
+            Action::PromptEraseToStart,
+        ),
+        (
+            awase::Hotkey::new(awase::Modifiers::CTRL, awase::Key::K),
+            Action::PromptEraseToEnd,
+        ),
+        // The escape hatch, unconditional and never routed through a stance —
+        // the same split `crate::picker` needed.
+        (
+            awase::Hotkey::new(awase::Modifiers::CTRL, awase::Key::C),
+            Action::Quit,
+        ),
+    ] {
+        let _prev = km.add_binding(awase::Binding::new(hotkey, action));
+    }
+    km
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+    use crate::fixture::FixtureClusterEnv;
+    use banken_spec::testing::MockSessionEnv;
+
+    fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
+        BankenApp::try_new(
+            FixtureClusterEnv::new(),
+            MockSessionEnv::new(),
+            OperatorId::new("drzzln").expect("a literal witness is non-blank"),
+            "source: fixture",
+        )
+        .expect("the shipped vocabulary must build an app")
+    }
+
+    fn type_str(a: &mut BankenApp<FixtureClusterEnv, MockSessionEnv>, s: &str) {
+        for c in s.chars() {
+            a.type_char(c);
+        }
+    }
+
+    /// **THE PROPERTY THE SECOND KEYMAP BUYS.** The table's own vocabulary is
+    /// letters — `o` sorts, `s` declares, `q` quits — and those are consulted
+    /// before `on_text`. Typing a view name at a `:` prompt under the table's
+    /// keymap would sort on the `o` and never deliver the character.
+    #[test]
+    fn the_table_letter_chords_stop_claiming_keys_while_a_prompt_is_open() {
+        let a = app();
+        let table_map = a.active_keymap();
+        let o = awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::O);
+        assert!(
+            table_map
+                .find_binding(&o, &awase::MatchContext::default())
+                .is_some(),
+            "`o` sorts on the table",
+        );
+
+        let mut a = app();
+        a.type_char(':');
+        let prompt_map = a.active_keymap();
+        assert!(
+            prompt_map
+                .find_binding(&o, &awase::MatchContext::default())
+                .is_none(),
+            "`o` must reach the prompt as text, not sort behind it",
+        );
+    }
+
+    #[test]
+    fn typing_a_view_name_lands_in_the_prompt_intact() {
+        let mut a = app();
+        type_str(&mut a, ":deploy");
+        assert_eq!(a.prompt().expect("open").text(), "deploy");
+        assert_eq!(a.prompt().expect("open").rendered(), ":deploy");
+    }
+
+    /// A printable with no prompt open is INERT — the table's vocabulary is
+    /// chords, and a stray letter acting is how a navigator surprises someone.
+    #[test]
+    fn a_stray_letter_with_no_prompt_is_inert() {
+        let mut a = app();
+        assert!(!a.type_char('z'));
+        assert!(a.prompt().is_none());
+    }
+
+    #[test]
+    fn the_command_bar_switches_the_view() {
+        let mut a = app();
+        assert_eq!(a.view_name(), "pods");
+        type_str(&mut a, ":svc");
+        a.apply_action(Action::Confirm);
+        assert_eq!(a.view_name(), "svc");
+        assert!(a.prompt().is_none(), "committing closes the prompt");
+    }
+
+    /// **An unknown view names the legal set.** An operator who types
+    /// `:deploys` should learn the view is `deploy`, not wonder whether the
+    /// key registered.
+    #[test]
+    fn an_unknown_view_is_refused_by_name_and_lists_the_alternatives() {
+        let mut a = app();
+        type_str(&mut a, ":deploys");
+        a.apply_action(Action::Confirm);
+        let Panel::Notice(msg) = &a.panel else {
+            panic!("expected a notice, got {:?}", a.panel);
+        };
+        assert!(msg.contains("deploys"), "names what was asked for: {msg}");
+        assert!(msg.contains("deploy"), "and what was meant: {msg}");
+        assert_eq!(a.view_name(), "pods", "and leaves the view alone");
+    }
+
+    /// `esc` abandons WITHOUT applying — a `/` typed and thought better of
+    /// must leave the previous filter alone rather than clearing it.
+    #[test]
+    fn escape_abandons_a_prompt_without_applying_it() {
+        let mut a = app();
+        type_str(&mut a, "/nginx");
+        a.apply_action(Action::Confirm);
+        assert_eq!(a.filter(), "nginx");
+
+        type_str(&mut a, "/other");
+        a.apply_action(Action::Dismiss);
+        assert!(a.prompt().is_none());
+        assert_eq!(a.filter(), "nginx", "the committed filter survives");
+    }
+
+    /// The erase chords work in the prompt — the same ones the picker gained,
+    /// reaching the same editor.
+    #[test]
+    fn the_erase_chords_edit_the_prompt() {
+        let mut a = app();
+        type_str(&mut a, ":deploy");
+        a.apply_action(Action::PromptEraseWord);
+        assert_eq!(a.prompt().expect("open").text(), "");
+
+        type_str(&mut a, "svc");
+        a.apply_action(Action::PromptErase);
+        assert_eq!(a.prompt().expect("open").text(), "sv");
+    }
+
+    /// **A cleared filter must WIDEN.** The rows on screen are already
+    /// filtered, so re-filtering them could only ever narrow — clearing has to
+    /// re-read from the source or the table would never come back.
+    #[test]
+    fn clearing_the_filter_restores_the_full_set() {
+        let mut a = app();
+        let all = a.table.view().rows().len();
+        assert!(all > 1, "the fixture must have rows to filter");
+
+        type_str(&mut a, "/zzzz-matches-nothing");
+        a.apply_action(Action::Confirm);
+        assert_eq!(a.table.view().rows().len(), 0, "filtered to nothing");
+
+        a.type_char('/');
+        a.apply_action(Action::Confirm);
+        assert_eq!(a.filter(), "");
+        assert_eq!(
+            a.table.view().rows().len(),
+            all,
+            "and every row came back",
+        );
+    }
+
+    /// The prompt owns the status line while it is open — it is the only
+    /// thing the operator is doing, and one sharing a bar with a sync phase
+    /// and a key legend is one they cannot find.
+    #[test]
+    fn an_open_prompt_owns_the_status_line() {
+        let mut a = app();
+        type_str(&mut a, ":dep");
+        let mut backend = egaku_term::TestBackend::new(100, 12);
+        backend.draw(|buf| a.render(buf));
+        let frame = backend.to_lines().join("\n");
+        assert!(frame.contains(":dep"), "{frame}");
     }
 }
