@@ -96,6 +96,12 @@ pub mod vim;
 #[cfg(feature = "live")]
 pub mod antessala;
 
+/// ronda — the watchdog's rounds: a bounded, auth-free reachability probe over
+/// every kubeconfig context, so the landing screen says what is actually
+/// there. Behind `live` for the same reason [`picker`] is.
+#[cfg(feature = "live")]
+pub mod ronda;
+
 #[cfg(feature = "live")]
 pub mod live;
 

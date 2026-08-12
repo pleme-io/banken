@@ -111,10 +111,35 @@ async fn run_pick(
     strategy: banken::absorb::ListStrategy,
 ) -> Result<(), String> {
     let catalog = banken_spec::load_catalog().map_err(|e| e.to_string())?;
+
+    // ── The watchdog's rounds, started ONCE and outliving every picker entry ──
+    //
+    // Outside the loop deliberately. A failed connect re-enters the list, and
+    // restarting the rounds there would blink all eighteen markers back to
+    // `probing` at exactly the moment the operator is scanning for one that is
+    // up — i.e. the retry would destroy the information the retry needs.
+    //
+    // The enumeration is a second filesystem read of the kubeconfig (the
+    // picker does its own, per entry, so that an edit mid-session is picked
+    // up). That is one extra YAML parse at startup and no network, which is a
+    // fair price for rounds whose lifetime is the session rather than the
+    // screen.
+    let (ronda, publisher) = banken::ronda::channel();
+    let _rounds = banken::live::enumerate_contexts().ok().map(|contexts| {
+        banken::ronda::spawn_rounds(
+            contexts
+                .into_iter()
+                .map(|c| (c.name, c.server))
+                .collect::<Vec<_>>(),
+            publisher,
+        )
+    });
+
     let mut notice: Option<String> = None;
     loop {
-        let mut picker =
-            banken::picker::ContextPicker::try_new(&catalog).map_err(|e| e.to_string())?;
+        let mut picker = banken::picker::ContextPicker::try_new(&catalog)
+            .map_err(|e| e.to_string())?
+            .with_ronda(ronda.clone());
         if let Some(n) = notice.take() {
             picker = picker.with_notice(n);
         }

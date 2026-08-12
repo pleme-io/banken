@@ -165,6 +165,12 @@ pub struct ContextPicker {
     /// how it is written back, refiltering on drop.
     vim: crate::vim::Vim,
     query: crate::vim::QueryLine,
+    /// What the watchdog's rounds have found — a marker per row.
+    ///
+    /// Inert by default, so a picker built without one draws no markers rather
+    /// than a column of optimistic dots. See [`crate::ronda`] for what a
+    /// marker does and does not claim.
+    ronda: crate::ronda::Ronda,
     /// The kubeconfig's `current-context`, annotated on its row.
     ///
     /// Shown, never pre-selected. Pre-selecting it would rebuild "whatever
@@ -254,6 +260,7 @@ impl ContextPicker {
             advertised,
             vim: crate::vim::Vim::opening_in(Self::OPENING_STANCE),
             query: crate::vim::QueryLine::default(),
+            ronda: crate::ronda::Ronda::inert(),
             current: kubeconfig_current_context(),
             refusal: None,
             notice: None,
@@ -288,6 +295,36 @@ impl ContextPicker {
     pub fn with_notice(mut self, notice: impl Into<String>) -> Self {
         self.notice = Some(notice.into());
         self
+    }
+
+    /// Show what the watchdog's rounds have found beside each row.
+    ///
+    /// The rounds are owned by the CALLER and outlive this picker, which is
+    /// what lets a failed connect re-enter the list without restarting them —
+    /// eighteen contexts would otherwise be re-probed from scratch on every
+    /// retry, and the markers would blink back to `probing` at exactly the
+    /// moment the operator is looking for the one that is up.
+    #[must_use]
+    pub fn with_ronda(mut self, ronda: crate::ronda::Ronda) -> Self {
+        self.ronda = ronda;
+        self
+    }
+
+    /// How long to wait before repainting, or `None` for "only on a key".
+    ///
+    /// Fast while answers are still landing, slow once the round has settled,
+    /// and **never** when there is no round — a picker that repaints five
+    /// times a second forever because it *might* learn something is a busy
+    /// loop with a good excuse.
+    fn repaint_after(&self) -> Option<std::time::Duration> {
+        if self.ronda.covered() == 0 {
+            return None;
+        }
+        Some(if self.ronda.all_settled() {
+            std::time::Duration::from_millis(1000)
+        } else {
+            std::time::Duration::from_millis(120)
+        })
     }
 
     /// The typed keymap — exposed inherently as well as through [`AsyncApp`]
@@ -582,6 +619,30 @@ impl ContextPicker {
 
         let marker = if selected { "▶ " } else { "  " };
         let mut x = buf.set_stringn(0, y, marker, width, base);
+
+        // ── What the rounds found, before the name ──
+        //
+        // First on the row because it is the field that decides whether the
+        // rest of the row is worth reading. Colour AND glyph carry it: the
+        // glyph is what survives a colour-blind operator and a `TestBackend`
+        // frame, so neither is load-bearing alone.
+        if self.ronda.covered() > 0 {
+            let reach = self.ronda.reach(&ctx.name);
+            let style = if selected {
+                base
+            } else {
+                base.fg(match reach {
+                    crate::ronda::Reach::Open => Color::Green,
+                    crate::ronda::Reach::Refused => Color::Yellow,
+                    crate::ronda::Reach::Unreachable => Color::Red,
+                    crate::ronda::Reach::Probing | crate::ronda::Reach::Unprobeable => {
+                        Color::DarkGrey
+                    }
+                })
+            };
+            x = buf.set_stringn(x, y, reach.marker(), width.saturating_sub(x), style);
+            x = buf.set_stringn(x, y, " ", width.saturating_sub(x), base);
+        }
 
         // The name. Red when ambiguous — the row is not choosable, and the
         // colour is the first thing that says so.
@@ -986,6 +1047,22 @@ impl AsyncApp for ContextPicker {
     async fn on_text(&mut self, c: char) -> TermResult<()> {
         self.type_char(c);
         Ok(())
+    }
+
+    /// Repaint when the rounds may have learned something.
+    ///
+    /// A plain sleep, which is the cancellation-safe shape `wake` requires:
+    /// the findings are read straight off the `ArcSwap` in [`Self::render`],
+    /// so there is no state to drop half-applied and `on_wake` stays the
+    /// default no-op.
+    ///
+    /// `pending()` when there is no round at all, which is what keeps a
+    /// ronda-less picker exactly as input-only as it was before.
+    async fn wake(&self) {
+        match self.repaint_after() {
+            Some(d) => tokio::time::sleep(d).await,
+            None => std::future::pending().await,
+        }
     }
 
     async fn draw(&self, frame: &mut Buffer) -> TermResult<()> {
@@ -1542,6 +1619,88 @@ mod tests {
     fn the_selection_starts_at_the_top_regardless_of_current_context() {
         let p = three();
         assert_eq!(p.picker.view().selected, 0);
+    }
+
+    /// **The rounds reach the row.** Choosing used to be a guess: eighteen
+    /// contexts, all equally choosable-looking, and the only way to find out
+    /// which were actually there was to pick one and wait.
+    #[test]
+    fn the_rounds_mark_the_rows() {
+        let (ronda, publisher) = crate::ronda::channel();
+        publisher.seed(&["camelot-eks".into(), "rio".into(), "jaeger-dev".into()]);
+        publisher.report("camelot-eks", crate::ronda::Reach::Open);
+        publisher.report("rio", crate::ronda::Reach::Unreachable);
+
+        let p = three().with_ronda(ronda);
+        let mut backend = TestBackend::new(110, 10);
+        backend.draw(|buf| p.render(buf));
+        let lines = backend.to_lines();
+
+        let row = |name: &str| {
+            lines
+                .iter()
+                .find(|l| l.contains(name))
+                .unwrap_or_else(|| panic!("no row for {name}"))
+                .clone()
+        };
+        assert!(
+            row("camelot-eks").contains(crate::ronda::Reach::Open.marker()),
+            "{}",
+            row("camelot-eks"),
+        );
+        assert!(
+            row("rio").contains(crate::ronda::Reach::Unreachable.marker()),
+            "{}",
+            row("rio"),
+        );
+        // Still outstanding, and saying so — not silently optimistic.
+        assert!(
+            row("jaeger-dev").contains(crate::ronda::Reach::Probing.marker()),
+            "{}",
+            row("jaeger-dev"),
+        );
+    }
+
+    /// **A picker with no rounds draws no markers**, rather than a column of
+    /// dots that mean "banken has no idea" but read as a verdict.
+    #[test]
+    fn without_rounds_no_marker_column_is_drawn() {
+        let p = three();
+        let mut backend = TestBackend::new(110, 10);
+        backend.draw(|buf| p.render(buf));
+        let frame = backend.to_lines().join("\n");
+        for reach in [
+            crate::ronda::Reach::Open,
+            crate::ronda::Reach::Unreachable,
+            crate::ronda::Reach::Refused,
+            crate::ronda::Reach::Probing,
+        ] {
+            assert!(
+                !frame.contains(reach.marker()),
+                "`{}` ({reach:?}) must not appear without a round:\n{frame}",
+                reach.marker(),
+            );
+        }
+    }
+
+    /// **The redraw cadence is adaptive, and OFF without a round.** A picker
+    /// waking five times a second forever because it might learn something is
+    /// a busy loop with a good excuse.
+    #[test]
+    fn the_repaint_cadence_follows_the_round() {
+        assert_eq!(three().repaint_after(), None, "no round, no repaint");
+
+        let (ronda, publisher) = crate::ronda::channel();
+        publisher.seed(&["a".into()]);
+        let p = three().with_ronda(ronda);
+        let probing = p.repaint_after().expect("a round repaints");
+
+        publisher.report("a", crate::ronda::Reach::Open);
+        let settled = p.repaint_after().expect("still repaints, more slowly");
+        assert!(
+            settled > probing,
+            "settled ({settled:?}) must be slower than probing ({probing:?})",
+        );
     }
 
     /// A narrow terminal must not panic or drop the screen.
