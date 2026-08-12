@@ -220,6 +220,7 @@ dependencies = [
  "ishou-tokens",
  "izumi",
  "k8s-openapi",
+ "kotae",
  "kube",
  "octocrab",
  "rmcp",
@@ -1504,6 +1505,14 @@ dependencies = [
  "chrono",
  "serde",
  "serde-value",
+ "serde_json",
+]
+
+[[package]]
+name = "kotae"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "serde_json",
 ]
 

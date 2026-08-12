@@ -210,6 +210,16 @@ octocrab = { version = "0.47", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# kotae (答え) — the typed answer a machine gives a machine.
+#
+# banken was the DONOR for this vocabulary: its `ok`/`fail` pair was the one
+# place in the fleet where 13 tools shared 2 serialization sites, against
+# mado's 65 tools sharing 160. Extracting it made banken a consumer of its own
+# pattern, which is the point — the discipline it carried in prose ("a refusal
+# is never shaped like an empty list") is now carried by a type that every
+# other fleet MCP server can hold.
+kotae = "0.1"
+
 [features]
 # `live` is ON by default (2026-08-07). It was off, and the stated reason —
 # "the fixture path is fast" — was a producer-side convenience that the
