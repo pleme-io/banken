@@ -71,6 +71,7 @@ fn main() {
             Invocation::Live { context, strategy } => run_live(operator, &context, strategy)
                 .await
                 .map(|_landed| ()),
+            Invocation::Mcp { source } => run_mcp(source).await,
         }
     });
 
@@ -158,7 +159,14 @@ async fn run_pick(
         let Some(choice) = picker.chosen().cloned() else {
             return Ok(());
         };
-        match run_live_from(operator.clone(), &choice.name, choice.server.clone(), strategy).await {
+        match run_live_from(
+            operator.clone(),
+            &choice.name,
+            choice.server.clone(),
+            strategy,
+        )
+        .await
+        {
             Ok(Landed::Opened) => return Ok(()),
             // The operator changed their mind mid-connect. Back to the list
             // with NO notice: a cancel is a decision, and captioning it with
@@ -468,6 +476,88 @@ async fn run_live(
     )
 }
 
+/// `banken mcp` — serve the OBSERVE half over MCP on stdio.
+///
+/// # stdout belongs to the protocol
+///
+/// Nothing here prints to stdout. The JSON-RPC framing owns that stream, and a
+/// single stray line — a progress note, a connect message, a `dbg!` — corrupts
+/// the session in a way that surfaces to the operator as an unrelated MCP
+/// client error. Diagnostics go to stderr, and the connect is silent.
+///
+/// # Why the ronda rounds start here too
+///
+/// `banken_readiness` is the tool that separates "the workload is gone" from
+/// "the credential expired", and it can only answer from findings a round has
+/// published. Starting the rounds gives the agent that answer for *every*
+/// context, not just the one being served — which is what makes the tool worth
+/// calling before a read rather than after one fails.
+#[cfg(feature = "mcp")]
+async fn run_mcp(source: banken::cli::McpSource) -> Result<(), String> {
+    use banken::cli::McpSource;
+    use banken::mcp::BankenMcp;
+    use banken_spec::env::ClusterEnv;
+    use rmcp::{ServiceExt, transport::stdio};
+    use std::sync::Arc;
+
+    let (env, cluster): (Arc<dyn ClusterEnv + Send + Sync>, String) = match source {
+        McpSource::Fixture => (Arc::new(FixtureClusterEnv::new()), FIXTURE_CLUSTER.into()),
+        McpSource::Live(context) => {
+            let env = banken::live::KubeClusterEnv::connect_with_context(&context)
+                .await
+                .map_err(|e| {
+                    let mut m = String::from("live connect failed (VPN/kubeconfig?): ");
+                    m.push_str(&e.to_string());
+                    m
+                })?;
+            let name = env.context_name().unwrap_or(context);
+            (Arc::new(env), name)
+        }
+    };
+
+    // The rounds outlive this binding for the life of the process; the guard is
+    // held so the task is not cancelled the moment it is spawned.
+    let (ronda, publisher) = banken::ronda::channel();
+    let _rounds = banken::live::enumerate_contexts().ok().map(|contexts| {
+        let climb: banken::ronda::DeepClimb = Arc::new(|context: String| {
+            Box::pin(async move { banken::live::KubeClusterEnv::climb(&context).await })
+        });
+        banken::ronda::spawn_rounds(
+            contexts
+                .into_iter()
+                .map(|c| (c.name, c.server))
+                .collect::<Vec<_>>(),
+            publisher,
+            Some(climb),
+        )
+    });
+
+    eprintln!("banken mcp: serving OBSERVE-only reads of `{cluster}` over stdio");
+
+    BankenMcp::new(env, cluster, ronda)
+        .serve(stdio())
+        .await
+        .map_err(|e| format!("serve: {e}"))?
+        .waiting()
+        .await
+        .map_err(|e| format!("waiting: {e}"))?;
+    Ok(())
+}
+
+/// The refusal when the agent surface was not compiled in.
+///
+/// Mirrors the `run_live` shape below, including taking the argument by value,
+/// so a signature drift in one arm cannot pass a `--no-default-features` build
+/// while failing the default one.
+#[cfg(not(feature = "mcp"))]
+async fn run_mcp(_source: banken::cli::McpSource) -> Result<(), String> {
+    Err(
+        "`banken mcp` requires building with `--features mcp` (the rmcp stdio server); \
+         this binary was built without the agent surface"
+            .into(),
+    )
+}
+
 fn print_usage() {
     // A plain-text usage block — the one place a printf-shaped write is the
     // typed emission surface (stdout of a CLI, not VT into the grid).
@@ -484,6 +574,7 @@ fn print_usage() {
     );
     println!("  banken --context <name>       open :pods on that cluster directly");
     println!("  banken --fixture              explore the interface on canned rows");
+    println!("  banken mcp --context <name>   serve the OBSERVE half to an agent over MCP");
     println!("  banken --help");
     println!();
     println!("VIEWS:");

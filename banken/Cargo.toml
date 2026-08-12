@@ -154,6 +154,28 @@ rustls = { version = "0.23", default-features = false, features = ["ring"], opti
 tear-client = { version = "0.1", optional = true }
 tear-types = { version = "0.1", optional = true }
 
+# ── The agent surface (`banken mcp`). ──────────────────────────────
+# The fleet MCP standard, on the same feature selection every other pleme-io
+# MCP server uses.
+#
+# KNOWN, TRACKED EXCEPTION, inherited verbatim from pangea-operator-mcp:
+# rmcp 0.15.0 carries GHSA-89vp-x53w-74fx / CVE-2026-42559, a DNS-rebinding
+# flaw in rmcp's *Streamable HTTP server transport*. Unreachable here for the
+# same structural reason: that surface lives behind
+# `transport-streamable-http-server` (which itself requires `server-side-http`
+# + `transport-worker`, pulling axum/tower/sse-stream/http-body). We enable
+# only `server` + `transport-io` (stdio), so no HTTP transport code compiles
+# in. The patched version is 1.4.0 — a 0.x→1.x jump outside this range, likely
+# carrying real API breakage; not attempted blind for a vulnerability that is
+# already unreachable. Revisit as a scoped rmcp 1.x migration across every
+# fleet MCP server at once, not as a security fix here.
+rmcp = { version = "0.15", features = ["server", "transport-io"], optional = true }
+# `derive` for the tool-input structs; rmcp's `#[tool]` needs `Deserialize`
+# plus a `schemars::JsonSchema` to publish each tool's parameter schema.
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+schemars = { version = "1", optional = true }
+
 [features]
 # `live` is ON by default (2026-08-07). It was off, and the stated reason —
 # "the fixture path is fast" — was a producer-side convenience that the
@@ -173,7 +195,15 @@ tear-types = { version = "0.1", optional = true }
 # bancada-tear-feature-nix-unverified`, so there is nothing left to justify
 # shipping `UnwiredSessionEnv`'s typed refusal to every node when the real
 # adapter is one registry dep away.
-default = ["live", "tear"]
+#
+# `mcp` is default-on for the SAME consumer-side reason. A cluster navigator
+# whose agent surface has to be rebuilt to exist is not an agent surface — and
+# substrate's rust tool-release shape reads its feature set from gen's build
+# spec (cargo's default resolve), exposing no per-consumer knob, so anything
+# off by default is structurally absent from `pkgs.banken`. Every dep it turns
+# on (rmcp / serde / serde_json / schemars) is a registry dep, so the crates.io
+# release shape is unchanged.
+default = ["live", "tear", "mcp"]
 # Compile the KubeClusterEnv live-read backend. Heavy dep tree (kube +
 # k8s-openapi + rustls).
 live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow", "dep:rustls", "dep:futures", "dep:http"]
@@ -181,6 +211,16 @@ live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow", "dep:rustls", "dep:futures"
 # running `tear-daemon`. Off by default: the plan is produced and previewed
 # without it, and the dep tree is heavy.
 tear = ["dep:tear-client", "dep:tear-types"]
+# Compile `banken mcp` — the OBSERVE-only agent surface over stdio.
+#
+# It implies `live` rather than duplicating a fixture-only path: the readiness
+# tool reports `ronda`'s access ladder, which is the answer that separates "the
+# workload is gone" from "the credential expired" — the single most valuable
+# thing this surface tells an agent, and the one it cannot reconstruct from a
+# failed read. A build without it would have to answer readiness with a
+# placeholder, and a placeholder here is exactly the lie the tool exists to
+# prevent.
+mcp = ["live", "dep:rmcp", "dep:serde", "dep:serde_json", "dep:schemars"]
 
 [lints.clippy]
 pedantic = "warn"

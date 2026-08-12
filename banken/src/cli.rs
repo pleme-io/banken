@@ -98,6 +98,37 @@ pub enum Invocation {
         /// reasoning that makes `context` a non-optional `String`.
         strategy: crate::absorb::ListStrategy,
     },
+    /// `banken mcp --context <name>` / `banken mcp --fixture`: serve the
+    /// OBSERVE half over MCP on stdio instead of drawing a screen.
+    ///
+    /// # Why the source is not an `Option`
+    ///
+    /// Same wrong-estate invariant as [`Invocation::Live`], with one rung
+    /// added: the escape hatch that makes an unnamed live run acceptable —
+    /// *ask the operator* — **does not exist here**. stdout carries the
+    /// JSON-RPC framing, so a picker cannot be drawn, and there is nobody at a
+    /// keyboard to answer it. An MCP server that rode `current-context` would
+    /// silently serve whichever estate the merged `KUBECONFIG` happens to
+    /// point at, to a *reader who cannot see the mistake* — an agent has no
+    /// peripheral vision for a title bar naming the wrong cluster. So the
+    /// unnamed case is refused at the parse boundary and has no value here.
+    Mcp {
+        /// Where the served reads come from.
+        source: McpSource,
+    },
+}
+
+/// Which cluster an [`Invocation::Mcp`] serves.
+///
+/// A closed sum rather than an `Option<String>`, so "serving the fixture" is a
+/// thing the operator *said* rather than the absence of a thing they didn't.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpSource {
+    /// `--context <name>`: a real kubeconfig context.
+    Live(String),
+    /// `--fixture`: the canned source, for wiring an agent up without a
+    /// cluster.
+    Fixture,
 }
 
 /// Why an argv was refused.
@@ -131,6 +162,12 @@ pub enum CliError {
     /// dropped `--contxt` would run against the fixture while the operator
     /// believed they had selected a cluster.
     UnknownFlag(String),
+    /// `banken mcp` with neither `--context` nor `--fixture`.
+    ///
+    /// The TUI can answer an unnamed run by asking. An MCP server cannot: its
+    /// stdout is the protocol, and its reader is an agent that would take the
+    /// wrong estate's rows at face value.
+    McpWithoutSource,
 }
 
 impl std::fmt::Display for CliError {
@@ -172,6 +209,13 @@ impl std::fmt::Display for CliError {
             CliError::EmptyContext => f.write_str(
                 "--context was given an empty name — an empty context IS the unknown-cluster \
                  value this flag exists to make impossible",
+            ),
+            CliError::McpWithoutSource => f.write_str(
+                "`banken mcp` needs a source: `mcp --context <name>` for a cluster, or \
+                 `mcp --fixture` for the canned one. Unlike the TUI, this cannot fall back \
+                 to asking — stdout carries the MCP protocol, so there is no screen to draw \
+                 a picker on, and the reader is an agent that cannot notice it is looking at \
+                 the wrong estate.",
             ),
             CliError::UnknownFlag(flag) => {
                 f.write_str("unknown flag `")?;
@@ -224,6 +268,7 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
 
     let mut want_fixture = false;
     let mut want_live = false;
+    let mut want_mcp = false;
     let mut context: Option<String> = None;
     let mut strategy = crate::absorb::ListStrategy::default();
     let mut i = 0;
@@ -263,7 +308,9 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
             // A `:view` token — accepted, and currently routed to `:pods`.
             _ if arg.starts_with(':') => {}
             _ if arg.starts_with('-') => return Err(CliError::UnknownFlag(arg.to_owned())),
-            // A bare positional. Same treatment as `:view`.
+            // The one meaningful positional: serve MCP instead of a screen.
+            "mcp" => want_mcp = true,
+            // Any other bare positional. Same treatment as `:view`.
             _ => {}
         }
         i += 1;
@@ -271,6 +318,25 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
 
     if want_fixture && (want_live || context.is_some()) {
         return Err(CliError::ConflictingSources);
+    }
+    // Resolved BEFORE the screen-landing arms, because `mcp` decides what kind
+    // of process this is, not merely which rows it shows. Note it reuses the
+    // same `ConflictingSources` check above — naming two sources is exactly as
+    // ambiguous for an agent as it is for a human.
+    if want_mcp {
+        return match context {
+            Some(c) if c.is_empty() => Err(CliError::EmptyContext),
+            Some(c) => Ok(Invocation::Mcp {
+                source: McpSource::Live(c),
+            }),
+            None if want_fixture => Ok(Invocation::Mcp {
+                source: McpSource::Fixture,
+            }),
+            // `mcp --live` lands here too, and that is correct: `--live` means
+            // "a real cluster, you pick which", and there is nothing to pick
+            // with.
+            None => Err(CliError::McpWithoutSource),
+        };
     }
     if want_fixture {
         return Ok(Invocation::Fixture);
@@ -325,6 +391,58 @@ mod tests {
         };
         assert_eq!(parse(&[]), Ok(pick.clone()));
         assert_eq!(parse(&[":pods"]), Ok(pick));
+    }
+
+    /// **The agent surface's own wrong-estate gate.** `banken mcp` with no
+    /// source is refused, and this is a *stricter* rule than the TUI's on
+    /// purpose: the TUI answers an unnamed run by opening the picker, and an
+    /// MCP server has neither a screen to draw one on nor a human to answer
+    /// it. Falling back to `current-context` would serve some other estate's
+    /// rows to a reader with no way to notice.
+    #[test]
+    fn mcp_refuses_to_guess_which_estate_it_serves() {
+        assert_eq!(parse(&["mcp"]), Err(CliError::McpWithoutSource));
+        // `--live` names "a real cluster, you pick which" — and there is
+        // nothing here to pick with, so it is the same refusal.
+        assert_eq!(parse(&["mcp", "--live"]), Err(CliError::McpWithoutSource));
+        // The refusal must name both roads out, or it costs a detour.
+        let msg = CliError::McpWithoutSource.to_string();
+        assert!(msg.contains("--context"), "{msg}");
+        assert!(msg.contains("--fixture"), "{msg}");
+    }
+
+    #[test]
+    fn mcp_takes_either_source_by_name() {
+        assert_eq!(
+            parse(&["mcp", "--context", "alpha-eks"]),
+            Ok(Invocation::Mcp {
+                source: McpSource::Live("alpha-eks".to_owned()),
+            }),
+        );
+        assert_eq!(
+            parse(&["mcp", "--context=alpha-eks"]),
+            Ok(Invocation::Mcp {
+                source: McpSource::Live("alpha-eks".to_owned()),
+            }),
+        );
+        assert_eq!(
+            parse(&["mcp", "--fixture"]),
+            Ok(Invocation::Mcp {
+                source: McpSource::Fixture,
+            }),
+        );
+    }
+
+    /// Naming two sources is exactly as ambiguous for an agent as for a human,
+    /// and an empty context is the unknown-cluster value either way — so `mcp`
+    /// inherits both refusals rather than re-deciding them.
+    #[test]
+    fn mcp_inherits_the_source_refusals() {
+        assert_eq!(
+            parse(&["mcp", "--fixture", "--context", "alpha-eks"]),
+            Err(CliError::ConflictingSources),
+        );
+        assert_eq!(parse(&["mcp", "--context="]), Err(CliError::EmptyContext));
     }
 
     /// The fixture is retired from the default, not removed — it is now one

@@ -113,3 +113,12 @@ pub mod picker;
 
 #[cfg(feature = "tear")]
 pub mod tear_session;
+
+/// mcp — the agent surface. banken's OBSERVE half, and *only* that half,
+/// served over MCP on stdio.
+///
+/// The point is the asymmetry: a human at the TUI can DECLARE and can
+/// break-glass; an agent through this door can only look. Not because it is
+/// asked not to — because the mutating tools do not exist to call.
+#[cfg(feature = "mcp")]
+pub mod mcp;

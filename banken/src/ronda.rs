@@ -199,6 +199,31 @@ impl Rung {
         }
     }
 
+    /// The stable machine name for this rung.
+    ///
+    /// # Why this is not [`Self::label`]
+    ///
+    /// `label` is a *phrase written for a human reading a status line* — "port
+    /// open, no apiserver reached" — and it is free to be reworded for clarity
+    /// at any time. A machine consumer keying off that string would break on a
+    /// copy edit, so it gets a short identifier that is part of the contract
+    /// and does not move.
+    ///
+    /// Both are emitted by `banken mcp`'s readiness tool: the token to branch
+    /// on, the label to quote. Exhaustively matched, so a new rung must decide
+    /// its own token rather than inherit a plausible one.
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Down => "down",
+            Self::Network => "network",
+            Self::Serving => "serving",
+            Self::Identity => "identity",
+            Self::Pods => "pods",
+        }
+    }
+
     /// Whether a round has settled on this rung.
     #[must_use]
     pub fn is_settled(self) -> bool {
@@ -267,11 +292,11 @@ impl Standing {
 pub fn ramp(position: f32) -> (u8, u8, u8) {
     /// The anchors, at their positions on the ramp.
     const STOPS: [(f32, (u8, u8, u8)); 5] = [
-        (0.00, (198, 64, 72)),   // down — a muted red, not an alarm
-        (0.25, (208, 122, 56)),  // network
-        (0.50, (202, 172, 62)),  // serving
-        (0.75, (152, 188, 78)),  // identity
-        (1.00, (92, 200, 112)),  // pods — arrived
+        (0.00, (198, 64, 72)),  // down — a muted red, not an alarm
+        (0.25, (208, 122, 56)), // network
+        (0.50, (202, 172, 62)), // serving
+        (0.75, (152, 188, 78)), // identity
+        (1.00, (92, 200, 112)), // pods — arrived
     ];
 
     // NaN first, and not by `clamp`: `f32::clamp` PROPAGATES NaN rather than
@@ -388,6 +413,31 @@ impl Ronda {
             .load()
             .iter()
             .filter_map(|(name, s)| s.rung.position().map(|p| (name.clone(), p)))
+            .collect()
+    }
+
+    /// Every context a round covers, **including the ones not yet measured**.
+    ///
+    /// # Why this is not [`Self::positions`]
+    ///
+    /// `positions` is a *ramp* projection: it drops unmeasured contexts on
+    /// purpose so a drawer cannot paint "not looked at yet" as a colour that
+    /// means something. That is exactly wrong for a reader who wants a list of
+    /// clusters, because it makes an unprobed context **invisible** rather
+    /// than visibly unknown.
+    ///
+    /// Measured 2026-08-12, which is why this exists: `banken mcp` reported
+    /// `covered: 18` alongside an empty context array, because all eighteen
+    /// were still `Rung::Unknown` at the moment of the read. `covered` is a
+    /// count and `positions` is a filtered list, so the two disagreed and
+    /// neither was wrong — there was simply no method that answered "what are
+    /// the eighteen".
+    #[must_use]
+    pub fn standings(&self) -> Vec<(String, Standing)> {
+        self.findings
+            .load()
+            .iter()
+            .map(|(name, s)| (name.clone(), s.clone()))
             .collect()
     }
 }
@@ -541,9 +591,10 @@ pub async fn probe(host: &str, port: u16) -> Standing {
         // node) rather than the path being down (VPN, route, asleep). Same
         // rung, because neither got anywhere; different note, because they
         // send the operator to different things to fix.
-        Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
-            Standing::stopped(Rung::Down, "connection refused — host up, nothing listening")
-        }
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => Standing::stopped(
+            Rung::Down,
+            "connection refused — host up, nothing listening",
+        ),
         Ok(Err(_)) => Standing::stopped(Rung::Down, "no route to the apiserver"),
         Err(_timeout) => Standing::stopped(Rung::Down, "timed out — VPN down, or asleep"),
     }
@@ -717,8 +768,14 @@ mod tests {
     /// unprobeable — a real cluster hidden by a parser bug.
     #[test]
     fn an_ipv6_literal_keeps_its_colons() {
-        assert_eq!(dial_target("https://[::1]:6443"), Some(("::1".into(), 6443)));
-        assert_eq!(dial_target("https://[fd00::5]"), Some(("fd00::5".into(), 443)));
+        assert_eq!(
+            dial_target("https://[::1]:6443"),
+            Some(("::1".into(), 6443))
+        );
+        assert_eq!(
+            dial_target("https://[fd00::5]"),
+            Some(("fd00::5".into(), 443))
+        );
     }
 
     #[test]
@@ -743,7 +800,6 @@ mod tests {
             assert_eq!(dial_target(server), None, "`{server}` must not be dialled");
         }
     }
-
 
     // ── the ladder ───────────────────────────────────────────────────────
 
@@ -823,6 +879,59 @@ mod tests {
         assert_eq!(ramp(f32::NAN), ramp(0.0), "NaN must not paint a black cell");
     }
 
+    /// The machine token is a CONTRACT: distinct per rung, and stable in a way
+    /// the human label deliberately is not. A consumer branches on it, so two
+    /// rungs sharing one would silently collapse two different answers — the
+    /// worst of which is `unknown` reading as `down`.
+    #[test]
+    fn every_rung_has_its_own_stable_token() {
+        for (i, a) in Rung::ALL.iter().enumerate() {
+            for b in &Rung::ALL[i + 1..] {
+                assert_ne!(
+                    a.token(),
+                    b.token(),
+                    "{a:?} and {b:?} share the token `{}` — a consumer cannot \
+                     tell them apart",
+                    a.token(),
+                );
+            }
+        }
+        // Pinned, not merely unique. These strings are published on banken's
+        // MCP surface; renaming one is a breaking change to a consumer, and
+        // this is what makes that visible in a diff rather than at their end.
+        assert_eq!(Rung::Unknown.token(), "unknown");
+        assert_eq!(Rung::Down.token(), "down");
+        assert_eq!(Rung::Network.token(), "network");
+        assert_eq!(Rung::Serving.token(), "serving");
+        assert_eq!(Rung::Identity.token(), "identity");
+        assert_eq!(Rung::Pods.token(), "pods");
+    }
+
+    /// `standings()` reports EVERY covered context; `positions()` reports only
+    /// the measured ones. Both are correct for their own reader, and the two
+    /// disagreeing is the point — a drawer must not paint "not looked at yet",
+    /// and a list must not omit it.
+    #[test]
+    fn standings_lists_the_unmeasured_contexts_that_positions_drops() {
+        let (ronda, publisher) = channel();
+        publisher.seed(&["alpha".to_owned(), "bravo".to_owned()]);
+
+        assert_eq!(ronda.covered(), 2);
+        assert!(
+            ronda.positions().is_empty(),
+            "the ramp projection drops unmeasured contexts, by design",
+        );
+        let all = ronda.standings();
+        assert_eq!(all.len(), 2, "the list must not: {all:?}");
+        assert!(all.iter().all(|(_, s)| s.rung == Rung::Unknown));
+
+        // Once one is measured, it appears in BOTH — the split is about
+        // measurement, not about which method is authoritative.
+        publisher.report("alpha", Standing::at(Rung::Pods));
+        assert_eq!(ronda.positions().len(), 1);
+        assert_eq!(ronda.standings().len(), 2);
+    }
+
     /// Every rung is distinguishable WITHOUT colour — a colour-blind operator,
     /// a monochrome terminal and a `TestBackend` frame all have to read it.
     #[test]
@@ -887,7 +996,10 @@ mod tests {
         );
         assert_eq!(ronda.rung("bravo"), Rung::Pods);
         assert_eq!(ronda.rung("charlie"), Rung::Network);
-        assert_eq!(ronda.standing("charlie").note, "credentials: SSO session expired");
+        assert_eq!(
+            ronda.standing("charlie").note,
+            "credentials: SSO session expired"
+        );
         assert_eq!(ronda.rung("never-mentioned"), Rung::Unknown);
     }
 
@@ -1030,7 +1142,8 @@ mod tests {
         let mut up = String::from("http://127.0.0.1:");
         up.push_str(&port.to_string());
 
-        let climbed: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let climbed: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = Arc::clone(&climbed);
         let climb: DeepClimb = Arc::new(move |context: String| {
             let seen = Arc::clone(&seen);
@@ -1065,7 +1178,11 @@ mod tests {
             vec!["up".to_owned()],
             "only the context whose port opened may cost a credential helper",
         );
-        assert_eq!(ronda.rung("up"), Rung::Pods, "and it climbed the full ladder");
+        assert_eq!(
+            ronda.rung("up"),
+            Rung::Pods,
+            "and it climbed the full ladder"
+        );
         assert_eq!(ronda.rung("down"), Rung::Down);
     }
 
