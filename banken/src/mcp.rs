@@ -403,10 +403,18 @@ fn row_json(r: &banken_spec::env::Row) -> Value {
 
 #[tool_handler]
 impl ServerHandler for BankenMcp {
+    // `ServerInfo` is `#[non_exhaustive]` as of rmcp 1.x, so the struct-literal
+    // form is E0639 even with `..Default::default()` — field assignment is the
+    // only way to build one from outside the crate, which is exactly the case
+    // this lint exists to permit.
+    #[allow(
+        clippy::field_reassign_with_default,
+        reason = "ServerInfo is #[non_exhaustive]; the struct-literal form is E0639"
+    )]
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
-                "banken — observe-first cluster reads. EVERY tool here is an \
+        let mut info = ServerInfo::default();
+        info.instructions = Some(
+            "banken — observe-first cluster reads. EVERY tool here is an \
                  OBSERVE; there is no mutating tool, because the underlying \
                  `ClusterEnv` has no unwitnessed-mutate method. To change \
                  something, propose a full manifest to the owning GitOps \
@@ -415,11 +423,10 @@ impl ServerHandler for BankenMcp {
                  exact split, and `banken_readiness` before concluding from a \
                  failed read that a workload is missing rather than that the \
                  cluster was unreachable."
-                    .into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+                .into(),
+        );
+        info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        info
     }
 }
 

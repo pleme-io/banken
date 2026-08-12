@@ -155,21 +155,33 @@ tear-client = { version = "0.1", optional = true }
 tear-types = { version = "0.1", optional = true }
 
 # ── The agent surface (`banken mcp`). ──────────────────────────────
-# The fleet MCP standard, on the same feature selection every other pleme-io
-# MCP server uses.
 #
-# KNOWN, TRACKED EXCEPTION, inherited verbatim from pangea-operator-mcp:
-# rmcp 0.15.0 carries GHSA-89vp-x53w-74fx / CVE-2026-42559, a DNS-rebinding
-# flaw in rmcp's *Streamable HTTP server transport*. Unreachable here for the
-# same structural reason: that surface lives behind
-# `transport-streamable-http-server` (which itself requires `server-side-http`
-# + `transport-worker`, pulling axum/tower/sse-stream/http-body). We enable
-# only `server` + `transport-io` (stdio), so no HTTP transport code compiles
-# in. The patched version is 1.4.0 — a 0.x→1.x jump outside this range, likely
-# carrying real API breakage; not attempted blind for a vulnerability that is
-# already unreachable. Revisit as a scoped rmcp 1.x migration across every
-# fleet MCP server at once, not as a security fix here.
-rmcp = { version = "0.15", features = ["server", "transport-io"], optional = true }
+# *** rmcp 1.x, NOT the fleet's 0.15 — and the migration cost was measured,
+#     not estimated (2026-08-12). ***
+#
+# rmcp 0.15 carries GHSA-89vp-x53w-74fx / CVE-2026-42559, a DNS-rebinding flaw
+# in the *Streamable HTTP server transport*. Every pleme-io MCP server carries
+# it as a tracked exception on the reasoning that the vulnerable surface is
+# unreachable behind `transport-streamable-http-server` (which requires
+# `server-side-http` + `transport-worker`, pulling axum/tower/sse-stream), while
+# we enable only `server` + `transport-io`. That reasoning is correct and was
+# re-verified here against the resolved feature graph.
+#
+# It is also unnecessary. pangea-operator-mcp's comment says a 0.x→1.x jump is
+# "likely to carry real API breakage; not attempted blind" — so it was attempted
+# deliberately, and for THIS code the entire cost was **one** change: `ServerInfo`
+# became `#[non_exhaustive]`, so its struct-literal form is E0639 and it must be
+# built by field assignment (see `mcp.rs`'s `get_info`). Nothing else moved:
+# `#[tool_router]`, `#[tool]`, `Parameters<T>`, `ToolRouter::list_all`,
+# `ServiceExt::serve`, `stdio()` are unchanged. 20 test binaries green and the
+# stdio wire protocol re-probed with a real client.
+#
+# Reasoning about a CVE being unreachable is strictly worse than not having it,
+# and banken is a PUBLIC repo where the advisory is a standing red banner rather
+# than a private note. The fleet-wide finding — that the 1.x migration is one
+# line, not a project — belongs upstream in pangea-operator-mcp and any other
+# fleet MCP server still pinned at 0.15.
+rmcp = { version = "1", features = ["server", "transport-io"], optional = true }
 schemars = { version = "1", optional = true }
 
 # NOT optional, and not only for the MCP surface: `crate::glass` serializes the

@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "f360e798f3b262383777ae847e28cb67e4b85f50f9d1c400f4e6c1197956e117",
+  "cargo_lock_sha256": "679221321a4f61a862f51e0884e33fd9a892f0fe446c2dc9033ddefa500fc08c",
   "manifest_sha256": {
     "Cargo.toml": "94e7c76f9d827a8128f7035812baafdd7d3e4dbf03c1017c9781d995d0740c5b",
     "banken-config/Cargo.toml": "ad2de374a20edfaf584decc7ef42646b90e39a09fedbba54f24fd5aff8d2c4df",
     "banken-spec/Cargo.toml": "2e3390f4a2ef74b5c85792f176bc679e7e340f96600c6901afceb1063bd8798c",
-    "banken/Cargo.toml": "19b5418e789ae81b1a2c54ec0f49ffd7d805200d2e35b24b4e3c359b80493d12"
+    "banken/Cargo.toml": "cc5cbe710da7828e3c4eecfcb878bd4396fa7ad7277b2bc886d9c58d957834c8"
   },
   "target_resolves": {
     "base": {
@@ -615,7 +615,7 @@
           },
           {
             "name": "rmcp",
-            "package_key": "rmcp-0.15.0",
+            "package_key": "rmcp-1.8.0",
             "kind": "normal",
             "features": [
               "server",
@@ -6571,7 +6571,7 @@
           "unicode-segment"
         ]
       },
-      "rmcp-0.15.0": {
+      "rmcp-1.8.0": {
         "runtime_dependencies": [
           {
             "name": "async_trait",
@@ -6613,9 +6613,10 @@
             "package_key": "chrono-0.4.45",
             "kind": "normal",
             "features": [
+              "now",
               "serde"
             ],
-            "uses_default_features": true,
+            "uses_default_features": false,
             "optional": false,
             "target": "cfg(not(all(target_family = \"wasm\", target_os = \"unknown\")))",
             "tree": "target"
@@ -6652,7 +6653,7 @@
           },
           {
             "name": "rmcp_macros",
-            "package_key": "rmcp-macros-0.15.0",
+            "package_key": "rmcp-macros-1.8.0",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -6751,7 +6752,7 @@
           "transport-io"
         ]
       },
-      "rmcp-macros-0.15.0": {
+      "rmcp-macros-1.8.0": {
         "runtime_dependencies": [
           {
             "name": "darling",
@@ -14563,11 +14564,11 @@
       "build_script": "build.rs",
       "links": "ring_core_0_17_14_"
     },
-    "rmcp-0.15.0": {
+    "rmcp-1.8.0": {
       "edition": "2024",
       "build_script": "build.rs"
     },
-    "rmcp-macros-0.15.0": {
+    "rmcp-macros-1.8.0": {
       "edition": "2024",
       "proc_macro": true
     },
