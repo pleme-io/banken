@@ -227,7 +227,7 @@ kotae = "0.1"
 # the cwd rather than ignored per the spec, so a break-glass record could land
 # somewhere that depends on where banken was started. An audit trail that moves
 # with the operator's shell is not one.
-okiba = "0.2"
+okiba = "0.3"
 
 [features]
 # `live` is ON by default (2026-08-07). It was off, and the stated reason —

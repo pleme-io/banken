@@ -178,6 +178,7 @@ impl GlassLedger {
         okiba::Okiba::for_app("banken")
             .try_path(okiba::Tier::State, "glass.jsonl")
             .ok()
+            .map(okiba::AbsPath::into_path_buf)
     }
 
     /// The path this ledger writes to.
