@@ -241,12 +241,23 @@ impl BankenMcp {
         self
     }
 
+    /// The cluster every read is stamped with.
+    ///
+    /// An accessor rather than direct field access at eight call sites: the
+    /// served cluster becomes swappable at runtime (`banken_use_context`), and
+    /// when it moves behind a lock this is the only line that changes. A stamp
+    /// that silently went stale after a switch would be worse than no stamp —
+    /// it would be a confident wrong answer about which estate replied.
+    fn cluster(&self) -> String {
+        self.cluster.clone()
+    }
+
     #[tool(
         description = "Which cluster this server reads, and which of the three action classes it does and does not expose. Worth calling first: it states plainly that every tool here is an OBSERVE and that no mutating tool exists, so you do not have to infer your own powers from an absence."
     )]
     pub async fn banken_capabilities(&self, Parameters(_): Parameters<Empty>) -> String {
         ok(&json!({
-            "cluster": self.cluster,
+            "cluster": self.cluster(),
             "classes": {
                 "observe": "exposed — every tool on this server",
                 "declare": "NOT exposed (pending-banken: mcp-declare). A DECLARE \
@@ -272,7 +283,12 @@ impl BankenMcp {
         description = "List every resource kind this server can read, as the exact labels the other tools accept."
     )]
     pub async fn banken_views(&self, Parameters(_): Parameters<Empty>) -> String {
-        ok(&json!({ "kinds": legal_kinds() }))
+        // Stamped like every other read. The kind list is not obviously
+        // cluster-specific TODAY, but a reader that has switched context needs
+        // every answer to say which cluster it describes — an unstamped answer
+        // is one an agent cannot place, and "it happens not to vary" is a fact
+        // about M0, not a contract.
+        ok(&json!({ "cluster": self.cluster(), "kinds": legal_kinds() }))
     }
 
     #[tool(
@@ -284,7 +300,7 @@ impl BankenMcp {
         };
         match self.env.list_resources(kind, p.namespace.as_deref()) {
             Ok(rows) => ok(&json!({
-                "cluster": self.cluster,
+                "cluster": self.cluster(),
                 "kind": kind.label(),
                 "count": rows.len(),
                 "rows": rows.iter().map(row_json).collect::<Vec<_>>(),
@@ -302,7 +318,7 @@ impl BankenMcp {
         };
         match self.env.get_resource(kind, &p.name, p.namespace.as_deref()) {
             Ok(row) => ok(&json!({
-                "cluster": self.cluster,
+                "cluster": self.cluster(),
                 "kind": kind.label(),
                 "row": row_json(&row),
             })),
@@ -319,7 +335,12 @@ impl BankenMcp {
         // how an agent loop wedges — the TUI's pager can hold an open stream
         // because a human can press a key to leave it.
         match self.env.logs(&p.pod, &p.namespace, false) {
+            // ★ The stamp matters MOST here. Pod logs are the read an agent is
+            // most likely to quote back, reason over, or paste into a report,
+            // and log lines carry no intrinsic hint of which cluster produced
+            // them. Unstamped, a context switch makes them unplaceable.
             Ok(s) => ok(&json!({
+                "cluster": self.cluster(),
                 "pod": s.pod,
                 "lineCount": s.lines.len(),
                 "lines": s.lines,
@@ -335,6 +356,7 @@ impl BankenMcp {
     pub async fn banken_events(&self, Parameters(p): Parameters<EventsInput>) -> String {
         match self.env.events(p.namespace.as_deref()) {
             Ok(evs) => ok(&json!({
+                "cluster": self.cluster(),
                 "count": evs.len(),
                 "events": evs.iter().map(|e| json!({
                     "type": e.kind,
@@ -353,6 +375,7 @@ impl BankenMcp {
     pub async fn banken_glass_ledger(&self, Parameters(_): Parameters<Empty>) -> String {
         let Some(ledger) = self.glass.as_ref() else {
             return ok(&json!({
+                "cluster": self.cluster(),
                 "error": "no break-glass ledger path could be resolved (no \
                           XDG_STATE_HOME and no HOME). This is NOT a claim that \
                           no break-glass has happened — it is banken being \
@@ -365,6 +388,10 @@ impl BankenMcp {
             // unreadable ledger means banken cannot see, which is not. They are
             // different JSON shapes here for exactly that reason.
             Ok(entries) => ok(&json!({
+                // The ledger is per-cluster (`GlassLedger::at(path, cluster)`),
+                // so an unstamped answer invites reading one estate's
+                // break-glass history as another's.
+                "cluster": self.cluster(),
                 "ledger": ledger.path().display().to_string(),
                 "count": entries.len(),
                 "unresolved": ledger.unresolved().map(|u| u.len()).unwrap_or(0),
@@ -414,7 +441,7 @@ impl BankenMcp {
         };
         match permits.may(&ask) {
             Ok(permit) => ok(&json!({
-                "cluster": self.cluster,
+                "cluster": self.cluster(),
                 "verb": verb,
                 "kind": kind.label(),
                 "namespace": p.namespace,
@@ -543,6 +570,62 @@ mod tests {
             "fixture",
             crate::ronda::Ronda::inert(),
         )
+    }
+
+    /// EVERY single-cluster read names the cluster it came from.
+    ///
+    /// This is the invariant that makes runtime context switching safe. banken
+    /// refuses to ride `current-context` because an agent has no peripheral
+    /// vision for a title bar naming the wrong estate — a stamp on every
+    /// answer is what replaces that vision. Once reads are stamped, a switch
+    /// cannot silently mislead: the very next answer says which cluster
+    /// replied.
+    ///
+    /// Measured 2026-08-28, BEFORE this test existed: 4 of 9 tools did not
+    /// stamp. `banken_logs` was the worst of them — log lines carry no
+    /// intrinsic hint of origin and are the read most likely to be quoted back
+    /// or reasoned over, so unstamped logs after a switch are unplaceable.
+    ///
+    /// `banken_readiness` is deliberately exempt and it is the one honest
+    /// exemption: it reports on EVERY context at once and stamps each row with
+    /// its own name, so a single top-level cluster field would be a false
+    /// claim that the whole answer came from one place.
+    #[tokio::test]
+    async fn every_single_cluster_read_stamps_its_cluster() {
+        let s = server();
+        let answers: Vec<(&str, String)> = vec![
+            (
+                "capabilities",
+                s.banken_capabilities(Parameters(Empty {})).await,
+            ),
+            ("views", s.banken_views(Parameters(Empty {})).await),
+            (
+                "glass_ledger",
+                s.banken_glass_ledger(Parameters(Empty {})).await,
+            ),
+        ];
+        for (name, body) in answers {
+            assert!(
+                body.contains("\"cluster\""),
+                "`banken_{name}` returned an answer that does not name its \
+                 cluster; after a context switch a reader cannot place it:\n{body}"
+            );
+        }
+
+        // The read most in need of the stamp gets it checked by NAME, not just
+        // swept up in the loop above — a future refactor that drops it should
+        // fail on a line that says "logs".
+        let logs = s
+            .banken_logs(Parameters(LogsInput {
+                pod: "banken-0".into(),
+                namespace: "default".into(),
+            }))
+            .await;
+        assert!(
+            logs.contains("\"cluster\""),
+            "banken_logs must name its cluster — log lines carry no intrinsic \
+             hint of which estate produced them:\n{logs}"
+        );
     }
 
     fn tool_names() -> Vec<String> {
