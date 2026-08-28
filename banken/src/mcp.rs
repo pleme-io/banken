@@ -450,7 +450,12 @@ impl BankenMcp {
                     // prose written for a human status line and is free to be
                     // reworded, so keying off it would break on a copy edit.
                     "rung": s.rung.token(),
-                    "meaning": s.rung.label(),
+                    // `Standing::meaning()`, NOT `rung.label()`: label cannot
+                    // tell "we did not ask" from "we asked and got nothing",
+                    // and this tool reported a healthy engenho as
+                    // "no apiserver reached" for exactly that reason.
+                    "meaning": s.meaning(),
+                    "reach": format!("{:?}", s.reach()).to_lowercase(),
                     "note": s.note,
                     "settled": s.rung.is_settled(),
                 })

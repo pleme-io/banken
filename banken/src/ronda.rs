@@ -199,6 +199,25 @@ impl Rung {
         }
     }
 
+    /// What reaching this rung means when NOTHING ABOVE IT WAS PROBED.
+    ///
+    /// The waypoint twin of [`Self::label`]. Every phrase here is careful to
+    /// claim only what a probe that stopped here actually established — the
+    /// difference is the word "not probed" in place of a negative finding.
+    /// `Pods` is the top rung, so there is nothing above it to be unsure
+    /// about and the two labels agree.
+    #[must_use]
+    pub fn reached_label(self) -> &'static str {
+        match self {
+            Self::Unknown => "not probed",
+            Self::Down => "nothing answered",
+            Self::Network => "port open, apiserver not probed",
+            Self::Serving => "apiserver answered, identity not probed",
+            Self::Identity => "identity accepted, pod access not probed",
+            Self::Pods => "may list pods",
+        }
+    }
+
     /// The stable machine name for this rung.
     ///
     /// # Why this is not [`Self::label`]
@@ -253,18 +272,79 @@ impl Rung {
 pub struct Standing {
     /// How far the climb got.
     pub rung: Rung,
+    /// Whether the climb STOPPED at `rung` or merely REACHED it.
+    ///
+    /// Load-bearing, and it is why this field exists rather than being
+    /// inferred from `note.is_empty()`: the two are different findings and
+    /// [`Rung::label`] renders them identically. A TCP-only [`probe`] returns
+    /// `at(Network)` — port open, nothing above it was asked — while the full
+    /// [`crate::live::Access::climb`] returns `stopped(Network, …)` when the
+    /// apiserver genuinely did not answer. Reading the second phrase over the
+    /// first is a FALSE NEGATIVE that sends an operator to debug a healthy
+    /// cluster.
+    ///
+    /// Measured 2026-08-28 against a local single-node cluster: the same MCP
+    /// server reported the context as "port open, no apiserver reached" from
+    /// `banken_readiness` while `banken_list --kind node` listed that
+    /// cluster's node in the very next call. Two tools, one server, opposite
+    /// answers — because only one of them could see this distinction.
+    reach: Reach,
     /// Why it stopped, in the operator's terms. Empty when there is nothing
     /// to add — the top rung needs no excuse.
     pub note: String,
 }
 
+/// Did the climb stop at a rung, or merely reach it?
+///
+/// A closed two-arm enum rather than a `bool`, so a call site reads
+/// `Reach::Waypoint` instead of `true` and a third case (if one is ever
+/// measured) is an added arm rather than a second flag.
+/// `Default` is `Waypoint`, deliberately. A default-constructed `Standing` has
+/// measured nothing, and `Ceiling` asserts a negative finding — defaulting to
+/// it would make every un-probed context claim its apiserver was unreachable,
+/// which is the exact round-up this enum was introduced to stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reach {
+    /// The climb was ATTEMPTED above this rung and got no further. The rung's
+    /// negative finding is real and measured.
+    Ceiling,
+    /// This rung was reached and nothing above it was asked. Says NOTHING
+    /// about the rungs above — absence of measurement, not measured absence.
+    #[default]
+    Waypoint,
+}
+
 impl Standing {
     /// A standing at `rung` with no further explanation.
+    ///
+    /// A WAYPOINT: nothing above `rung` was probed, so nothing above it is
+    /// claimed either way.
     #[must_use]
     pub fn at(rung: Rung) -> Self {
         Self {
             rung,
             note: String::new(),
+            reach: Reach::Waypoint,
+        }
+    }
+
+    /// How far the climb got, and whether that was a ceiling or a waypoint.
+    #[must_use]
+    pub const fn reach(&self) -> Reach {
+        self.reach
+    }
+
+    /// What this standing MEANS — the phrase to show a human or an agent.
+    ///
+    /// ★ Use this, never `standing.rung.label()`. `label` is a method on
+    /// `Rung` alone and therefore CANNOT distinguish "we did not ask" from
+    /// "we asked and got nothing"; for every rung below the top that
+    /// difference inverts the finding.
+    #[must_use]
+    pub fn meaning(&self) -> &'static str {
+        match self.reach {
+            Reach::Ceiling => self.rung.label(),
+            Reach::Waypoint => self.rung.reached_label(),
         }
     }
 
@@ -272,6 +352,7 @@ impl Standing {
     #[must_use]
     pub fn stopped(rung: Rung, note: impl Into<String>) -> Self {
         Self {
+            reach: Reach::Ceiling,
             rung,
             note: note.into(),
         }
@@ -889,6 +970,47 @@ mod tests {
 
     /// The ladder is ordered, and the order is what makes it a scalar a colour
     /// can be a function of.
+    /// A WAYPOINT must never read as a measured negative.
+    ///
+    /// The defect this pins: `Rung::label` renders `Network` as "port open, no
+    /// apiserver reached" — a negative finding — and the TCP-only `probe`
+    /// returns exactly that rung without ever asking about an apiserver. Read
+    /// through `label`, a healthy cluster whose port was merely reached is
+    /// reported as broken, which is what happened to a live single-node
+    /// cluster on 2026-08-28 while a sibling tool on the same server listed
+    /// its node.
+    #[test]
+    fn a_waypoint_does_not_claim_the_rungs_above_it() {
+        let waypoint = Standing::at(Rung::Network);
+        assert_eq!(waypoint.reach(), Reach::Waypoint);
+        assert_eq!(waypoint.meaning(), "port open, apiserver not probed");
+        assert!(
+            !waypoint.meaning().contains("no apiserver"),
+            "a waypoint must not assert a negative it never measured; got {:?}",
+            waypoint.meaning()
+        );
+
+        // The same rung reached as a CEILING keeps the negative, because there
+        // it was actually measured.
+        let ceiling = Standing::stopped(Rung::Network, "no apiserver answer: timed out");
+        assert_eq!(ceiling.reach(), Reach::Ceiling);
+        assert_eq!(ceiling.meaning(), "port open, no apiserver reached");
+
+        // Anti-vacuity: the two must differ, or `meaning` is a constant and
+        // proves nothing.
+        assert_ne!(waypoint.meaning(), ceiling.meaning());
+    }
+
+    /// An unmeasured standing defaults to claiming nothing.
+    #[test]
+    fn default_reach_is_waypoint_not_ceiling() {
+        assert_eq!(Reach::default(), Reach::Waypoint);
+        assert!(
+            !Standing::default().meaning().contains("no apiserver"),
+            "a default-constructed Standing has measured nothing and must not              report a negative finding"
+        );
+    }
+
     #[test]
     fn the_ladder_is_ordered_lowest_first() {
         let mut sorted = Rung::ALL;
