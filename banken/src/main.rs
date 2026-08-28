@@ -637,6 +637,11 @@ fn print_usage() {
     println!("  banken --context <name>       open :pods on that cluster directly");
     println!("  banken --fixture              explore the interface on canned rows");
     println!("  banken mcp --context <name>   serve the OBSERVE half to an agent over MCP");
+    println!(
+        "  banken mcp --sole-context-of <kubeconfig>\n\
+        \x20                              same, naming the file when the context\n\
+        \x20                              name is derived and cannot be written"
+    );
     println!("  banken --help");
     println!();
     println!("VIEWS:");
@@ -648,6 +653,14 @@ fn print_usage() {
     println!("                   KUBECONFIG routinely points at a different estate, and a");
     println!("                   pod table from the wrong cluster looks exactly like one");
     println!("                   from the right cluster. With no name, banken asks.");
+    println!("  --sole-context-of <kubeconfig>");
+    println!("                   serve the ONE context that file declares. For a cluster");
+    println!("                   whose name is DERIVED and so cannot be written into a");
+    println!("                   config — engenho names each node's cluster");
+    println!("                   engenho-<node>-<blake3-8>, and Nix has no blake3 — the");
+    println!("                   path is stable while the name inside it is not. Refuses a");
+    println!("                   file with zero or two-or-more contexts: naming a file");
+    println!("                   only names a cluster while there is exactly one.");
     println!("  --fixture        the canned source — invented rows, no cluster read.");
     println!("                   Explicit since it stopped being the default: a navigator");
     println!("                   whose first screen is fabricated data is not a navigator.");
