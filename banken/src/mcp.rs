@@ -64,17 +64,46 @@ use serde_json::{Value, json};
 /// the choice is a runtime argv decision. The trait is object-safe precisely
 /// because it has no generic methods — the same smallness that makes it
 /// auditable for the absence of a mutate arm.
-#[derive(Clone)]
-pub struct BankenMcp {
+/// Everything that is TRUE OF ONE CLUSTER, bundled so a switch moves it all at
+/// once.
+///
+/// The four fields here are not merely related, they are mutually consistent or
+/// they are wrong, and each pairing is already documented as an invariant
+/// elsewhere in this file:
+///
+/// - `env` + `permits`: "the SAME env answers reads and authorization
+///   questions, so `banken_can_i` can never disagree with `banken_list` about
+///   which identity is asking".
+/// - `cluster` + `glass`: the break-glass ledger is opened per-cluster
+///   (`GlassLedger::at(path, cluster)`), so a stale pairing serves one estate's
+///   break-glass history under another's name.
+/// - `cluster` + `env`: the stamp on every read.
+///
+/// Swapping them as ONE value is what makes those invariants survive a context
+/// switch. Four independently-assigned fields would let a switch land halfway.
+struct Served {
     env: Arc<dyn ClusterEnv + Send + Sync>,
     cluster: String,
+    permits: Option<Arc<dyn crate::permit::PermitEnv + Send + Sync>>,
+    glass: Option<crate::glass::GlassLedger>,
+}
+
+#[derive(Clone)]
+pub struct BankenMcp {
+    /// The cluster currently served, swappable at runtime.
+    ///
+    /// `Arc<RwLock<_>>` rather than plain fields because this struct is
+    /// `Clone` — rmcp clones it — and a switch has to be visible to every
+    /// clone. A switch that moved only one clone's view would be one server
+    /// answering from two estates at once, which is precisely the confusion
+    /// the cluster stamp exists to prevent.
+    served: Arc<std::sync::RwLock<Served>>,
     ronda: crate::ronda::Ronda,
     /// The per-verb authorization check, when the env can perform one.
     ///
     /// `Option` because the fixture has no apiserver to ask, and a fixture
     /// that answered "allowed" would be inventing an authorization result —
     /// the one kind of answer that must never be fabricated.
-    permits: Option<Arc<dyn crate::permit::PermitEnv + Send + Sync>>,
     /// The break-glass ledger, exposed READ-ONLY.
     ///
     /// Reading the audit trail is an OBSERVE, and a valuable one: "a human
@@ -83,8 +112,14 @@ pub struct BankenMcp {
     /// read. Exposing the *record* is the opposite of exposing the *action* —
     /// the agent learns that glass was broken and still has no way to break
     /// any.
-    glass: Option<crate::glass::GlassLedger>,
     tool_router: ToolRouter<Self>,
+}
+
+/// Which context to switch to.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UseContextInput {
+    /// A kubeconfig context name, as listed by `banken_readiness`.
+    pub context: String,
 }
 
 /// A successful read, rendered through [`kotae::Answer`].
@@ -94,6 +129,24 @@ pub struct BankenMcp {
 /// deduplication is the `outcome` discriminant: a reader can now tell a found
 /// answer from an empty one from a refusal by ONE field, instead of inferring
 /// it from which keys happen to be present.
+/// A refusal, for the one case that is neither found nor empty nor a cluster
+/// error: the served-cluster lock is poisoned, so banken does not know which
+/// estate it would be reading.
+///
+/// A `refused` outcome rather than an empty `found`: kotae exists so a reader
+/// can tell those apart in one field, and "I cannot safely say" is not "there
+/// is nothing there".
+fn refuse_poisoned() -> String {
+    kotae::Answer::refused_flatly(
+        "the served-cluster lock is poisoned — a context switch panicked \
+         mid-swap. banken will not read a cluster it cannot name; restart the \
+         server.",
+        // No alternatives: there is no other cluster to suggest, because the
+        // failure is precisely not knowing which one this is.
+    )
+    .render()
+}
+
 fn ok(v: &Value) -> String {
     kotae::Answer::found_value(v.clone()).render()
 }
@@ -104,8 +157,26 @@ fn ok(v: &Value) -> String {
 /// LOOK, which is not a denial and not an absence. That distinction was
 /// carried in prose before ("a refusal is never shaped like an empty list");
 /// it is now carried by the type, where a reader can act on it.
-fn fail(e: &banken_spec::error::SpecError) -> String {
-    kotae::Answer::blind(e.to_string()).render()
+fn fail(cluster: &str, e: &banken_spec::error::SpecError) -> String {
+    // ★ The cluster is named on the FAILURE path too, and this is where it
+    // matters most. "the read failed" without "against which cluster" is
+    // unplaceable once the served context can change under the caller — and
+    // this server's own tool description tells an agent to distinguish "the
+    // workload is missing" from "the cluster was unreachable". It cannot do
+    // that if the failure does not say where it happened.
+    //
+    // Found by driving the live server: after switching context, a failed
+    // `banken_logs` came back `outcome=blind` with no `cluster` field at all,
+    // while every SUCCESSFUL read was stamped. The stamp test only covered the
+    // Ok arms.
+    // TIER-HONEST: this is a PREFIX, not a field. `kotae::Answer::blind` takes
+    // only a string, so a `cluster` key on a blind answer is not expressible
+    // through today's kotae API — a JSON-parsing reader gets the name inside
+    // `because`, not beside it. Good enough to place a failure, weaker than
+    // the successful reads' stamp, and the load-bearing fix belongs in kotae
+    // (a target/context field on the non-found arms would serve every fleet
+    // MCP server, not just this one).
+    kotae::Answer::blind(format!("[{cluster}] {e}")).render()
 }
 
 /// The caller named something banken does not know, and here is what it does.
@@ -209,11 +280,13 @@ impl BankenMcp {
     ) -> Self {
         let cluster = cluster.into();
         Self {
-            env,
-            permits: None,
-            glass: crate::glass::GlassLedger::default_path()
-                .map(|p| crate::glass::GlassLedger::at(p, cluster.clone())),
-            cluster,
+            served: Arc::new(std::sync::RwLock::new(Served {
+                env,
+                glass: crate::glass::GlassLedger::default_path()
+                    .map(|p| crate::glass::GlassLedger::at(p, cluster.clone())),
+                cluster,
+                permits: None,
+            })),
             ronda,
             tool_router: Self::tool_router(),
         }
@@ -222,8 +295,10 @@ impl BankenMcp {
     /// Point the ledger reader at an explicit path (a test, or an operator
     /// with a non-default state dir).
     #[must_use]
-    pub fn with_glass_ledger(mut self, ledger: crate::glass::GlassLedger) -> Self {
-        self.glass = Some(ledger);
+    pub fn with_glass_ledger(self, ledger: crate::glass::GlassLedger) -> Self {
+        if let Ok(mut g) = self.served.write() {
+            g.glass = Some(ledger);
+        }
         self
     }
 
@@ -233,11 +308,10 @@ impl BankenMcp {
     /// question, and a source that invented one would be fabricating the
     /// single kind of answer an agent must never receive fabricated.
     #[must_use]
-    pub fn with_permits(
-        mut self,
-        permits: Arc<dyn crate::permit::PermitEnv + Send + Sync>,
-    ) -> Self {
-        self.permits = Some(permits);
+    pub fn with_permits(self, permits: Arc<dyn crate::permit::PermitEnv + Send + Sync>) -> Self {
+        if let Ok(mut g) = self.served.write() {
+            g.permits = Some(permits);
+        }
         self
     }
 
@@ -249,7 +323,106 @@ impl BankenMcp {
     /// that silently went stale after a switch would be worse than no stamp —
     /// it would be a confident wrong answer about which estate replied.
     fn cluster(&self) -> String {
-        self.cluster.clone()
+        self.served
+            .read()
+            .map(|g| g.cluster.clone())
+            // A poisoned lock means a previous switch panicked mid-swap. Naming
+            // that is far better than a plausible-looking cluster name: the one
+            // thing a stamp must never do is be confidently wrong.
+            .unwrap_or_else(|_| "<unknown: served-cluster lock poisoned>".into())
+    }
+
+    /// The env to read from, cloned out so no lock is held across an `.await`.
+    fn env(&self) -> Option<Arc<dyn ClusterEnv + Send + Sync>> {
+        self.served.read().ok().map(|g| Arc::clone(&g.env))
+    }
+
+    /// The authorization checker for the CURRENTLY served cluster.
+    fn permits(&self) -> Option<Arc<dyn crate::permit::PermitEnv + Send + Sync>> {
+        self.served.read().ok().and_then(|g| g.permits.clone())
+    }
+
+    /// The break-glass ledger for the CURRENTLY served cluster.
+    fn glass(&self) -> Option<crate::glass::GlassLedger> {
+        self.served.read().ok().and_then(|g| g.glass.clone())
+    }
+
+    #[tool(
+        description = "Switch which cluster this server reads, by kubeconfig context \
+                       name. Returns the context now served. Every subsequent read is \
+                       stamped with it, so a switch can never silently mislead: check \
+                       the `cluster` field of the next answer. Call `banken_readiness` \
+                       for the context names available. This is an OBSERVE-plane \
+                       operation — it changes what this server READS and nothing in \
+                       any cluster."
+    )]
+    pub async fn banken_use_context(&self, Parameters(p): Parameters<UseContextInput>) -> String {
+        let want = p.context.trim();
+        if want.is_empty() {
+            return kotae::Answer::refused_flatly(
+                "a context name is required. Refused rather than defaulted: falling \
+                 back to `current-context` would serve whichever estate the merged \
+                 KUBECONFIG points at, to a reader who cannot see the mistake.",
+            )
+            .render();
+        }
+        let previous = self.cluster();
+        if want == previous {
+            // Not an error, and not silence either: a caller that re-asserts the
+            // current context deserves to hear that nothing moved, or it cannot
+            // tell a no-op from a successful switch.
+            return ok(&json!({
+                "cluster": previous,
+                "switched": false,
+                "note": "already serving that context; nothing was reconnected",
+            }));
+        }
+
+        // Connect BEFORE taking the write lock, and hold no lock across the
+        // await. Two reasons, both load-bearing: a std RwLock guard is not
+        // Send, and — more importantly — a failed connect must leave the
+        // PREVIOUS cluster intact and readable. A switch that half-applied
+        // would leave the server stamping a cluster it cannot read.
+        // The plain connect, not `connect_with_context_staged`: staging exists to
+        // paint progress onto a SCREEN, and this server has none — it speaks
+        // JSON-RPC on stdio. The never-block-the-screen rule is a TUI concern;
+        // borrowing its machinery here would add a reporter nothing reads.
+        match crate::live::KubeClusterEnv::connect_with_context(want).await {
+            Ok(env) => {
+                let name = env.context_name().unwrap_or_else(|| want.to_string());
+                let shared = Arc::new(env);
+                let next = Served {
+                    env: shared.clone() as Arc<dyn ClusterEnv + Send + Sync>,
+                    glass: crate::glass::GlassLedger::default_path()
+                        .map(|pp| crate::glass::GlassLedger::at(pp, name.clone())),
+                    cluster: name.clone(),
+                    // Swapped WITH the env, never left behind: the invariant is
+                    // that one env answers both reads and authorization, so
+                    // `banken_can_i` cannot disagree with `banken_list` about
+                    // which identity is asking.
+                    permits: Some(shared as Arc<dyn crate::permit::PermitEnv + Send + Sync>),
+                };
+                match self.served.write() {
+                    Ok(mut g) => {
+                        *g = next;
+                        ok(&json!({
+                            "cluster": name,
+                            "switched": true,
+                            "previous": previous,
+                        }))
+                    }
+                    Err(_) => refuse_poisoned(),
+                }
+            }
+            // The previous cluster is still served, and saying so is the point:
+            // otherwise a caller cannot tell whether it is now reading the new
+            // cluster, the old one, or nothing.
+            Err(e) => kotae::Answer::refused_flatly(format!(
+                "could not connect to `{want}`: {e}. Still serving \
+                     `{previous}` — nothing was switched."
+            ))
+            .render(),
+        }
     }
 
     #[tool(
@@ -298,14 +471,17 @@ impl BankenMcp {
         let Some(kind) = kind_of(&p.kind) else {
             return refuse_unknown_kind(&p.kind);
         };
-        match self.env.list_resources(kind, p.namespace.as_deref()) {
+        let Some(env) = self.env() else {
+            return refuse_poisoned();
+        };
+        match env.list_resources(kind, p.namespace.as_deref()) {
             Ok(rows) => ok(&json!({
                 "cluster": self.cluster(),
                 "kind": kind.label(),
                 "count": rows.len(),
                 "rows": rows.iter().map(row_json).collect::<Vec<_>>(),
             })),
-            Err(e) => fail(&e),
+            Err(e) => fail(&self.cluster(), &e),
         }
     }
 
@@ -316,13 +492,16 @@ impl BankenMcp {
         let Some(kind) = kind_of(&p.kind) else {
             return refuse_unknown_kind(&p.kind);
         };
-        match self.env.get_resource(kind, &p.name, p.namespace.as_deref()) {
+        let Some(env) = self.env() else {
+            return refuse_poisoned();
+        };
+        match env.get_resource(kind, &p.name, p.namespace.as_deref()) {
             Ok(row) => ok(&json!({
                 "cluster": self.cluster(),
                 "kind": kind.label(),
                 "row": row_json(&row),
             })),
-            Err(e) => fail(&e),
+            Err(e) => fail(&self.cluster(), &e),
         }
     }
 
@@ -334,7 +513,10 @@ impl BankenMcp {
         // stream has no terminating read, and a tool call that never returns is
         // how an agent loop wedges — the TUI's pager can hold an open stream
         // because a human can press a key to leave it.
-        match self.env.logs(&p.pod, &p.namespace, false) {
+        let Some(env) = self.env() else {
+            return refuse_poisoned();
+        };
+        match env.logs(&p.pod, &p.namespace, false) {
             // ★ The stamp matters MOST here. Pod logs are the read an agent is
             // most likely to quote back, reason over, or paste into a report,
             // and log lines carry no intrinsic hint of which cluster produced
@@ -346,7 +528,7 @@ impl BankenMcp {
                 "lines": s.lines,
                 "follow": s.follow,
             })),
-            Err(e) => fail(&e),
+            Err(e) => fail(&self.cluster(), &e),
         }
     }
 
@@ -354,7 +536,10 @@ impl BankenMcp {
         description = "Cluster events — type, reason, involved object, message. Where the reason a pod will not start is usually written down, and the read that most often ends a triage."
     )]
     pub async fn banken_events(&self, Parameters(p): Parameters<EventsInput>) -> String {
-        match self.env.events(p.namespace.as_deref()) {
+        let Some(env) = self.env() else {
+            return refuse_poisoned();
+        };
+        match env.events(p.namespace.as_deref()) {
             Ok(evs) => ok(&json!({
                 "cluster": self.cluster(),
                 "count": evs.len(),
@@ -365,7 +550,7 @@ impl BankenMcp {
                     "message": e.message,
                 })).collect::<Vec<_>>(),
             })),
-            Err(e) => fail(&e),
+            Err(e) => fail(&self.cluster(), &e),
         }
     }
 
@@ -373,7 +558,7 @@ impl BankenMcp {
         description = "The break-glass ledger — every witnessed live action banken has performed, who authorised it, and whether it resolved. READ-ONLY, and often the missing half of a triage: 'a human exec'd into this pod twenty minutes ago' explains a state no other read can. An entry with no outcome is a session that crashed, was killed, or is still open."
     )]
     pub async fn banken_glass_ledger(&self, Parameters(_): Parameters<Empty>) -> String {
-        let Some(ledger) = self.glass.as_ref() else {
+        let Some(ledger) = self.glass() else {
             return ok(&json!({
                 "cluster": self.cluster(),
                 "error": "no break-glass ledger path could be resolved (no \
@@ -407,7 +592,7 @@ impl BankenMcp {
                 "note": "An entry with no `outcome` is UNRESOLVED — banken \
                          recorded the intent and never saw the session finish.",
             })),
-            Err(e) => fail(&e),
+            Err(e) => fail(&self.cluster(), &e),
         }
     }
 
@@ -422,7 +607,7 @@ impl BankenMcp {
         let Some(kind) = kind_of(&p.kind) else {
             return refuse_unknown_kind(&p.kind);
         };
-        let Some(permits) = self.permits.as_ref() else {
+        let Some(permits) = self.permits() else {
             return ok(&json!({
                 "error": "this server has no apiserver to ask (it is serving the \
                           fixture source). This is NOT a denial — it is banken \
@@ -452,7 +637,7 @@ impl BankenMcp {
                          quotas and network policy are separate gates. \
                          `unknown` is not a denial.",
             })),
-            Err(e) => fail(&e),
+            Err(e) => fail(&self.cluster(), &e),
         }
     }
 
@@ -570,6 +755,118 @@ mod tests {
             "fixture",
             crate::ronda::Ronda::inert(),
         )
+    }
+
+    /// A FAILED read names the cluster it failed against.
+    ///
+    /// The gap this closes was found by driving the live server, not by
+    /// reading: every successful read was stamped and every failure was not,
+    /// so `outcome=blind` came back with no `cluster` field. Once the served
+    /// context can change under the caller, an unplaced failure cannot be told
+    /// from a failure somewhere else — and this server's own description tells
+    /// an agent to distinguish "the workload is missing" from "the cluster was
+    /// unreachable".
+    #[tokio::test]
+    async fn a_failed_read_names_the_cluster_it_failed_against() {
+        let s = server();
+        let here = s.cluster();
+        // The fixture has no such pod, so this takes the failure path.
+        let body = s
+            .banken_logs(Parameters(LogsInput {
+                pod: "no-such-pod-anywhere".into(),
+                namespace: "default".into(),
+            }))
+            .await;
+        assert!(
+            body.contains(&here),
+            "a failed read must name the cluster it failed against, got:\n{body}"
+        );
+    }
+
+    /// Re-asserting the served context is a reported NO-OP, not silence.
+    ///
+    /// A caller that cannot tell "already there" from "switched" cannot tell a
+    /// working switch from a broken one either.
+    #[tokio::test]
+    async fn switching_to_the_current_context_reports_no_op() {
+        let s = server();
+        let here = s.cluster();
+        let body = s
+            .banken_use_context(Parameters(UseContextInput {
+                context: here.clone(),
+            }))
+            .await;
+        assert!(body.contains("\"switched\": false"), "{body}");
+        assert!(
+            body.contains(&here),
+            "the answer must name the cluster: {body}"
+        );
+    }
+
+    /// An empty context is REFUSED, never defaulted to `current-context`.
+    ///
+    /// Defaulting is the entire hazard: it would serve whichever estate the
+    /// merged KUBECONFIG points at, to a reader who cannot see the mistake.
+    #[tokio::test]
+    async fn switching_to_an_empty_context_is_refused() {
+        let s = server();
+        let before = s.cluster();
+        for bad in ["", "   "] {
+            let body = s
+                .banken_use_context(Parameters(UseContextInput {
+                    context: bad.into(),
+                }))
+                .await;
+            assert!(
+                body.contains("refused"),
+                "an empty context must be refused, got: {body}"
+            );
+        }
+        assert_eq!(
+            s.cluster(),
+            before,
+            "a refusal must not move the served cluster"
+        );
+    }
+
+    /// A FAILED switch leaves the previous cluster served AND readable.
+    ///
+    /// The half-applied switch is the dangerous failure: a server that stamped
+    /// the new name while still holding the old env would be confidently wrong
+    /// about which estate replied. The connect therefore happens before the
+    /// write lock is taken, and this proves the consequence.
+    #[tokio::test]
+    async fn a_failed_switch_keeps_serving_the_previous_cluster() {
+        let s = server();
+        let before = s.cluster();
+        let body = s
+            .banken_use_context(Parameters(UseContextInput {
+                context: "no-such-context-anywhere".into(),
+            }))
+            .await;
+        assert!(body.contains("refused"), "{body}");
+        assert!(
+            body.contains(&before),
+            "the refusal must say which cluster is STILL served, or the caller \
+             cannot tell what it is now reading: {body}"
+        );
+        assert_eq!(
+            s.cluster(),
+            before,
+            "a failed switch must not move the stamp"
+        );
+
+        // And the old cluster must still ANSWER, not merely be named.
+        let listed = s
+            .banken_list(Parameters(ListInput {
+                kind: "pod".into(),
+                namespace: None,
+            }))
+            .await;
+        assert!(
+            listed.contains(&before),
+            "reads must still work against the previous cluster: {listed}"
+        );
     }
 
     /// EVERY single-cluster read names the cluster it came from.
