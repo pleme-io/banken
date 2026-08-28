@@ -129,6 +129,28 @@ pub enum McpSource {
     /// `--fixture`: the canned source, for wiring an agent up without a
     /// cluster.
     Fixture,
+    /// `--sole-context-of <path>`: the ONE context declared in that
+    /// kubeconfig file.
+    ///
+    /// # Why this does not weaken the wrong-estate invariant
+    ///
+    /// [`Self::Live`] exists because riding `current-context` would serve
+    /// whichever estate a merged `KUBECONFIG` happens to point at. The danger
+    /// there is AMBIGUITY, not indirection — and a file holding exactly one
+    /// context has none: naming it identifies a single cluster as precisely as
+    /// spelling the name does. A file with zero or two or more contexts is
+    /// refused at startup, so the ambiguous case never resolves to a served
+    /// cluster.
+    ///
+    /// # Why it is needed
+    ///
+    /// A context name is not always writable in advance. engenho names each
+    /// node's cluster `engenho-<node>-<blake3-8>`, so the name is only known
+    /// on the node — a Nix module cannot compute it (`builtins.hashString`
+    /// has no blake3). The PATH is stable and per-node, the NAME inside is
+    /// derived, and this is the seam that lets a declarative MCP registration
+    /// name a cluster it cannot spell.
+    SoleContextOf(String),
 }
 
 /// Why an argv was refused.
@@ -168,6 +190,8 @@ pub enum CliError {
     /// stdout is the protocol, and its reader is an agent that would take the
     /// wrong estate's rows at face value.
     McpWithoutSource,
+    /// `--sole-context-of` with no path, or an empty one.
+    EmptySoleContextPath,
 }
 
 impl std::fmt::Display for CliError {
@@ -209,6 +233,12 @@ impl std::fmt::Display for CliError {
             CliError::EmptyContext => f.write_str(
                 "--context was given an empty name — an empty context IS the unknown-cluster \
                  value this flag exists to make impossible",
+            ),
+            CliError::EmptySoleContextPath => f.write_str(
+                "`--sole-context-of` needs a kubeconfig path. It is refused rather than \
+                 defaulting to the merged KUBECONFIG: serving whichever estate that \
+                 happens to point at, to a reader who cannot see the mistake, is the \
+                 bug this flag exists to avoid.",
             ),
             CliError::McpWithoutSource => f.write_str(
                 "`banken mcp` needs a source: `mcp --context <name>` for a cluster, or \
@@ -270,6 +300,7 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
     let mut want_live = false;
     let mut want_mcp = false;
     let mut context: Option<String> = None;
+    let mut sole_of: Option<String> = None;
     let mut strategy = crate::absorb::ListStrategy::default();
     let mut i = 0;
     while i < args.len() {
@@ -306,6 +337,24 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
                     .ok_or_else(|| CliError::UnknownListStrategy(value.to_owned()))?;
             }
             // A `:view` token — accepted, and currently routed to `:pods`.
+            // `--sole-context-of <path>`: takes the next argv as the file.
+            "--sole-context-of" => {
+                // Mirrors `--context`'s guard: a value that is itself a flag
+                // means the path was forgotten, and reading a file called
+                // "--foo" is not the failure the operator wants. An empty or
+                // missing path is refused rather than defaulted, because
+                // silently falling back to the merged KUBECONFIG is the
+                // wrong-estate bug this flag exists to avoid.
+                let value = args
+                    .get(i + 1)
+                    .ok_or(CliError::EmptySoleContextPath)?
+                    .as_str();
+                if value.is_empty() || value.starts_with('-') {
+                    return Err(CliError::EmptySoleContextPath);
+                }
+                sole_of = Some(value.to_string());
+                i += 1;
+            }
             _ if arg.starts_with(':') => {}
             _ if arg.starts_with('-') => return Err(CliError::UnknownFlag(arg.to_owned())),
             // The one meaningful positional: serve MCP instead of a screen.
@@ -316,7 +365,11 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
         i += 1;
     }
 
-    if want_fixture && (want_live || context.is_some()) {
+    // Naming more than one source is exactly as ambiguous for an agent as it
+    // is for a human, so every pair is the same refusal.
+    if (want_fixture && (want_live || context.is_some()))
+        || (sole_of.is_some() && (want_fixture || context.is_some()))
+    {
         return Err(CliError::ConflictingSources);
     }
     // Resolved BEFORE the screen-landing arms, because `mcp` decides what kind
@@ -324,6 +377,11 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
     // same `ConflictingSources` check above — naming two sources is exactly as
     // ambiguous for an agent as it is for a human.
     if want_mcp {
+        if let Some(path) = sole_of {
+            return Ok(Invocation::Mcp {
+                source: McpSource::SoleContextOf(path),
+            });
+        }
         return match context {
             Some(c) if c.is_empty() => Err(CliError::EmptyContext),
             Some(c) => Ok(Invocation::Mcp {
@@ -399,6 +457,60 @@ mod tests {
     /// MCP server has neither a screen to draw one on nor a human to answer
     /// it. Falling back to `current-context` would serve some other estate's
     /// rows to a reader with no way to notice.
+    /// `--sole-context-of` is REACHED, not shadowed by the unknown-flag guard.
+    ///
+    /// The regression this pins cost a live debugging round. The catch-all
+    /// `_ if arg.starts_with('-') => UnknownFlag` sits in the same match, and a
+    /// new flag arm placed after it is dead code — every invocation is refused
+    /// as an unknown flag. **rustc does not warn**: the catch-all carries a
+    /// guard, and a guarded arm cannot prove a later arm unreachable, so the
+    /// arm compiles clean and silently never runs. Any flag added here needs a
+    /// parse test for exactly this reason.
+    #[test]
+    fn sole_context_of_is_not_shadowed_by_the_unknown_flag_guard() {
+        assert_eq!(
+            parse(&["mcp", "--sole-context-of", "/tmp/kubeconfig"]),
+            Ok(Invocation::Mcp {
+                source: McpSource::SoleContextOf("/tmp/kubeconfig".into()),
+            }),
+            "the flag must be matched before the starts_with('-') catch-all"
+        );
+    }
+
+    /// A missing or flag-shaped path is refused, never defaulted.
+    ///
+    /// Defaulting would fall back to the merged `KUBECONFIG` and serve
+    /// whichever estate it points at — the wrong-estate bug the whole source
+    /// enum exists to prevent.
+    #[test]
+    fn sole_context_of_refuses_a_missing_or_flag_shaped_path() {
+        assert_eq!(
+            parse(&["mcp", "--sole-context-of"]),
+            Err(CliError::EmptySoleContextPath)
+        );
+        // Mirrors `--context`'s guard: the path was forgotten, and reading a
+        // file named "--fixture" is not the failure anyone wants.
+        assert_eq!(
+            parse(&["mcp", "--sole-context-of", "--fixture"]),
+            Err(CliError::EmptySoleContextPath)
+        );
+    }
+
+    /// Two sources is the same refusal for a file as for a name.
+    #[test]
+    fn sole_context_of_conflicts_with_every_other_source() {
+        for argv in [
+            vec!["mcp", "--sole-context-of", "/tmp/kc", "--context", "alpha-eks"],
+            vec!["mcp", "--sole-context-of", "/tmp/kc", "--fixture"],
+        ] {
+            assert_eq!(
+                parse(&argv),
+                Err(CliError::ConflictingSources),
+                "naming two sources must be refused: {argv:?}"
+            );
+        }
+    }
+
     #[test]
     fn mcp_refuses_to_guess_which_estate_it_serves() {
         assert_eq!(parse(&["mcp"]), Err(CliError::McpWithoutSource));

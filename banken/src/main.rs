@@ -537,6 +537,23 @@ async fn run_mcp(source: banken::cli::McpSource) -> Result<(), String> {
     let mut permits: Option<Arc<dyn banken::permit::PermitEnv + Send + Sync>> = None;
     let (env, cluster): (Arc<dyn ClusterEnv + Send + Sync>, String) = match source {
         McpSource::Fixture => (Arc::new(FixtureClusterEnv::new()), FIXTURE_CLUSTER.into()),
+        // Resolved to a NAME first, then handed to the same live path — so a
+        // sole-context source and an explicitly-named one cannot diverge in
+        // how they connect, authorize, or report.
+        McpSource::SoleContextOf(path) => {
+            let name = banken::live::sole_context_of(std::path::Path::new(&path))?;
+            let env = banken::live::KubeClusterEnv::connect_with_context(&name)
+                .await
+                .map_err(|e| {
+                    let mut m = String::from("live connect failed (VPN/kubeconfig?): ");
+                    m.push_str(&e.to_string());
+                    m
+                })?;
+            let resolved = env.context_name().unwrap_or(name);
+            let shared = Arc::new(env);
+            permits = Some(shared.clone() as Arc<dyn banken::permit::PermitEnv + Send + Sync>);
+            (shared, resolved)
+        }
         McpSource::Live(context) => {
             let env = banken::live::KubeClusterEnv::connect_with_context(&context)
                 .await

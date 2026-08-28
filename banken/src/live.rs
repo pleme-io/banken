@@ -291,6 +291,44 @@ type Declarations = Vec<(PathBuf, Vec<(String, Option<String>)>)>;
 ///
 /// [`ContextError::Unreadable`] when a file that EXISTS cannot be parsed. A
 /// file merely absent from disk is skipped, which is what client-go does.
+/// The ONE context declared in `path`, or a refusal naming what was found.
+///
+/// The resolver behind `banken mcp --sole-context-of <path>`. It refuses zero
+/// and refuses two-or-more, which is what keeps the wrong-estate invariant
+/// intact: a single-context file names a cluster unambiguously, and anything
+/// else is exactly the ambiguity the flag must not paper over.
+///
+/// # Errors
+///
+/// A string naming the file and the count, because both are what the operator
+/// needs to fix it.
+pub fn sole_context_of(path: &std::path::Path) -> Result<String, String> {
+    let kc = Kubeconfig::read_from(path).map_err(|e| {
+        let mut m = String::from("cannot read ");
+        m.push_str(&path.display().to_string());
+        m.push_str(": ");
+        m.push_str(&e.to_string());
+        m
+    })?;
+    let names: Vec<String> = kc.contexts.iter().map(|c| c.name.clone()).collect();
+    match names.len() {
+        1 => Ok(names.into_iter().next().unwrap_or_default()),
+        0 => Err(format!(
+            "{} declares no contexts. If this is a cluster that has never \
+             started, it has not published its kubeconfig yet — that is a \
+             finding, not a misconfiguration.",
+            path.display()
+        )),
+        n => Err(format!(
+            "{} declares {n} contexts ({}), so naming the FILE does not name a \
+             cluster. Pass `--context <name>` instead: an ambiguous source \
+             served to an agent is the wrong-estate bug this flag avoids.",
+            path.display(),
+            names.join(", ")
+        )),
+    }
+}
+
 fn read_unmerged() -> Result<Declarations, ContextError> {
     let mut out: Declarations = Vec::new();
     for file in kubeconfig_files() {
