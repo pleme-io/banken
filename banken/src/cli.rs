@@ -500,7 +500,13 @@ mod tests {
     #[test]
     fn sole_context_of_conflicts_with_every_other_source() {
         for argv in [
-            vec!["mcp", "--sole-context-of", "/tmp/kc", "--context", "alpha-eks"],
+            vec![
+                "mcp",
+                "--sole-context-of",
+                "/tmp/kc",
+                "--context",
+                "alpha-eks",
+            ],
             vec!["mcp", "--sole-context-of", "/tmp/kc", "--fixture"],
         ] {
             assert_eq!(
