@@ -11,14 +11,15 @@
 ;; silently never fires (SpecError::PathologyWithoutEvidence).
 ;;
 ;; Tier-honest scope: the autorevivy taxonomy is 35 classes (BANKEN.md §II,
-;; verified) and Tendril names more. THREE ship here. This file is the
-;; vocabulary and the first three instances of it — not the taxonomy.
+;; verified) and the agentic-observability doctrine names more. THREE ship
+;; here. This file is the vocabulary and the first three instances of it —
+;; not the taxonomy.
 ;; `pending-banken: pathology-taxonomy-backfill` (the remaining 32 need
 ;; autorevivy's detection stream deployed beyond alpha-shadow first, per
 ;; §V's ~15% live-data-reuse note; authoring rules whose evidence nothing
 ;; supplies would be a catalog of rules that can never fire).
 
-;; ── THE MARQUEE CASE (BANKEN.md §V / TENDRIL §II.9) ────────────────────
+;; ── THE MARQUEE CASE (BANKEN.md §V / agentic-observability §II.9) ──────
 ;;
 ;; `up==1` with the core metric series ABSENT is a BROKEN SCRAPE — fix the
 ;; scrape, not the workload. This rule is the DIAGNOSIS: it tells the

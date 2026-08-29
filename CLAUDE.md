@@ -397,7 +397,7 @@ thing, the chord namespace, and `Catalog::resolve` checks it.
 **bancada** (pt-BR: a workbench — tools already laid out, work starts the
 instant you sit down). Renamed from `guarita` 2026-07-31: that word was
 already double-claimed (`theory/NAMING.md:88`), and on Law 2 it belongs to
-the per-request credential check in `the host org-vpn`'s SHAAR design, whose
+the per-request credential check in a host organization's VPN design, whose
 "gatehouse sentry checking papers per visit" gloss teaches that job exactly.
 This domain took the *container* half of the metaphor and dropped the
 *checking-papers* half — and the checking here is `postigo`'s, not its own.

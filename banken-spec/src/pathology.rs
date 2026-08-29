@@ -3,9 +3,10 @@
 //!
 //! # What this domain is
 //!
-//! BANKEN.md §V's Popeye lane consumes a *taxonomy*: the Tendril
-//! symptom→cause rules (§II/§III) plus autorevivy's 35-class detection
-//! stream, rendered as a read-only linter whose every remedy routes through
+//! BANKEN.md §V's Popeye lane consumes a *taxonomy*: the fleet
+//! agentic-observability doctrine's symptom→cause rules (§II/§III) plus
+//! autorevivy's 35-class detection stream, rendered as a read-only linter
+//! whose every remedy routes through
 //! `postigo` DECLARE. That taxonomy was authored **prose** in the theory doc
 //! and **hardcoded nowhere** in banken — a rule was a sentence, not a value.
 //! `(defpathology …)` makes each rule a typed value: what was observed, what
@@ -13,16 +14,17 @@
 //! for it to fire, how badly it bites, and which rail fixes it.
 //!
 //! Third-use test: passed by a wide margin. autorevivy's `MaintenanceJob`
-//! taxonomy is 35 classes (BANKEN.md §II, verified), Tendril names more, and
-//! three ship authored here on day one.
+//! taxonomy is 35 classes (BANKEN.md §II, verified), the
+//! agentic-observability doctrine names more, and three ship authored here
+//! on day one.
 //!
 //! # The BROKEN-METRIC guard is STRUCTURAL, not a catalog row
 //!
 //! The marquee invariant — *no workload shows GREEN unless
-//! `up==1 && count(core_metric)>0`* (BANKEN.md §V / TENDRIL §II.9) — is **not**
-//! implemented as a pathology, deliberately. A rule in a catalog can be
-//! omitted, mis-authored, or filtered out by a ward's `:pathologies` list,
-//! and then the guard silently stops guarding. Instead
+//! `up==1 && count(core_metric)>0`* (BANKEN.md §V / agentic-observability
+//! §II.9) — is **not** implemented as a pathology, deliberately. A rule in a
+//! catalog can be omitted, mis-authored, or filtered out by a ward's
+//! `:pathologies` list, and then the guard silently stops guarding. Instead
 //! [`WardVerdict::evaluate`] applies it as an unconditional structural cap:
 //! **a would-be `Green` over an absent core metric becomes
 //! [`Verdict::Unknown`]**, whatever the catalog says. The
@@ -332,7 +334,7 @@ impl WardVerdict {
             folded = folded.worse_of(p.severity.verdict());
         }
 
-        // *** THE BROKEN-METRIC GUARD (BANKEN.md §V / TENDRIL §II.9). ***
+        // *** THE BROKEN-METRIC GUARD (BANKEN.md §V, agentic-observability §II.9). ***
         // Structural and catalog-independent: a would-be Green over an
         // absent core metric is Unknown. Deleting this line is what the
         // `a_dead_scrape_can_never_report_green` gate catches.
