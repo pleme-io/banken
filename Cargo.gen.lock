@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "e8697756f5e00fe7e4a6629a9b06e628623f711ccc683b1b029c991d5ac3e3a3",
+  "cargo_lock_sha256": "b0f15de21a54219abf5669f8b66a0b417ae3ceb8b51b20169d46f72f7fa36e56",
   "manifest_sha256": {
     "Cargo.toml": "09ef405b8775dc2de8000537cae45f82b70ffbccd2a80b1161111fef77c43d6a",
     "banken-config/Cargo.toml": "ad2de374a20edfaf584decc7ef42646b90e39a09fedbba54f24fd5aff8d2c4df",
@@ -579,7 +579,7 @@
           },
           {
             "name": "ishou_tokens",
-            "package_key": "ishou-tokens-0.1.4",
+            "package_key": "ishou-tokens-0.1.14",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -769,7 +769,7 @@
         "runtime_dependencies": [
           {
             "name": "ishou_tokens",
-            "package_key": "ishou-tokens-0.1.4",
+            "package_key": "ishou-tokens-0.1.14",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -4527,7 +4527,7 @@
           "default"
         ]
       },
-      "ishou-tokens-0.1.4": {
+      "ishou-tokens-0.1.14": {
         "runtime_dependencies": [
           {
             "name": "irodori",
@@ -9128,7 +9128,7 @@
           },
           {
             "name": "ishou_tokens",
-            "package_key": "ishou-tokens-0.1.4",
+            "package_key": "ishou-tokens-0.1.14",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -9260,7 +9260,7 @@
           },
           {
             "name": "ishou_tokens",
-            "package_key": "ishou-tokens-0.1.4",
+            "package_key": "ishou-tokens-0.1.14",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -15317,7 +15317,7 @@
     "is_terminal_polyfill-1.70.2": {
       "edition": "2021"
     },
-    "ishou-tokens-0.1.4": {
+    "ishou-tokens-0.1.14": {
       "edition": "2024"
     },
     "itoa-1.0.18": {

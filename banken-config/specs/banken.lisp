@@ -45,11 +45,21 @@
   ;; `prescribed_mirrors_the_authored_lisp` test makes a fleet re-theme a
   ;; LOUD failure here instead of silent drift.
   ;;
-  ;; Measured 2026-07-29: the PUBLISHED ishou-tokens 0.1.4 (what banken
-  ;; actually compiles against) prescribes `vellum`, while the ishou
-  ;; working copy has `PlemeDark` unpublished at the SAME version number.
-  ;; This file names what the CONSUMED artifact prescribes.
-  :theme "vellum"
+  ;; ★ CORRECTED 2026-08-30. This said `vellum`, under a note that was
+  ;; honest when written and then went stale, in the way a dated measurement
+  ;; does: "Measured 2026-07-29: the PUBLISHED ishou-tokens 0.1.4 prescribes
+  ;; `vellum`, while the ishou working copy has `PlemeDark` unpublished at
+  ;; the SAME version number."
+  ;;
+  ;; banken stayed pinned at 0.1.4 while the fleet moved to 0.1.14, so the
+  ;; operator's banken rendered Vellum while every other fleet surface
+  ;; rendered Nord dark. Ten releases of drift, visible ON SCREEN, reported
+  ;; by nothing — the lockfile was the only place it was written down.
+  ;;
+  ;; The lock now resolves 0.1.14, whose prescribed theme is `pleme_dark`
+  ;; (ishou 395c331). This file still names what the CONSUMED artifact
+  ;; prescribes; the consumed artifact moved.
+  :theme "pleme_dark"
   ;; The log-pager cap, in lines. 0 ⇒ unbounded. DERIVED from
   ;; FleetDefaults::scrollback_lines — the fleet 10k floor.
   :scrollback-lines 10000
