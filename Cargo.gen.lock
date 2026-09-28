@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "683043d18cb1c6f205d29da3b0c54ca515badcee1ef4771d2ee5bfcd51e0cee3",
+  "cargo_lock_sha256": "744de4ac1ec4ee98516df5dae93cb06700a85d451aa7cf72f7a8b9f5dd22c52a",
   "manifest_sha256": {
     "Cargo.toml": "1c1a7cd391c78108b024c4f7761c35045b62283da52c34cd9938f7719d534605",
     "banken-config/Cargo.toml": "ad2de374a20edfaf584decc7ef42646b90e39a09fedbba54f24fd5aff8d2c4df",
     "banken-spec/Cargo.toml": "2e3390f4a2ef74b5c85792f176bc679e7e340f96600c6901afceb1063bd8798c",
-    "banken/Cargo.toml": "1866036b3e589f4fd168f0526732539d14c9e7acd863e2c3e13b27e8c93d5ad5"
+    "banken/Cargo.toml": "fafdcadcfae2c5e31b46b74387145070ba09c99dbfd4e5a267caddb991a87f07"
   },
   "target_resolves": {
     "base": {
@@ -537,7 +537,7 @@
           },
           {
             "name": "egaku",
-            "package_key": "egaku-0.1.12",
+            "package_key": "egaku-0.1.20",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -547,7 +547,7 @@
           },
           {
             "name": "egaku_term",
-            "package_key": "egaku-term-0.3.11",
+            "package_key": "egaku-term-0.3.19",
             "kind": "normal",
             "features": [
               "tokio"
@@ -579,7 +579,7 @@
           },
           {
             "name": "ishou_tokens",
-            "package_key": "ishou-tokens-0.1.14",
+            "package_key": "ishou-tokens-0.1.18",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -769,7 +769,7 @@
         "runtime_dependencies": [
           {
             "name": "ishou_tokens",
-            "package_key": "ishou-tokens-0.1.14",
+            "package_key": "ishou-tokens-0.1.18",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -857,7 +857,7 @@
           },
           {
             "name": "egaku",
-            "package_key": "egaku-0.1.12",
+            "package_key": "egaku-0.1.20",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1765,11 +1765,21 @@
           "PartialEq"
         ]
       },
-      "egaku-0.1.12": {
+      "egaku-0.1.20": {
         "runtime_dependencies": [
           {
             "name": "awase",
             "package_key": "awase-0.1.6",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "ishou_tokens",
+            "package_key": "ishou-tokens-0.1.18",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1784,6 +1794,16 @@
             "features": [
               "derive"
             ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "shibori",
+            "package_key": "shibori-0.1.1",
+            "kind": "normal",
+            "features": [],
             "uses_default_features": true,
             "optional": false,
             "target": null,
@@ -1810,6 +1830,16 @@
             "tree": "target"
           },
           {
+            "name": "unicode_linebreak",
+            "package_key": "unicode-linebreak-0.1.5",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
             "name": "unicode_segmentation",
             "package_key": "unicode-segmentation-1.13.3",
             "kind": "normal",
@@ -1828,12 +1858,22 @@
             "optional": false,
             "target": null,
             "tree": "target"
+          },
+          {
+            "name": "zeroize",
+            "package_key": "zeroize-1.9.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
           }
         ],
         "build_dependencies": [],
         "features": []
       },
-      "egaku-term-0.3.11": {
+      "egaku-term-0.3.19": {
         "runtime_dependencies": [
           {
             "name": "awase",
@@ -1857,7 +1897,7 @@
           },
           {
             "name": "egaku",
-            "package_key": "egaku-0.1.12",
+            "package_key": "egaku-0.1.20",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1874,6 +1914,16 @@
             ],
             "uses_default_features": false,
             "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "ishou_tokens",
+            "package_key": "ishou-tokens-0.1.18",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
             "target": null,
             "tree": "target"
           },
@@ -4527,7 +4577,7 @@
           "default"
         ]
       },
-      "ishou-tokens-0.1.14": {
+      "ishou-tokens-0.1.18": {
         "runtime_dependencies": [
           {
             "name": "irodori",
@@ -8388,6 +8438,11 @@
           "std"
         ]
       },
+      "shibori-0.1.1": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
       "shikumi-0.1.345": {
         "runtime_dependencies": [
           {
@@ -9128,7 +9183,7 @@
           },
           {
             "name": "ishou_tokens",
-            "package_key": "ishou-tokens-0.1.14",
+            "package_key": "ishou-tokens-0.1.18",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -9260,7 +9315,7 @@
           },
           {
             "name": "ishou_tokens",
-            "package_key": "ishou-tokens-0.1.14",
+            "package_key": "ishou-tokens-0.1.18",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -10390,6 +10445,11 @@
         ]
       },
       "unicode-ident-1.0.24": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
+      "unicode-linebreak-0.1.5": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
@@ -15097,10 +15157,10 @@
       "edition": "2021",
       "proc_macro": true
     },
-    "egaku-0.1.12": {
+    "egaku-0.1.20": {
       "edition": "2024"
     },
-    "egaku-term-0.3.11": {
+    "egaku-term-0.3.19": {
       "edition": "2024"
     },
     "either-1.16.0": {
@@ -15317,7 +15377,7 @@
     "is_terminal_polyfill-1.70.2": {
       "edition": "2021"
     },
-    "ishou-tokens-0.1.14": {
+    "ishou-tokens-0.1.18": {
       "edition": "2024"
     },
     "itoa-1.0.18": {
@@ -15664,6 +15724,9 @@
     "sha1-0.10.7": {
       "edition": "2018"
     },
+    "shibori-0.1.1": {
+      "edition": "2024"
+    },
     "shikumi-0.1.345": {
       "edition": "2024"
     },
@@ -15824,6 +15887,9 @@
       "build_script": "build.rs"
     },
     "unicode-ident-1.0.24": {
+      "edition": "2021"
+    },
+    "unicode-linebreak-0.1.5": {
       "edition": "2021"
     },
     "unicode-segmentation-1.13.3": {

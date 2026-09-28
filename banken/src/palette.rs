@@ -34,15 +34,17 @@
 //!
 //! # The fallback is the old ramp, not black
 //!
-//! If a theme ever hands back a hex this cannot parse, [`Palette::for_theme`]
-//! falls back to the previously-shipped anchors. Deliberately not to a default
+//! The hex parsing itself is egaku-term's (`Palette::from_fleet`), which
+//! floors an unparseable slot at egaku's own value. If the projection ever
+//! hands back a non-RGB colour, [`Palette::for_theme`] falls back to the
+//! previously-shipped anchors. Deliberately not to a default
 //! colour: a `(0, 0, 0)` fallback is the black-cell failure `ronda::ramp`
 //! already had once (NaN through `f32::clamp`), and a ramp that silently goes
 //! black reads as a rendering fault rather than as a theme problem.
 
 use std::sync::OnceLock;
 
-use ishou_tokens::{FleetTheme, ResolvedTheme};
+use ishou_tokens::FleetTheme;
 
 /// The previously-shipped anchors, kept as the parse-failure floor.
 ///
@@ -67,16 +69,16 @@ impl Palette {
     /// Resolve the palette for one fleet theme.
     #[must_use]
     pub fn for_theme(theme: FleetTheme) -> Self {
-        let r: ResolvedTheme = theme.resolve();
-        // ANSI slot order is xterm's, so 1/3/2 are red/yellow/green and the
-        // bright variants are 9/11/10. The theme authors those slots for every
-        // fleet theme, which is what makes this a projection of the token set
-        // rather than a second palette living here.
+        // The fleet-theme -> terminal-colour projection is egaku-term's
+        // (`Palette::from_fleet`: xterm slots 1/3/2 for error/warning/success),
+        // shared with every other TTY surface. banken only narrows it to the
+        // RGB triples its ramp interpolates.
+        let term = egaku_term::theme::Palette::from_fleet(theme);
         Self {
-            error: hex_rgb(r.ansi_16.get(1).map(String::as_str)).unwrap_or(FLOOR.0),
-            warning: hex_rgb(r.ansi_16.get(3).map(String::as_str)).unwrap_or(FLOOR.1),
-            success: hex_rgb(r.ansi_16.get(2).map(String::as_str)).unwrap_or(FLOOR.2),
-            theme_name: r.name,
+            error: rgb(term.error).unwrap_or(FLOOR.0),
+            warning: rgb(term.warning).unwrap_or(FLOOR.1),
+            success: rgb(term.success).unwrap_or(FLOOR.2),
+            theme_name: theme.resolve().name,
         }
     }
 
@@ -139,21 +141,12 @@ impl Default for Palette {
     }
 }
 
-/// Parse `#RRGGBB` (or `RRGGBB`) into a triple.
-///
-/// `None` on anything else, and the caller falls back to [`FLOOR`] — never to
-/// a default colour. A silently-black ramp reads as a rendering fault, which
-/// sends the reader to the wrong place entirely.
-fn hex_rgb(hex: Option<&str>) -> Option<Rgb> {
-    let h = hex?.trim().trim_start_matches('#');
-    if h.len() != 6 {
-        return None;
+/// The 24-bit triple of a terminal colour; `None` for a named or indexed slot.
+fn rgb(c: egaku_term::crossterm::style::Color) -> Option<Rgb> {
+    match c {
+        egaku_term::crossterm::style::Color::Rgb { r, g, b } => Some((r, g, b)),
+        _ => None,
     }
-    Some((
-        u8::from_str_radix(&h[0..2], 16).ok()?,
-        u8::from_str_radix(&h[2..4], 16).ok()?,
-        u8::from_str_radix(&h[4..6], 16).ok()?,
-    ))
 }
 
 #[cfg(test)]
@@ -217,17 +210,6 @@ mod tests {
             assert!(er > eg, "{theme:?}: the bottom must be red-dominant");
             assert!(sg > sr, "{theme:?}: the top must be green-dominant");
         }
-    }
-
-    #[test]
-    fn hex_parsing_is_total_and_refuses_rather_than_guessing() {
-        assert_eq!(hex_rgb(Some("#C64048")), Some((198, 64, 72)));
-        assert_eq!(hex_rgb(Some("C64048")), Some((198, 64, 72)));
-        assert_eq!(hex_rgb(Some("  #C64048 ")), Some((198, 64, 72)));
-        for bad in ["", "#", "#FFF", "#GGGGGG", "#C6404", "#C640488", "red"] {
-            assert_eq!(hex_rgb(Some(bad)), None, "must refuse `{bad}`");
-        }
-        assert_eq!(hex_rgb(None), None);
     }
 
     /// The stops are ordered and span the whole ramp — `ronda::ramp` walks them

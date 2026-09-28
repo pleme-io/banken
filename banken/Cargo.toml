@@ -46,7 +46,7 @@ egaku = "0.1"
 # conflict in `bump` (fixed in pleme-io/actions 6907a60) masking a git
 # dependency that made the crate structurally unreleasable (fixed in
 # egaku-term d61fafa). 0.3.6 is published and carries `AsyncApp::wake`.
-egaku-term = { version = "0.3", features = ["tokio"] }
+egaku-term = { version = "0.3.19", features = ["tokio"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 # izumi (泉) — the fleet's live-source absorb plane. banken uses ONE piece of
 # it: `refresh::{LiveStore, spawn_interval_refresh}`, the reusable
