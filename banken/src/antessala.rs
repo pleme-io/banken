@@ -452,9 +452,13 @@ impl ConnectingScreen {
 /// Braille, because it is the one animated-glyph set that is a single cell
 /// wide in every terminal font the fleet runs and does not shift the row's
 /// layout as it turns.
+/// The frame set is egaku-term's shared [`Spinner::Braille`]; this screen
+/// advances it per redraw rather than by wall clock.
+///
+/// [`Spinner::Braille`]: egaku_term::anim::Spinner::Braille
 fn spinner_frame(frame: usize) -> &'static str {
-    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    FRAMES[frame % FRAMES.len()]
+    let frames = egaku_term::anim::Spinner::Braille.frames();
+    frames[frame % frames.len()]
 }
 
 /// Pad a label out to a column so the details line up.
