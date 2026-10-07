@@ -60,6 +60,41 @@ use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::runtime::{WatchStreamExt, watcher};
 use kube::{Api, Client, Config};
 
+/// A [`Config`] for `context`, built from the ONE kubeconfig file that
+/// declares it.
+///
+/// # Why not `Config::from_kubeconfig`
+///
+/// That re-reads the whole `KUBECONFIG` merge list, and the list is not a set
+/// of files that must all exist: client-go SKIPS an absent entry, and a
+/// fixed-slot `KUBECONFIG` (one slot per possible kubeconfig, a slot filled
+/// only when one is enrolled) therefore names absent paths as its normal
+/// shape. kube-rs instead fails the whole read. Measured 2026-10-07 on a
+/// workstation whose slot 05 was unenrolled: every live connect failed with
+/// "failed to read kubeconfig from '…/.kube/order/05'" while `kubectl
+/// --context` against the same cluster worked, so the MCP server was dead and
+/// the kubeconfig it names was fine.
+///
+/// It also re-MERGES, which silently drops a duplicate context name — the
+/// exact ambiguity [`resolve_context`] refuses one line earlier. Reading the
+/// resolved file keeps that verdict instead of discarding it.
+///
+/// # Errors
+///
+/// The resolution's own refusal (ambiguous, not found, unreadable), or a
+/// kube-rs error from the one file, each as a message naming the file.
+async fn config_for_resolved(
+    context: &str,
+    file: &std::path::Path,
+) -> Result<Config, kube::config::KubeconfigError> {
+    let kubeconfig = Kubeconfig::read_from(file)?;
+    let options = KubeConfigOptions {
+        context: Some(context.to_owned()),
+        ..Default::default()
+    };
+    Config::from_custom_kubeconfig(kubeconfig, &options).await
+}
+
 /// The kubeconfig's `current-context`, when it can be read.
 ///
 /// Exposed so a caller can *name the hazard* in a refusal: the merged
@@ -563,11 +598,7 @@ impl KubeClusterEnv {
             message: e.to_string(),
         })?;
         reporter.reached(Stage::Configuration);
-        let options = KubeConfigOptions {
-            context: Some(context.to_owned()),
-            ..Default::default()
-        };
-        let config = Config::from_kubeconfig(&options)
+        let config = config_for_resolved(context, &resolved.file)
             .await
             .map_err(|e| SpecError::Interp {
                 phase: "connect".into(),
@@ -631,11 +662,13 @@ impl KubeClusterEnv {
         use crate::ronda::{Rung, Standing};
 
         ensure_crypto_provider();
-        let options = KubeConfigOptions {
-            context: Some(context.to_owned()),
-            ..Default::default()
+        let resolved = match resolve_context(context) {
+            Ok(r) => r,
+            Err(e) => {
+                return Standing::stopped(Rung::Network, e.to_string());
+            }
         };
-        let config = match Config::from_kubeconfig(&options).await {
+        let config = match config_for_resolved(context, &resolved.file).await {
             Ok(c) => c,
             Err(e) => {
                 return Standing::stopped(Rung::Network, Self::error_chain(&e));
