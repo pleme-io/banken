@@ -518,27 +518,18 @@ impl BankenMcp {
         let Some(env) = self.env() else {
             return refuse_poisoned();
         };
-        match env
-            .logs(&p.pod, &p.namespace, false)
-            .map(|s| s.keep_newest_within(LOG_ANSWER_BYTES))
-        {
+        match env.logs(&p.pod, &p.namespace, false) {
             // ★ The stamp matters MOST here. Pod logs are the read an agent is
             // most likely to quote back, reason over, or paste into a report,
             // and log lines carry no intrinsic hint of which cluster produced
             // them. Unstamped, a context switch makes them unplaceable.
-            Ok(s) => ok(&json!({
-                "cluster": self.cluster(),
-                "pod": s.pod,
-                "lineCount": s.lines.len(),
-                "truncated": !s.bounds.is_empty(),
-                "bounds": s.bounds.iter().map(|b| json!({
-                    "bound": b.token(),
-                    "limit": b.limit(),
-                    "meaning": b.meaning(),
-                })).collect::<Vec<_>>(),
-                "lines": s.lines,
-                "follow": s.follow,
-            })),
+            Ok(s) => {
+                let cluster = self.cluster();
+                let s = s.keep_newest_fitting(LOG_ANSWER_BYTES, |c| {
+                    logs_answer(&cluster, c).len() <= LOG_ANSWER_BYTES
+                });
+                logs_answer(&cluster, &s)
+            }
             Err(e) => fail(&self.cluster(), &e),
         }
     }
@@ -701,6 +692,22 @@ impl BankenMcp {
     }
 }
 
+fn logs_answer(cluster: &str, s: &banken_spec::env::LogStream) -> String {
+    ok(&json!({
+        "cluster": cluster,
+        "pod": s.pod,
+        "lineCount": s.lines.len(),
+        "truncated": !s.bounds.is_empty(),
+        "bounds": s.bounds.iter().map(|b| json!({
+            "bound": b.token(),
+            "limit": b.limit(),
+            "meaning": b.meaning(),
+        })).collect::<Vec<_>>(),
+        "lines": s.lines,
+        "follow": s.follow,
+    }))
+}
+
 fn row_json(r: &banken_spec::env::Row) -> Value {
     let mut cells = serde_json::Map::new();
     for (k, v) in &r.cells {
@@ -803,7 +810,7 @@ mod tests {
                 lines: (0..509)
                     .map(|i| {
                         let mut l = format!("line {i:04} ");
-                        l.push_str(&"x".repeat(136));
+                        l.push_str(&"{\"k\":\"v\"}".repeat(13));
                         l
                     })
                     .collect(),
@@ -863,7 +870,7 @@ mod tests {
         }))
         .await;
         assert!(
-            s.len() <= 40 * 1024,
+            s.len() <= LOG_ANSWER_BYTES,
             "a logs answer must fit an MCP result budget; it was {} bytes",
             s.len()
         );

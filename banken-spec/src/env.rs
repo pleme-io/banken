@@ -352,40 +352,57 @@ impl LogStream {
         }
     }
 
-    /// Keep the newest lines whose bytes, newlines included, fit `budget`.
+    /// Keep the newest lines for which `fits` holds, recording an `AnswerBytes { limit, .. }` bound.
     ///
-    /// A newest line that alone exceeds the budget is cut to it rather than dropped.
+    /// `fits` judges the whole candidate, bound included, so the caller measures the answer it will
+    /// actually send. A newest line that alone does not fit is cut rather than dropped.
     #[must_use]
-    pub fn keep_newest_within(mut self, budget: usize) -> Self {
-        let mut used = 0;
-        let mut kept = 0;
-        for line in self.lines.iter().rev() {
-            let cost = line.len() + 1;
-            if used + cost > budget {
-                break;
-            }
-            used += cost;
-            kept += 1;
-        }
-        if kept == self.lines.len() {
+    pub fn keep_newest_fitting(self, limit: usize, fits: impl Fn(&Self) -> bool) -> Self {
+        if fits(&self) {
             return self;
         }
-        let cut_newest = kept == 0;
-        let dropped_lines = self.lines.len() - kept.max(1);
-        self.lines.drain(..dropped_lines);
-        if cut_newest && let Some(line) = self.lines.last_mut() {
-            let mut end = budget.saturating_sub(1).min(line.len());
-            while !line.is_char_boundary(end) {
-                end -= 1;
+        let total = self.lines.len();
+        let candidate = |kept: usize, cut: Option<usize>| {
+            let mut c = self.clone();
+            c.lines.drain(..total - kept);
+            if let (Some(end), Some(line)) = (cut, c.lines.last_mut()) {
+                line.truncate(end);
             }
-            line.truncate(end);
+            c.bounds.push(LogBound::AnswerBytes {
+                limit,
+                dropped_lines: total - kept,
+                cut_newest: cut.is_some(),
+            });
+            c
+        };
+        let (mut lo, mut hi) = (0, total.saturating_sub(1));
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if fits(&candidate(mid, None)) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
         }
-        self.bounds.push(LogBound::AnswerBytes {
-            limit: budget,
-            dropped_lines,
-            cut_newest,
-        });
-        self
+        if lo > 0 || total == 0 {
+            return candidate(lo, None);
+        }
+        let newest = &self.lines[total - 1];
+        let ends: Vec<usize> = newest
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(newest.len()))
+            .collect();
+        let (mut lo, mut hi) = (0, ends.len() - 1);
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if fits(&candidate(1, Some(ends[mid]))) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        candidate(1, Some(ends[lo]))
     }
 }
 
@@ -980,7 +997,6 @@ mod log_bound_tests {
         let s = LogStream::bounded_tail("p", &text(3, 10), 500, 1024 * 1024);
         assert_eq!(s.lines.len(), 3);
         assert!(s.bounds.is_empty());
-        assert_eq!(s.clone().keep_newest_within(1024), s);
     }
 
     #[test]
@@ -999,13 +1015,16 @@ mod log_bound_tests {
         assert!(s.bounds[0].meaning().contains("newest lines"));
     }
 
+    fn within(budget: usize) -> impl Fn(&LogStream) -> bool {
+        move |s| s.lines.iter().map(|l| l.len() + 1).sum::<usize>() <= budget
+    }
+
     #[test]
     fn the_answer_budget_keeps_the_newest_lines() {
         let s = LogStream::bounded_tail("p", &text(100, 96), 500, 1024 * 1024)
-            .keep_newest_within(1010);
+            .keep_newest_fitting(1010, within(1010));
         assert_eq!(s.lines.len(), 10);
         assert!(s.lines.last().is_some_and(|l| l.starts_with("0099")));
-        assert!(s.lines.iter().map(|l| l.len() + 1).sum::<usize>() <= 1010);
         assert_eq!(
             s.bounds,
             vec![LogBound::AnswerBytes {
@@ -1017,11 +1036,17 @@ mod log_bound_tests {
     }
 
     #[test]
+    fn a_stream_that_fits_is_returned_whole() {
+        let s = LogStream::bounded_tail("p", &text(3, 10), 500, 1024 * 1024);
+        assert_eq!(s.clone().keep_newest_fitting(1024, within(1024)), s);
+    }
+
+    #[test]
     fn a_single_line_over_budget_is_cut_not_lost() {
         let s = LogStream::bounded_tail("p", &"é".repeat(600), 500, 1024 * 1024)
-            .keep_newest_within(101);
+            .keep_newest_fitting(101, within(101));
         assert_eq!(s.lines.len(), 1);
-        assert!(s.lines[0].len() <= 100);
+        assert_eq!(s.lines[0].len(), 100);
         assert_eq!(
             s.bounds,
             vec![LogBound::AnswerBytes {
