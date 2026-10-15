@@ -110,6 +110,7 @@ impl ClusterEnv for MockClusterEnv {
             pod: pod.to_string(),
             lines: vec!["<canned log line>".to_string()],
             follow,
+            bounds: Vec::new(),
         })
     }
 

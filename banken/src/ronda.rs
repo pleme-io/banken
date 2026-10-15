@@ -218,6 +218,18 @@ impl Rung {
         }
     }
 
+    #[must_use]
+    pub fn climbing_label(self) -> &'static str {
+        match self {
+            Self::Unknown => "not probed",
+            Self::Down => "nothing answered",
+            Self::Network => "port open, apiserver climb in flight",
+            Self::Serving => "apiserver answered, identity climb in flight",
+            Self::Identity => "identity accepted, pod access climb in flight",
+            Self::Pods => "may list pods",
+        }
+    }
+
     /// The stable machine name for this rung.
     ///
     /// # Why this is not [`Self::label`]
@@ -296,9 +308,9 @@ pub struct Standing {
 
 /// Did the climb stop at a rung, or merely reach it?
 ///
-/// A closed two-arm enum rather than a `bool`, so a call site reads
-/// `Reach::Waypoint` instead of `true` and a third case (if one is ever
-/// measured) is an added arm rather than a second flag.
+/// A closed enum rather than a `bool`, so a call site reads
+/// `Reach::Waypoint` instead of `true` and a third case is an added arm
+/// rather than a second flag — which is how `Climbing` arrived.
 /// `Default` is `Waypoint`, deliberately. A default-constructed `Standing` has
 /// measured nothing, and `Ceiling` asserts a negative finding — defaulting to
 /// it would make every un-probed context claim its apiserver was unreachable,
@@ -312,6 +324,7 @@ pub enum Reach {
     /// about the rungs above — absence of measurement, not measured absence.
     #[default]
     Waypoint,
+    Climbing,
 }
 
 impl Standing {
@@ -345,7 +358,22 @@ impl Standing {
         match self.reach {
             Reach::Ceiling => self.rung.label(),
             Reach::Waypoint => self.rung.reached_label(),
+            Reach::Climbing => self.rung.climbing_label(),
         }
+    }
+
+    #[must_use]
+    pub fn climbing(rung: Rung) -> Self {
+        Self {
+            rung,
+            note: String::new(),
+            reach: Reach::Climbing,
+        }
+    }
+
+    #[must_use]
+    pub fn is_settled(&self) -> bool {
+        self.rung.is_settled() && self.reach != Reach::Climbing
     }
 
     /// A standing at `rung`, with the reason it stopped there.
@@ -489,7 +517,7 @@ impl Ronda {
     #[must_use]
     pub fn all_settled(&self) -> bool {
         let f = self.findings.load();
-        !f.is_empty() && f.values().all(|s| s.rung.is_settled())
+        !f.is_empty() && f.values().all(Standing::is_settled)
     }
 
     /// How many contexts a round is covering (for a test and for a legend).
@@ -602,7 +630,8 @@ impl RondaPublisher {
     /// stale `Pods` would be the one lie this whole plane exists to avoid.
     pub fn report_floor(&self, context: &str, standing: Standing) {
         let existing = self.current(context);
-        if standing.rung != Rung::Down && existing.rung > standing.rung {
+        let measured_here = existing.rung == standing.rung && existing.reach == Reach::Ceiling;
+        if standing.rung != Rung::Down && (existing.rung > standing.rung || measured_here) {
             return;
         }
         self.report(context, standing);
@@ -823,6 +852,7 @@ pub fn spawn_rounds_at(
         // often; the expensive half runs rarely, and only where the cheap half
         // already proved packets move.
         let mut since_deep = cadence.climb; // …so the first pass climbs.
+        let climbs = climb.is_some();
         loop {
             let mut round = Vec::new();
             for (name, target) in &dials {
@@ -836,7 +866,12 @@ pub fn spawn_rounds_at(
                 // so the fast answers light up while the slow ones are still
                 // outstanding.
                 round.push(tokio::spawn(async move {
-                    let standing = probe(&host, port).await;
+                    let standing = match probe(&host, port).await {
+                        s if climbs && s == Standing::at(Rung::Network) => {
+                            Standing::climbing(Rung::Network)
+                        }
+                        s => s,
+                    };
                     // A FLOOR, not a verdict — see `report_floor`. The cheap
                     // round can only ever prove `Network`, so reporting it
                     // plainly would erase the deep round's finding on every
@@ -848,16 +883,23 @@ pub fn spawn_rounds_at(
                 let _finished = handle.await;
             }
 
-            if let Some(climb) = climb.clone()
-                && since_deep >= cadence.climb
-            {
-                since_deep = Duration::ZERO;
+            if let Some(climb) = climb.clone() {
+                let full = since_deep >= cadence.climb;
+                if full {
+                    since_deep = Duration::ZERO;
+                }
                 let mut deep = Vec::new();
                 for (name, _) in &dials {
                     // The guard that makes this affordable. Climbing a context
                     // whose port did not even open would spend a credential
                     // helper to discover what the TCP probe already said.
-                    if !publisher.current(name).rung.worth_climbing() {
+                    let current = publisher.current(name);
+                    let due = if full {
+                        current.rung.worth_climbing()
+                    } else {
+                        current.reach() == Reach::Climbing
+                    };
+                    if !due {
                         continue;
                     }
                     let name = name.clone();
@@ -1431,6 +1473,113 @@ mod tests {
             "and it climbed the full ladder"
         );
         assert_eq!(ronda.rung("down"), Rung::Down);
+    }
+
+    #[test]
+    fn the_cheap_floor_does_not_erase_a_ceiling_measured_on_the_same_rung() {
+        let (ronda, publisher) = channel();
+        publisher.report(
+            "ctx",
+            Standing::stopped(Rung::Network, "credentials: SSO session expired"),
+        );
+        publisher.report_floor("ctx", Standing::at(Rung::Network));
+        assert_eq!(ronda.standing("ctx").reach(), Reach::Ceiling);
+        assert!(ronda.standing("ctx").note.contains("SSO session expired"));
+    }
+
+    #[tokio::test]
+    async fn a_port_that_opens_after_the_first_climb_is_climbed_on_the_next_round() {
+        let reserved = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback bind must succeed");
+        let port = reserved.local_addr().expect("bound").port();
+        drop(reserved);
+        let mut server = String::from("http://127.0.0.1:");
+        server.push_str(&port.to_string());
+
+        let climb: DeepClimb =
+            Arc::new(|_context: String| Box::pin(async { Standing::at(Rung::Pods) }));
+        let (ronda, publisher) = channel();
+        let rounds = spawn_rounds_at(
+            vec![("late".into(), Some(server))],
+            publisher,
+            Some(climb),
+            Cadence {
+                round: Duration::from_millis(20),
+                climb: Duration::from_secs(3600),
+            },
+        );
+        for _ in 0..300 {
+            if ronda.rung("late") == Rung::Down {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(ronda.rung("late"), Rung::Down, "closed at the first round");
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .expect("the reserved port rebinds");
+        for _ in 0..300 {
+            if ronda.rung("late") == Rung::Pods {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        rounds.abort();
+        drop(listener);
+        assert_eq!(
+            ronda.rung("late"),
+            Rung::Pods,
+            "a port that opens mid-session is climbed now, not one climb interval later: {:?}",
+            ronda.standing("late"),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_climb_still_in_flight_is_not_settled() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback bind must succeed");
+        let port = listener.local_addr().expect("bound").port();
+        let mut up = String::from("http://127.0.0.1:");
+        up.push_str(&port.to_string());
+
+        let release = Arc::new(tokio::sync::Notify::new());
+        let gate = Arc::clone(&release);
+        let climb: DeepClimb = Arc::new(move |_context: String| {
+            let gate = Arc::clone(&gate);
+            Box::pin(async move {
+                gate.notified().await;
+                Standing::at(Rung::Pods)
+            })
+        });
+        let (ronda, publisher) = channel();
+        let rounds = spawn_rounds(vec![("up".into(), Some(up))], publisher, Some(climb));
+        for _ in 0..300 {
+            if ronda.rung("up") == Rung::Network {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(ronda.rung("up"), Rung::Network);
+        assert!(
+            !ronda.all_settled(),
+            "the port is open and the climb above it has not answered: {:?}",
+            ronda.standing("up"),
+        );
+
+        release.notify_one();
+        for _ in 0..300 {
+            if ronda.rung("up") == Rung::Pods {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        rounds.abort();
+        drop(listener);
+        assert_eq!(ronda.rung("up"), Rung::Pods);
+        assert!(ronda.all_settled());
     }
 
     /// Without a climber the rounds still run — the cheap half stands alone,

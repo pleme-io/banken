@@ -168,6 +168,7 @@ impl ClusterEnv for FixtureClusterEnv {
                 "[fatal] exiting after 14 retries".into(),
             ],
             follow,
+            bounds: Vec::new(),
         })
     }
 

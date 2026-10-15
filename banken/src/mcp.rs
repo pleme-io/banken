@@ -57,6 +57,8 @@ use rmcp::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+const LOG_ANSWER_BYTES: usize = 32 * 1024;
+
 /// The agent-facing server over one cluster env.
 ///
 /// `Arc<dyn ClusterEnv>` rather than a type parameter on purpose: the fixture
@@ -516,7 +518,10 @@ impl BankenMcp {
         let Some(env) = self.env() else {
             return refuse_poisoned();
         };
-        match env.logs(&p.pod, &p.namespace, false) {
+        match env
+            .logs(&p.pod, &p.namespace, false)
+            .map(|s| s.keep_newest_within(LOG_ANSWER_BYTES))
+        {
             // ★ The stamp matters MOST here. Pod logs are the read an agent is
             // most likely to quote back, reason over, or paste into a report,
             // and log lines carry no intrinsic hint of which cluster produced
@@ -525,6 +530,12 @@ impl BankenMcp {
                 "cluster": self.cluster(),
                 "pod": s.pod,
                 "lineCount": s.lines.len(),
+                "truncated": !s.bounds.is_empty(),
+                "bounds": s.bounds.iter().map(|b| json!({
+                    "bound": b.token(),
+                    "limit": b.limit(),
+                    "meaning": b.meaning(),
+                })).collect::<Vec<_>>(),
                 "lines": s.lines,
                 "follow": s.follow,
             })),
@@ -669,7 +680,7 @@ impl BankenMcp {
                     "meaning": s.meaning(),
                     "reach": format!("{:?}", s.reach()).to_lowercase(),
                     "note": s.note,
-                    "settled": s.rung.is_settled(),
+                    "settled": s.is_settled(),
                 })
             })
             .collect();
@@ -755,6 +766,120 @@ mod tests {
             "fixture",
             crate::ronda::Ronda::inert(),
         )
+    }
+
+    struct LongLines(FixtureClusterEnv);
+
+    impl ClusterEnv for LongLines {
+        fn grip(
+            &self,
+            id: &banken_spec::env::ObjectId,
+        ) -> Result<banken_spec::env::Grip, banken_spec::env::GripError> {
+            self.0.grip(id)
+        }
+        fn list_resources(
+            &self,
+            kind: ResourceKind,
+            ns: Option<&str>,
+        ) -> Result<Vec<banken_spec::env::Row>, banken_spec::error::SpecError> {
+            self.0.list_resources(kind, ns)
+        }
+        fn get_resource(
+            &self,
+            kind: ResourceKind,
+            name: &str,
+            ns: Option<&str>,
+        ) -> Result<banken_spec::env::Row, banken_spec::error::SpecError> {
+            self.0.get_resource(kind, name, ns)
+        }
+        fn logs(
+            &self,
+            pod: &str,
+            _ns: &str,
+            follow: bool,
+        ) -> Result<banken_spec::env::LogStream, banken_spec::error::SpecError> {
+            Ok(banken_spec::env::LogStream {
+                pod: pod.to_owned(),
+                lines: (0..509)
+                    .map(|i| {
+                        let mut l = format!("line {i:04} ");
+                        l.push_str(&"x".repeat(136));
+                        l
+                    })
+                    .collect(),
+                follow,
+                ..Default::default()
+            })
+        }
+        fn events(
+            &self,
+            ns: Option<&str>,
+        ) -> Result<Vec<banken_spec::env::Event>, banken_spec::error::SpecError> {
+            self.0.events(ns)
+        }
+        fn topology(
+            &self,
+            root: &banken_spec::env::ResourceRef,
+        ) -> Result<banken_spec::env::DepTree, banken_spec::error::SpecError> {
+            self.0.topology(root)
+        }
+        fn health_signals(
+            &self,
+            w: &banken_spec::env::Workload,
+        ) -> Result<banken_spec::env::HealthReading, banken_spec::error::SpecError> {
+            self.0.health_signals(w)
+        }
+        fn watch(
+            &self,
+            kind: ResourceKind,
+            ns: Option<&str>,
+        ) -> Result<banken_spec::env::WatchStream, banken_spec::error::SpecError> {
+            self.0.watch(kind, ns)
+        }
+        fn declare(
+            &self,
+            change: banken_spec::env::DeclareChange,
+        ) -> Result<banken_spec::env::ChangeRef, banken_spec::error::SpecError> {
+            self.0.declare(change)
+        }
+        fn break_glass(
+            &self,
+            action: banken_spec::env::WitnessedAction,
+        ) -> Result<banken_spec::env::GlassRecord, banken_spec::error::SpecError> {
+            self.0.break_glass(action)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_long_line_log_is_bounded_in_bytes_and_says_so() {
+        let s = BankenMcp::new(
+            Arc::new(LongLines(FixtureClusterEnv::new())),
+            "fixture",
+            crate::ronda::Ronda::inert(),
+        )
+        .banken_logs(Parameters(LogsInput {
+            pod: "pangea-operator-0".into(),
+            namespace: "pangea-system".into(),
+        }))
+        .await;
+        assert!(
+            s.len() <= 40 * 1024,
+            "a logs answer must fit an MCP result budget; it was {} bytes",
+            s.len()
+        );
+        let v: Value = serde_json::from_str(&s).expect("valid json");
+        assert_eq!(v["truncated"], true, "{}", &s[..s.len().min(400)]);
+        let bounds = v["bounds"].as_array().expect("bounds is a list");
+        assert!(
+            bounds.iter().any(|b| b["bound"] == "answerBytes"),
+            "the bound that fired is named: {bounds:?}"
+        );
+        let lines = v["lines"].as_array().expect("lines");
+        assert_eq!(
+            lines.last().and_then(Value::as_str).map(|l| &l[..9]),
+            Some("line 0508"),
+            "the NEWEST lines are the ones kept"
+        );
     }
 
     /// A FAILED read names the cluster it failed against.

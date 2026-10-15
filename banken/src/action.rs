@@ -421,7 +421,17 @@ fn observe_logs<E: ClusterEnv>(sel: &Selection, env: &E) -> ActionResult {
                 t.push_str(&stream.pod);
                 t
             },
-            lines: stream.lines,
+            lines: stream
+                .bounds
+                .iter()
+                .map(|b| {
+                    let mut l = String::from("— bounded: ");
+                    l.push_str(&b.meaning());
+                    l.push_str(" —");
+                    l
+                })
+                .chain(stream.lines)
+                .collect(),
         },
         Err(e) => ActionResult::Error(e.to_string()),
     }

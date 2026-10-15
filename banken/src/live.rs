@@ -985,11 +985,6 @@ impl KubeClusterEnv {
     reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
 )]
 fn pod_to_row(pod: Pod) -> Option<Row> {
-    let uid = banken_spec::env::Uid::new(pod.metadata.uid.clone().unwrap_or_default())?;
-    let version = pod.metadata.resource_version.clone();
-    let name = pod.metadata.name.clone().unwrap_or_default();
-    let namespace = pod.metadata.namespace.clone();
-
     let status = pod.status.as_ref();
     let phase = status
         .and_then(|s| s.phase.clone())
@@ -1028,22 +1023,14 @@ fn pod_to_row(pod: Pod) -> Option<Row> {
         s
     };
 
-    Some(Row {
-        uid,
-        name,
-        namespace,
-        version,
-        // Keyed by the AUTHORED `(defk8sview "pods")` `:field` values, same
-        // as the fixture reader — see `banken::table::Column::field`.
-        cells: vec![
+    row_of(
+        &pod,
+        vec![
             ("ready".into(), ready_cell),
             ("phase".into(), display_status),
             ("restarts".into(), restarts.to_string()),
-            // AGE derivation from creation_timestamp is a follow-up
-            // (needs a clock); shown as "-" rather than a wrong value.
-            ("age".into(), "-".into()),
         ],
-    })
+    )
 }
 
 /// How many log lines a single read may pull.
@@ -1051,7 +1038,9 @@ fn pod_to_row(pod: Pod) -> Option<Row> {
 /// A pod up for a week can hold hundreds of megabytes; a navigator that pulls
 /// all of it to render one pane has turned a keystroke into an outage. This is
 /// `kubectl logs --tail`'s own default order of magnitude.
-const LOG_TAIL_LINES: i64 = 500;
+const LOG_TAIL_LINES: usize = 500;
+
+const LOG_LIMIT_BYTES: usize = 1024 * 1024;
 
 /// `AGE`, k8s-style, from a creation timestamp.
 ///
@@ -1388,7 +1377,8 @@ impl KubeClusterEnv {
         // megabytes, and a navigator that pulls all of it to render one pane
         // has turned a keystroke into an outage.
         let params = kube::api::LogParams {
-            tail_lines: Some(LOG_TAIL_LINES),
+            tail_lines: i64::try_from(LOG_TAIL_LINES).ok(),
+            limit_bytes: i64::try_from(LOG_LIMIT_BYTES).ok(),
             ..Default::default()
         };
         let text = api
@@ -1398,12 +1388,12 @@ impl KubeClusterEnv {
                 phase: "logs".into(),
                 message: Self::error_chain(&e),
             })?;
-        Ok(LogStream {
-            pod: pod.to_owned(),
-            lines: text.lines().map(str::to_owned).collect(),
-            // Never claim a follow that is not happening — see above.
-            follow: false,
-        })
+        Ok(LogStream::bounded_tail(
+            pod,
+            &text,
+            LOG_TAIL_LINES,
+            LOG_LIMIT_BYTES,
+        ))
     }
 
     /// Cluster events, newest last (the apiserver's own order).
@@ -1883,6 +1873,23 @@ mod tests {
         assert_eq!(get("ready"), Some("1/1"));
         assert_eq!(get("phase"), Some("Running"));
         assert_eq!(get("restarts"), Some("3"));
+    }
+
+    #[test]
+    fn pod_to_row_derives_age_from_creation_timestamp() {
+        let mut pod = pod_with("catch-api", "Running", None, true);
+        pod.metadata.creation_timestamp = Some(
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                k8s_openapi::chrono::Utc::now() - k8s_openapi::chrono::Duration::days(2),
+            ),
+        );
+        let row = pod_to_row(pod).expect("the fixture pod carries a uid");
+        let age = row
+            .cells
+            .iter()
+            .find(|(k, _)| k == "age")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(age, Some("2d"));
     }
 
     #[test]

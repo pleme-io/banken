@@ -252,6 +252,141 @@ pub struct LogStream {
     pub lines: Vec<String>,
     /// Whether the source is in follow mode.
     pub follow: bool,
+    /// Every bound that cut or may have cut this snapshot, in the order applied.
+    pub bounds: Vec<LogBound>,
+}
+
+/// A bound a log snapshot was read under, named when it fired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogBound {
+    /// The apiserver's `tailLines`: the tail held this many lines, so older ones may exist.
+    TailLines {
+        /// Lines requested.
+        limit: usize,
+    },
+    /// The apiserver's `limitBytes`: the read stopped here, so the newest lines of the tail were not received.
+    LimitBytes {
+        /// Bytes requested.
+        limit: usize,
+    },
+    /// The answer's own budget: the oldest lines were dropped to fit it.
+    AnswerBytes {
+        /// The budget.
+        limit: usize,
+        /// Lines dropped from the old end.
+        dropped_lines: usize,
+        /// Whether the newest line alone exceeded the budget and was cut to it.
+        cut_newest: bool,
+    },
+}
+
+impl LogBound {
+    /// The stable machine name.
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::TailLines { .. } => "tailLines",
+            Self::LimitBytes { .. } => "limitBytes",
+            Self::AnswerBytes { .. } => "answerBytes",
+        }
+    }
+
+    /// The bound's limit, in its own unit.
+    #[must_use]
+    pub fn limit(self) -> usize {
+        match self {
+            Self::TailLines { limit }
+            | Self::LimitBytes { limit }
+            | Self::AnswerBytes { limit, .. } => limit,
+        }
+    }
+
+    /// What firing this bound means for the lines held.
+    #[must_use]
+    pub fn meaning(self) -> String {
+        match self {
+            Self::TailLines { limit } => format!(
+                "the tail held {limit} lines, the most requested; older lines may exist"
+            ),
+            Self::LimitBytes { limit } => format!(
+                "the apiserver stopped at {limit} bytes; the newest lines of the tail were not received"
+            ),
+            Self::AnswerBytes {
+                limit,
+                dropped_lines,
+                cut_newest: false,
+            } => format!(
+                "the {dropped_lines} oldest lines were dropped to keep the answer within {limit} bytes"
+            ),
+            Self::AnswerBytes {
+                limit,
+                dropped_lines,
+                cut_newest: true,
+            } => format!(
+                "the {dropped_lines} oldest lines were dropped and the newest line was cut to keep the answer within {limit} bytes"
+            ),
+        }
+    }
+}
+
+impl LogStream {
+    /// A snapshot read under `tailLines = tail_lines` and `limitBytes = limit_bytes`.
+    ///
+    /// The tail is enforced here too, so a server that over-delivers is still bounded.
+    #[must_use]
+    pub fn bounded_tail(pod: &str, text: &str, tail_lines: usize, limit_bytes: usize) -> Self {
+        let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+        let mut bounds = Vec::new();
+        if text.len() >= limit_bytes {
+            bounds.push(LogBound::LimitBytes { limit: limit_bytes });
+        }
+        if lines.len() >= tail_lines {
+            lines.drain(..lines.len() - tail_lines);
+            bounds.push(LogBound::TailLines { limit: tail_lines });
+        }
+        Self {
+            pod: pod.to_owned(),
+            lines,
+            follow: false,
+            bounds,
+        }
+    }
+
+    /// Keep the newest lines whose bytes, newlines included, fit `budget`.
+    ///
+    /// A newest line that alone exceeds the budget is cut to it rather than dropped.
+    #[must_use]
+    pub fn keep_newest_within(mut self, budget: usize) -> Self {
+        let mut used = 0;
+        let mut kept = 0;
+        for line in self.lines.iter().rev() {
+            let cost = line.len() + 1;
+            if used + cost > budget {
+                break;
+            }
+            used += cost;
+            kept += 1;
+        }
+        if kept == self.lines.len() {
+            return self;
+        }
+        let cut_newest = kept == 0;
+        let dropped_lines = self.lines.len() - kept.max(1);
+        self.lines.drain(..dropped_lines);
+        if cut_newest && let Some(line) = self.lines.last_mut() {
+            let mut end = budget.saturating_sub(1).min(line.len());
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            line.truncate(end);
+        }
+        self.bounds.push(LogBound::AnswerBytes {
+            limit: budget,
+            dropped_lines,
+            cut_newest,
+        });
+        self
+    }
 }
 
 /// One cluster event.
@@ -826,5 +961,74 @@ mod grip_tests {
             .grip_against(&[row("A", "catch", "api-v2")])
             .expect("same uid, same object");
         assert_eq!(g.row().name, "api-v2");
+    }
+}
+
+#[cfg(test)]
+mod log_bound_tests {
+    use super::*;
+
+    fn text(lines: usize, width: usize) -> String {
+        (0..lines)
+            .map(|i| format!("{i:04}{}", "x".repeat(width)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_short_log_carries_no_bound() {
+        let s = LogStream::bounded_tail("p", &text(3, 10), 500, 1024 * 1024);
+        assert_eq!(s.lines.len(), 3);
+        assert!(s.bounds.is_empty());
+        assert_eq!(s.clone().keep_newest_within(1024), s);
+    }
+
+    #[test]
+    fn an_over_delivered_tail_is_cut_to_the_newest_lines_and_named() {
+        let s = LogStream::bounded_tail("p", &text(509, 10), 500, 1024 * 1024);
+        assert_eq!(s.lines.len(), 500);
+        assert!(s.lines[0].starts_with("0009"));
+        assert_eq!(s.bounds, vec![LogBound::TailLines { limit: 500 }]);
+    }
+
+    #[test]
+    fn a_read_that_hit_limit_bytes_says_the_newest_lines_were_not_received() {
+        let body = text(40, 100);
+        let s = LogStream::bounded_tail("p", &body, 500, body.len());
+        assert_eq!(s.bounds, vec![LogBound::LimitBytes { limit: body.len() }]);
+        assert!(s.bounds[0].meaning().contains("newest lines"));
+    }
+
+    #[test]
+    fn the_answer_budget_keeps_the_newest_lines() {
+        let s = LogStream::bounded_tail("p", &text(100, 96), 500, 1024 * 1024)
+            .keep_newest_within(1010);
+        assert_eq!(s.lines.len(), 10);
+        assert!(s.lines.last().is_some_and(|l| l.starts_with("0099")));
+        assert!(s.lines.iter().map(|l| l.len() + 1).sum::<usize>() <= 1010);
+        assert_eq!(
+            s.bounds,
+            vec![LogBound::AnswerBytes {
+                limit: 1010,
+                dropped_lines: 90,
+                cut_newest: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_single_line_over_budget_is_cut_not_lost() {
+        let s = LogStream::bounded_tail("p", &"é".repeat(600), 500, 1024 * 1024)
+            .keep_newest_within(101);
+        assert_eq!(s.lines.len(), 1);
+        assert!(s.lines[0].len() <= 100);
+        assert_eq!(
+            s.bounds,
+            vec![LogBound::AnswerBytes {
+                limit: 101,
+                dropped_lines: 0,
+                cut_newest: true,
+            }]
+        );
     }
 }

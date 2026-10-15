@@ -1052,14 +1052,36 @@ proven-live ✗ until a cluster is reachable / known ✓).
   - **`pending-banken: absorb-display-fidelity` — OPEN, and it now carries a
     DESIGN CONFLICT this repo created on 2026-08-08.** Measured: `Accept:
     …as=Table` with `includeObject=None` is **170 B/pod vs 18,747** (110×) and
-    its cells carry a server-rendered `Age` that would close the `AGE renders -`
-    gap for free — but it carries **no uid** (`row.object` is `null`), and uid
+    its cells carry a server-rendered `Age` (the pod `AGE renders -` gap it
+    would have closed is closed client-side since 2026-10-15) — but it carries **no uid** (`row.object` is `null`), and uid
     is now REQUIRED on `Row`. `includeObject=Metadata` carries uid at 5,830
     B/pod (3.2×) and still ships `managedFields`. So the three fidelities are
     not a ladder: **Display renders, Metadata identifies, Full describes**, and
     the table's cursor identity (unique at an instant) is a different question
     from the act's identity (unique across recreate). Resolve that before
     building, not during.
+- **Live read of engenho-ryn, 2026-10-15 — three defects closed.** Pod `AGE`
+  now goes through `row_of` like every other kind (`pod_to_row` had
+  hardcoded `-`). `banken_logs` is bounded in bytes as well as lines: the
+  apiserver read carries `limitBytes` (1 MiB) beside `tailLines` (500, also
+  enforced client-side), the MCP answer keeps the newest lines within 32 KiB,
+  and every bound that fired is named in `bounds` with `truncated: true`
+  (a 509-line read had returned 74,623 chars unbounded). The readiness
+  ladder's `network, settled: true` for a context banken could read was a
+  climb that had not landed: a port that opened after the first deep round
+  waited a full `DEEP_INTERVAL` for its climb, and the waypoint read as
+  settled meanwhile. The cheap round now publishes `Reach::Climbing` when a
+  climber exists, a `Climbing` context is climbed on the next round, it is
+  not `settled` until the climb answers, and the cheap floor no longer
+  erases a ceiling measured on the same rung (an expired-SSO diagnosis).
+  The kubeconfig/client-cert hypothesis was measured false: `climb` already
+  builds from the declaring file and reaches `pods` on engenho.
+  - `pending-banken: climb-wedge-stalls-rounds` — the round loop awaits every
+    climb inline, so one wedged credential helper stalls the cheap rounds and
+    every later climb. Not measured live; the fix is a per-climb deadline.
+  - `pending-banken: limit-bytes-holds-the-head` — when `limitBytes` fires the
+    apiserver has returned the OLDEST part of the tail window. banken says so
+    in the bound's meaning rather than recovering the newest lines.
 - **DESIGN / next arc (M1→M4):** the watch informer (poll→true watch), the health
   ward's **RENDER** (its `(defward)` vocabulary + the `WardVerdict` evaluator are
   SHIPPED mock-green; no ward panel is drawn yet — do not read the vocabulary as
