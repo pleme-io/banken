@@ -1,8 +1,9 @@
 # Armazém — lazy absorb, state apart from the screen
 
-**Status: DESIGN (2026-10-15).** Nothing below is built unless a phase says so.
-It closes `pending-banken: absorb-multi-gvk` and replaces the per-view
-synchronous read.
+**Status (2026-10-15):** the substrate is built and released in izumi
+(`izumi-armazem`, `izumi-mcp`). banken's adoption (phases A1–A6 below) is
+not built yet. It closes `pending-banken: absorb-multi-gvk` and replaces the
+per-view synchronous read.
 
 ## What is wrong today, measured
 
@@ -10,103 +11,81 @@ Measured against ryn's engenho on 2026-10-15 with banken 0.1.41:
 
 - **One kind is absorbed.** `main.rs` spawns a single pod watch at startup.
   Every other view is a synchronous `list_resources` on the app task: in
-  `switch_view` (`app.rs:683`) and again in `refresh_current_view`
-  (`app.rs:717`). That breaks absorb rule 1 ("the read never runs on the app
-  task"). A slow apiserver freezes the keyboard on every `:deploy`, and the
-  deployments view never moves after it is drawn.
-- **The MCP server keeps no state.** Every `banken_list` is a fresh LIST
-  (`mcp.rs:477`). An agent pays a full LIST per question, and cannot see what
-  the operator's banken holds. "What does banken know" and "what does the
-  screen show" are the same thing, so neither can be tested without a
-  terminal.
+  `switch_view` and again in `refresh_current_view`. That breaks absorb
+  rule 1 ("the read never runs on the app task"). A slow apiserver freezes
+  the keyboard on every `:deploy`, and the deployments view never moves after
+  it is drawn.
+- **The MCP server keeps no state.** Every `banken_list` is a fresh LIST. An
+  agent pays a full LIST per question and cannot see what the operator's
+  banken holds.
+- **MCP answers overflow their client.** One `banken_logs` read returned
+  74,623 characters. A breathe raw list is ~430 KB. 0.1.43 caps logs at 32 KiB
+  by cutting the oldest lines, so whatever was cut is gone; nothing can be
+  paged or followed.
 - **What banken knows is tied to what it shows.** Leave the pods view and its
   rows are gone. Come back and banken reads them again from zero.
 
-## The destination
+## Where it lives
 
-An **Armazém** (warehouse) holds one `Despensa` per absorbed key. A view and
-an MCP question are both just *interest* in a key. The screen is one of
-several readers. A key stays watched while someone is interested, stays warm
-for a linger window after that, and then goes **dormant**: the watch stops,
-the last snapshot is kept and labelled dormant, and new interest resumes the
-watch from the stored `resourceVersion`.
+The shape is not banken's. Every pleme-io MCP server has the same two
+problems: reads that start from zero on every question, and answers too big
+for the client. So it is built once, in izumi, and banken is its first
+consumer.
 
-```
-              Interesse (lease)            Interesse (lease)
-  TUI view ───────────────┐      ┌──────────────── MCP question
-                          ▼      ▼
-                    ┌──────────────────┐   demand    ┌───────────────┐
-                    │     Armazém      │ ──────────▶ │ zelador vigy  │
-                    │ key → Despensa   │ ◀────────── │ (tatara-lisp) │
-                    └──────────────────┘ start/park  └───────────────┘
-                          ▲   ▲
-               watch task │   │ watch task      (one per Live key)
-                       apiserver
-```
+| Crate | Owns |
+|---|---|
+| `izumi-armazem` | `Armazem<S: Source>`: one change-journaled `Shelf` per key. A stream opens on `Interesse`, parks to `Dormant` (rows and resume token kept) after `linger-ms` idle, resumes from that token, and is evicted after `evict-dormant-after-ms`. The start/park/evict decision is the `zelador.tlisp` vigy program each tick; a proptest holds it equal to the native policy. |
+| `izumi-mcp` | `Streams<S>`: every read is a page inside `budget-bytes`, with an opaque `next` cursor pinned to one snapshot and a `follow` cursor whose reads return only changes, or a `gap` snapshot when the journal moved past it. An expired cursor is a typed refusal. |
+| `vigy` | run history is bounded (newest 1000 per vigy by default), so a 1 s zelador cannot grow a store without end. |
 
-### Types
+**Configuration.** Lazy, vigy-governed streaming is the default:
+`mode: lazy`, `policy: vigy`. `mode: eager` keeps every opened stream live,
+`mode: direct` reads per question with no stream, and `policy: native` runs
+the same decision without the lisp evaluator. Nothing is removed by a switch;
+each is a configured state.
+
+## The data structure: changes and flips are first-class
+
+A `Shelf` is a state *plus* its history.
+
+- **Content-gated sequence.** An upsert with the same fingerprint, a reset to
+  the same set, or a repeated phase does not advance `seq`, so a quiet
+  cluster costs no wakes and no follow traffic.
+- **Phase flips are journaled in order.** `live → dormant → absorbing → live`
+  is readable from any cursor, so a reader can tell "the data stopped moving
+  because nothing changed" from "the data stopped moving because the stream
+  was parked".
+- **Bounded journal, typed gap.** A cursor older than the journal gets
+  `Since::Gap(snapshot)`, never a silently partial delta.
+- **Keyed or appended.** Records with an id are a keyed set (a watch's
+  objects). Records without one are a bounded ring (log lines, events). The
+  same shelf, cursor and follow serve both.
+- **A parked stream cannot write.** The stop flag is checked under the shelf
+  lock, so a source that keeps running after park can't flip a dormant shelf
+  back to live.
+
+## banken on the Armazém
 
 | Type | Owns | Rule it carries |
 |---|---|---|
-| `AbsorbKey` | `(ResourceKind, Scope{All, Namespace(..)})` | the cluster is fixed per Armazém. A context switch builds a new one, so no key can mix two estates |
-| `Armazem` | `key → Entry{despensa, publisher, task, interest, last_rv}` | the only place a watch task is created or stopped |
-| `Interesse` | an RAII lease on one key | taking one is O(1) and never blocks. Dropping it decrements. There is no other way to express demand |
-| `SyncPhase` | gains `Dormant { since, resume_rv }` | dormant rows are kept and *labelled*, never shown as live, so a stale table can't pass as a current one |
-| `ZeladorAction` | `Start(key)`, `Park(key)`, `Evict(key)` | the reconciler emits these and only the Armazém carries them out |
+| `KindKey` | `(ResourceKind, Scope{All, Namespace(..)})` | the cluster is fixed per Armazém. A context switch builds a new one, so no key mixes two estates |
+| `KubeSource` | `impl izumi_armazem::Source for KubeClusterEnv`: a kube-runtime watcher per key, feeding `reset`/`upsert`/`remove`, resume token = the last `resourceVersion` | resume uses `Api::watch(&WatchParams, rv)`; a `410 Gone` falls back to the watcher's relist |
+| `LogSource` | one followed container log per key, appended as a ring | replaces `banken_logs`'s cut-the-oldest cap with paging and follow |
 
 **The view never reads the env.** `switch_view` takes an `Interesse` and draws
 whatever snapshot exists: `Absorbing` with no rows the first time, or the
-dormant rows labelled as dormant. The table fills when the publisher's wake
-fires. `list_resources` stays on `ClusterEnv` for the MCP fallback and the
-grip re-read.
+dormant rows labelled as dormant. The table fills when the shelf's wake fires.
 
-### Why the lifecycle is a vigy
-
-"Every tick, compare demand with what is running, decide, act" is exactly
-what vigy was built for. vigy records and broadcasts the actions, and the host
-carries them out (`vigy/CLAUDE.md`, "Doesn't interpret reconcile actions").
-banken embeds the runtime in memory (`RuntimeHandle::open_in_memory_for("banken")`,
-with no SQLite file) and registers one host intrinsic:
-
-- `(banken-demand)` returns one row per key: `interest`, `idle-ms`, `phase`,
-  `generation` and `live-watches`.
-
-The default policy ships as `banken-spec/specs/zelador.lisp`:
-
-```lisp
-(defzelador
-  :linger-ms 30000
-  :max-live-watches 12
-  :evict-dormant-after-ms 3600000)
-```
-
-The vigy program reads `(banken-demand)` and emits:
-- `start` for any key with interest that is not live;
-- `park` for any live key with zero interest that has been idle past
-  `:linger-ms`, or that falls outside the most recent `:max-live-watches`;
-- `evict` for any key dormant past `:evict-dormant-after-ms`.
-
-The knobs live in `banken-config`'s overlay tier, so an operator can change
-them without a rebuild. The policy itself is data, and a second policy is just
-a declaration.
-
-**Resume, not relist.** `kube_runtime::watcher` always opens with a LIST, so
-resuming uses `Api::watch(&WatchParams, resume_rv)` directly. A `410 Gone`
-(the rv was compacted) falls back to the watcher's relist. Either way the
-phase says which path ran.
-
-### MCP reads the Armazém
-
-- Every read tool takes an `Interesse` for its key. It waits until the key is
-  `Synced` (or a bound is reached) and answers from the snapshot, stamped with
-  `phase`, `generation`, `resourceVersion` and the snapshot's age. A second
-  question about the same kind costs nothing on the wire.
-- **New tool `banken_absorb`**: lists every key with its phase, interest,
-  generation, last rv, idle time and row count. This is what makes "what
-  banken knows" testable separately from "what the screen shows".
+**MCP reads the same Armazém**, through `izumi_mcp::Streams`:
+- `banken_list`, `banken_events` and `banken_logs` take an optional `cursor`.
+  The first call opens or reuses the key's stream and returns the first
+  budgeted page with `next` and `follow`. A second question about the same
+  kind costs nothing on the wire.
+- **`banken_absorb`** returns `Armazem::inventory()`: every key's phase, seq,
+  record count, interest, liveness, idle and dormant time. This is what makes
+  "what banken knows" testable separately from "what the screen shows".
 - **A TUI-hosted MCP endpoint** (`banken --mcp-socket PATH`): the agent reads
-  the same Armazém the operator's screen reads. The screen becomes one view
-  of the state rather than its owner.
+  the same Armazém the operator's screen reads.
 
 ## Conformance against engenho
 
@@ -122,39 +101,40 @@ source.**
    in-process cluster. Matrix: `BankenAction::ALL`, with an exhaustive
    ordinal and at least one row per action:
    - list of each typed kind under both `ListStrategy` variants;
-   - get, grip (including the uid mismatch after recreate), can-i, logs
-     (bounded), events, aggregated discovery into the `RestMapper`, and the
-     readiness climb;
-   - absorb: a Synced snapshot, a MODIFIED reaching the Despensa, and resume
-     after park, plus relist on 410.
+   - get, grip (including the uid mismatch after recreate), can-i, logs,
+     events, aggregated discovery into the `RestMapper`, and the readiness
+     climb;
+   - absorb: a Live snapshot, a MODIFIED reaching the shelf, park and resume
+     from rv, and relist on 410.
 
    This needs one banken constructor, `KubeClusterEnv::from_config(kube::Config)`,
    since the harness has no kubeconfig context.
 2. **banken, `tests/engenho_live.rs`** (`#[ignore]`, `BANKEN_LIVE_CONTEXT`,
    the same no-default rule as `live_read.rs`). Every MCP tool against a real
-   engenho, and `banken_absorb` showing a key go Live → Dormant → Live. This
-   is the ryn session that k9s got, done over state instead of a screen.
+   engenho, paging a list past the budget and following it, and
+   `banken_absorb` showing a key go live → dormant → live. This is the ryn
+   session that k9s got, done over state instead of a screen.
 
 ## Gaps the first live pass found (2026-10-15)
 
 | Gap | Side | Status |
 |---|---|---|
-| node status rewritten without a resourceVersion bump (heartbeat advanced, rv stayed 1659760) | engenho | being fixed |
-| node `status.nodeInfo` absent, so VERSION shows `-` | engenho | being fixed |
-| CronJob-made Jobs carry no `creationTimestamp` | engenho | being fixed |
-| server-side Table prints only NAME and a raw-timestamp AGE | engenho | being fixed |
-| pod AGE hardcoded to `-` | banken | being fixed |
-| `banken_logs` bounded by lines only (74,623 chars came back) | banken | being fixed |
-| readiness settles at `network` for a context banken reads fine | banken | being fixed |
+| node status rewritten without a resourceVersion bump (heartbeat advanced, rv stayed 1659760) | engenho | in progress |
+| node `status.nodeInfo` absent, so VERSION shows `-` | engenho | in progress |
+| CronJob-made Jobs carry no `creationTimestamp` | engenho | in progress |
+| server-side Table prints only NAME and a raw-timestamp AGE | engenho | in progress |
+| pod AGE hardcoded to `-` | banken | fixed, 0.1.42 |
+| `banken_logs` bounded by lines only | banken | capped at 32 KiB in 0.1.43; paging and follow come with A4 |
+| readiness reported a climb in flight as settled at `network` | banken | fixed, 0.1.42 |
 
 ## Phases
 
 | # | Phase | Closes |
 |---|---|---|
-| A1 | `Armazem` + `Interesse` + `AbsorbKey`. Every typed kind is absorbed, and no view reads the env | `absorb-multi-gvk` (typed kinds) |
-| A2 | `Dormant` phase, park and resume from rv, relist on 410 | — |
-| A3 | the zelador vigy, `(defzelador)` vocabulary and the config knobs | — |
-| A4 | MCP reads through the Armazém, `banken_absorb`, `--mcp-socket` | `mcp-shares-state` |
+| A1 | `KindKey` + `KubeSource`; every typed kind absorbed; no view reads the env | `absorb-multi-gvk` (typed kinds) |
+| A2 | resume from rv, relist on 410, dormant rows drawn as dormant | — |
+| A3 | the zelador ticking inside banken, its knobs in `banken-config`'s overlay tier | — |
+| A4 | MCP through `izumi_mcp::Streams`, `banken_absorb`, `LogSource`, `--mcp-socket` | `mcp-shares-state` |
 | A5 | `KubeClusterEnv::from_config`, then engenho's `client_conformance` | — |
 | A6 | `engenho_live.rs` against ryn | — |
 
