@@ -1044,11 +1044,37 @@ proven-live ✗ until a cluster is reachable / known ✓).
     born dead with the config crate's 16 tests green. And 4 of 4 fleet app
     configs are `/nix/store` symlinks (41 under `~/.config`), so a single-file
     loader gives an operator no way to change a value short of a rebuild.
-    `pending-banken: manual-refresh-mode` — an authored `0` ("never
-    auto-refresh") is honoured as `DEFAULT_POLL` because the feed has no
-    manual-only mode.
-  - `pending-banken: absorb-multi-gvk` — one kind (pods), one watch. Discovery,
-    admission bounds and per-kind fidelity are M3/M4.
+    **`pending-banken: manual-refresh-mode` — CLOSED (2026-10-15):** an
+    authored `0` now means the env-backed source reads once and stays live; a
+    live cluster is watched, so the period never applied to it.
+- **The Armazém, A1–A4 of `docs/ARMAZEM.md` (2026-10-15).** Every view reads
+  an `izumi_armazem` shelf through an `Interesse`; `switch_view` and the filter
+  re-apply never call `list_resources` (proven by
+  `app::tests::no_view_reads_the_env_on_the_app_task`, red with one inline
+  read). `KindKey` (`pod/*`, `pod/<ns>`; cluster-scoped kinds take only `*`) +
+  `KubeSource` (one generic watch per key, a total `match` over
+  `ResourceKind`, `ListStrategy` + `default_backoff()`), resume from the
+  stored rv with a bounded open and a journalled relist on 410 or no-open
+  (`tests/armazem_resume.rs`, a fake apiserver). The zelador ticks in the
+  binary; its knobs are `armazem:` and the MCP page knobs `streams:` in the
+  overlay tier, izumi's defaults (lazy + vigy). Dormant rows render
+  `DORMANT`, never as live. MCP reads the same kind of Armazém through
+  `izumi_mcp::Streams`: `banken_list`/`banken_events`/`banken_logs` page and
+  follow by `cursor`, `banken_absorb` is the inventory, a still-absorbing
+  first read is `blind`, and `--mcp-socket PATH` serves the screen's own
+  store. **`pending-banken: absorb-multi-gvk` — CLOSED for the typed kinds**;
+  discovery-driven kinds remain M3/M4.
+  - `pending-banken: resume-token-after-relist` — after a relist the token is
+    the last listed object's rv, because kube-runtime's watcher does not
+    surface the list or bookmark rv. On engenho that rv was old enough to
+    answer 410, so the resume relisted (correctly, and journalled). A resume
+    lands when a watch event arrived after the list.
+  - `pending-banken: permit-read-on-app-task` — `switch_view`'s
+    SelfSubjectAccessReview still runs on the app task; the rows no longer do.
+  - `pending-banken: log-follow-ends` — a followed container log that ends
+    (exit, restart) stays `degraded` with its lines; it is not re-followed.
+  - `pending-banken: armazem` — A5 (`KubeClusterEnv::from_config` +
+    engenho's `client_conformance`) and A6 (`engenho_live.rs`) remain.
   - **`pending-banken: absorb-display-fidelity` — OPEN, and it now carries a
     DESIGN CONFLICT this repo created on 2026-08-08.** Measured: `Accept:
     …as=Table` with `includeObject=None` is **170 B/pod vs 18,747** (110×) and

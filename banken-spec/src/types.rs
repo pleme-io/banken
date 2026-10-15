@@ -456,6 +456,20 @@ impl ResourceKind {
             ResourceKind::Event => "event",
         }
     }
+
+    #[must_use]
+    pub fn is_namespaced(self) -> bool {
+        match self {
+            ResourceKind::Pod
+            | ResourceKind::Service
+            | ResourceKind::ConfigMap
+            | ResourceKind::Endpoints
+            | ResourceKind::Deployment
+            | ResourceKind::ReplicaSet
+            | ResourceKind::Event => true,
+            ResourceKind::Namespace | ResourceKind::Node => false,
+        }
+    }
 }
 
 // ── The two authored spec borders (BANKEN.md §III.a) ───────────────

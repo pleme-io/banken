@@ -43,20 +43,21 @@ use awase::repeat_gate::KeyRepeatGate;
 use banken_spec::chord::ActionChord;
 use banken_spec::env::{ClusterEnv, Row};
 use banken_spec::nav::NavIntent;
-use banken_spec::types::{OperatorId, ResourceKind, ViewSource};
+use banken_spec::types::{OperatorId, ViewSource};
 use banken_spec::{Catalog, SpecError};
 use egaku_term::crossterm::style::Color;
 use egaku_term::{__re::KeyMap, AsyncApp, Buffer, Result as TermResult, Style};
 
 use banken_spec::bancada::{BancadaSpec, SessionEnv};
 
-use crate::absorb::{Despensa, SyncPhase};
 use crate::action::{
     ActionResult, PendingBancada, RowAction, dispatch, open_bancada, preview_bancada,
     resolve_bancada,
 };
+use crate::armazem::{KindArmazem, KindFonte, KindKey};
 use crate::render::{draw_pod_table, sort_label};
 use crate::table::PodTable;
+use izumi_armazem::{Interesse, Phase, Seq, Since};
 
 /// The one view M0 ships. Named once so the keymap, the table columns and the
 /// bancada filter cannot drift onto three different spellings of it.
@@ -191,6 +192,28 @@ enum Panel {
     },
 }
 
+pub struct Vista {
+    key: KindKey,
+    lease: tokio::sync::Mutex<Interesse<KindFonte>>,
+}
+
+impl Vista {
+    fn new(key: KindKey, lease: Interesse<KindFonte>) -> Self {
+        Self {
+            key,
+            lease: tokio::sync::Mutex::new(lease),
+        }
+    }
+
+    async fn changed(&self) {
+        let mut lease = self.lease.lock().await;
+        if lease.changed().await.is_none() {
+            drop(lease);
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
 /// The banken TUI app.
 ///
 /// Generic over **two** seams, for the same reason each time: the runtime is
@@ -265,24 +288,10 @@ pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
     /// and marks the elision, so a narrow terminal costs the *least* important
     /// hints rather than all of them.
     legend_parts: Vec<String>,
-    /// The background absorb plane, when one is running.
-    ///
-    /// `None` is the default and means input-only — which is what every
-    /// non-tokio test builds, and what `AsyncApp::wake` lowers to a
-    /// `pending()` for. See [`crate::feed`].
-    absorb: Option<Despensa>,
-    /// Stops the poll absorber when the app is dropped.
-    ///
-    /// `PodFeed` flipped this in its own `Drop`; keeping that behaviour is not
-    /// tidiness — without it an apiserver poll outlives the terminal nobody is
-    /// watching. The watch absorber does not need one: its task ends when the
-    /// stream does.
-    absorb_stop: Option<crate::absorb::PollGuard>,
-    /// The absorb generation already folded into the table.
-    ///
-    /// Starts at `0`, which is `Snapshot::empty()`'s generation, so a freshly
-    /// built app whose absorber has not published yet does no work.
-    applied_generation: u64,
+    estoque: Option<KindArmazem>,
+    vista: Option<Vista>,
+    applied: Option<Seq>,
+    phase: Option<Phase>,
     /// The authored vocabulary, kept so `:` can switch views at runtime.
     ///
     /// Held rather than re-loaded per command: a `:` that re-read the spec
@@ -410,9 +419,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         // runs and shows "0 pods"); the read is retried on the next
         // refresh. Never a panic on a read error. A *spec* failure is
         // different in kind and is propagated above, not defaulted away.
-        let rows = env
-            .list_resources(ResourceKind::Pod, None)
-            .unwrap_or_default();
+        let rows = Vec::new();
         Ok(Self {
             env,
             // Attached by `with_permits` when the source can answer an
@@ -445,9 +452,10 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                     unbound_bancadas: &unbound_bancada_names(catalog),
                 },
             ),
-            absorb: None,
-            absorb_stop: None,
-            applied_generation: 0,
+            estoque: None,
+            vista: None,
+            applied: None,
+            phase: None,
             catalog: catalog.clone(),
             view_name: VIEW_NAME.to_owned(),
             prompt: None,
@@ -482,23 +490,6 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     #[must_use]
     pub fn session(&self) -> &S {
         &self.session
-    }
-
-    /// Re-read the pod table from the env, on the calling thread.
-    ///
-    /// A read failure leaves the current rows in place — a transient
-    /// apiserver error must not blank a table an operator is reading.
-    ///
-    /// **This blocks.** Against `KubeClusterEnv` it is an HTTPS round trip,
-    /// so calling it from the task that owns the terminal freezes input for
-    /// the duration. That is why the running app does not call it: the
-    /// steady-state path is [`Self::with_feed`], which does the same read on
-    /// tokio's blocking pool. This stays for a synchronous caller (a test, a
-    /// one-shot) that genuinely wants the read inline.
-    pub fn refresh(&mut self) {
-        if let Ok(rows) = self.env.list_resources(ResourceKind::Pod, None) {
-            self.set_rows(rows);
-        }
     }
 
     /// Install `rows` as the table contents. The single write path, so the
@@ -680,20 +671,31 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         // The read happens BEFORE the table is replaced, so a failed switch
         // leaves the operator on the view they had rather than on an empty
         // one captioned with an error.
-        let rows = match self.env.list_resources(kind, None) {
-            Ok(rows) => rows,
-            Err(e) => {
-                let mut m = String::from("cannot read `");
-                m.push_str(name);
-                m.push_str("`: ");
-                m.push_str(&e.to_string());
-                self.panel = Panel::Notice(m);
-                return true;
+        let key = KindKey::all(kind);
+        let (rows, phase, vista) = match self.estoque.as_ref() {
+            Some(armazem) => {
+                let parked = armazem
+                    .inventory()
+                    .into_iter()
+                    .find(|k| k.key == key.to_string())
+                    .map(|k| k.phase)
+                    .filter(|p| matches!(p, Phase::Dormant { .. }));
+                let lease = armazem.interest(key.clone());
+                let snap = lease.snapshot();
+                (
+                    snap.records.to_vec(),
+                    Some(parked.unwrap_or(snap.phase)),
+                    Some(Vista::new(key, lease)),
+                )
             }
+            None => (Vec::new(), None, None),
         };
         match PodTable::from_view(&self.catalog, name, self.filtered(rows)) {
             Ok(t) => {
                 self.table = t;
+                self.vista = vista;
+                self.applied = None;
+                self.phase = phase;
                 name.clone_into(&mut self.view_name);
                 self.bancadas = self
                     .catalog
@@ -710,13 +712,9 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         }
     }
 
-    /// Re-read the CURRENT view's kind — the generic peer of [`Self::refresh`],
-    /// which is pinned to pods.
     fn refresh_current_view(&mut self) {
-        let kind = self.table.kind();
-        if let Ok(rows) = self.env.list_resources(kind, None) {
-            self.set_rows(rows);
-        }
+        self.applied = None;
+        self.apply_feed();
     }
 
     /// Attach the per-verb authorization checker.
@@ -733,67 +731,66 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         self
     }
 
-    /// Attach a background absorb plane reading the same env every
-    /// `interval` (see [`crate::feed`]).
-    ///
-    /// Builder-style and opt-in: an app without a feed is input-only, which
-    /// is what every synchronous test wants and what `AsyncApp::wake` lowers
-    /// to `pending()` for. Requires a tokio runtime, which is why it is not
-    /// simply done in `try_new`.
-    ///
-    /// # Panics
-    ///
-    /// Never directly; `tokio::spawn` panics if called outside a runtime.
     #[must_use]
-    pub fn with_feed(mut self, interval: std::time::Duration) -> Self
+    pub fn with_estoque(mut self, armazem: KindArmazem) -> Self {
+        let key = KindKey::all(self.table.kind());
+        let lease = armazem.interest(key.clone());
+        self.vista = Some(Vista::new(key, lease));
+        self.estoque = Some(armazem);
+        self.applied = None;
+        self.apply_feed();
+        self
+    }
+
+    /// # Errors
+    ///
+    /// The Armazém configuration is invalid.
+    pub fn reading_env(
+        self,
+        every: Option<std::time::Duration>,
+        cfg: &izumi_armazem::ArmazemConfig,
+    ) -> Result<Self, izumi_armazem::ConfigError>
     where
         E: Send + Sync + 'static,
     {
-        let (despensa, publisher) = crate::absorb::channel();
-        self.absorb_stop = Some(crate::absorb::spawn_poll_absorber(
-            Arc::clone(&self.env),
-            ResourceKind::Pod,
-            interval,
-            publisher,
-        ));
-        self.absorb = Some(despensa);
-        self
+        let env: crate::armazem::SharedEnv = Arc::clone(&self.env) as crate::armazem::SharedEnv;
+        let estoque = crate::armazem::Estoque::over_env(env, every, cfg)?;
+        Ok(self.with_estoque(estoque.rows))
     }
 
-    /// Attach an already-running absorber — the path the live build takes, where
-    /// the producer is a `kube` watch stream rather than a poll.
+    /// # Errors
     ///
-    /// The app takes a [`Despensa`] and never learns which producer filled it.
-    /// That is the point: a consumer adapts by reading a declared capability,
-    /// never by branching on which backend it happens to have.
-    #[must_use]
-    pub fn with_absorber(mut self, despensa: Despensa) -> Self {
-        self.absorb = Some(despensa);
-        self
+    /// The Armazém configuration is invalid.
+    pub async fn settled_on_env(self) -> Result<Self, izumi_armazem::ConfigError>
+    where
+        E: Send + Sync + 'static,
+    {
+        let mut app = self.reading_env(None, &izumi_armazem::ArmazemConfig::default())?;
+        app.settle(std::time::Duration::from_secs(5)).await;
+        Ok(app)
     }
 
-    /// The attached absorber, if any — for a test asserting the plane is live,
-    /// and for the renderer to report its phase.
     #[must_use]
-    pub fn absorber(&self) -> Option<&Despensa> {
-        self.absorb.as_ref()
+    pub fn estoque(&self) -> Option<&KindArmazem> {
+        self.estoque.as_ref()
     }
 
-    /// How the absorbed reading currently stands, when there is one.
-    ///
-    /// This is the axis banken has never had: a caller can no longer look at
-    /// rows without being able to ask what claim is being made about them.
     #[must_use]
-    pub fn sync_phase(&self) -> Option<SyncPhase> {
-        self.absorb.as_ref().map(|d| d.snapshot().phase().clone())
+    pub fn viewing(&self) -> Option<&KindKey> {
+        self.vista.as_ref().map(|v| &v.key)
+    }
+
+    #[must_use]
+    pub fn sync_phase(&self) -> Option<Phase> {
+        self.phase.clone()
     }
 
     /// Pull whatever has been absorbed into the table.
     ///
-    /// The `&mut self` apply half of the wakeup. Separate from
-    /// [`Self::refresh`] because it performs **no read** — the read already
-    /// happened, off this task. A no-op when there is no absorber.
-    /// # Cost, measured — and why the generation gate is here
+    /// The `&mut self` apply half of the wakeup. It performs **no read** — the
+    /// read already happened, off this task. A no-op when no view is open.
+    ///
+    /// # Cost, measured — and why the sequence gate is here
     ///
     /// `set_rows` takes a `Vec<Row>`, so reaching it from the published
     /// `Arc<[Row]>` costs a **deep clone of every `Row` and every `String` in
@@ -806,9 +803,9 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     /// change and must not be made from this repo (QUADRO T1: widgets live in
     /// egaku, never in an app). `pending-banken: adopt-arc-rows`.
     ///
-    /// The gate is not redundant with the absorb plane's content hash: the hash
-    /// decides whether to **wake**, this decides whether to **rebuild the
-    /// table**. They are different questions the moment anything other than a
+    /// The gate is not redundant with the shelf's content-gated sequence: the
+    /// sequence decides whether to **wake**, this decides whether to **rebuild
+    /// the table**. They are different questions the moment anything other than a
     /// wake calls this — and `on_wake` is not the only caller a future arm can
     /// add.
     ///
@@ -818,27 +815,30 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     /// the selection, so an earlier cursor-survival test for this gate **passed
     /// with the gate deleted** and was vacuous. `a_redundant_apply_allocates_nothing`
     /// asserts on a counting allocator instead; deleting the arm below turns it
-    /// red with a non-zero byte count (measured: 784 B on the fixture).
+    /// red with a non-zero byte count (measured: 317 B on the ticking fixture).
     pub fn apply_feed(&mut self) {
-        let Some(despensa) = self.absorb.as_ref() else {
+        let Some(vista) = self.vista.as_mut() else {
             return;
         };
-        let snapshot = despensa.snapshot();
-        let generation = snapshot.generation();
-        // `0` is the pre-absorption generation, and `applied_generation` starts
-        // there too — so an absorber that has published nothing yet correctly
-        // does no work, rather than rebuilding the table from an empty set.
-        if generation == self.applied_generation {
+        let lease = vista.lease.get_mut();
+        let head = match lease.since(Seq(u64::MAX)) {
+            Since::Changes { head, .. } => head,
+            Since::Gap(snap) => snap.seq,
+        };
+        if self.applied == Some(head) {
             return;
         }
-        self.applied_generation = generation;
-        self.set_rows(snapshot.rows().to_vec());
+        let snap = lease.snapshot();
+        self.applied = Some(snap.seq);
+        self.phase = Some(snap.phase);
+        self.set_rows(snap.records.to_vec());
     }
 
-    /// The stop flag for the poll absorber, if one is running.
-    #[must_use]
-    pub fn absorb_stop(&self) -> Option<&crate::absorb::PollGuard> {
-        self.absorb_stop.as_ref()
+    pub async fn settle(&mut self, within: std::time::Duration) {
+        if let Some(vista) = self.vista.as_mut() {
+            vista.lease.get_mut().settled(within).await;
+        }
+        self.apply_feed();
     }
 
     /// The current pod table (for tests + the renderer).
@@ -1176,8 +1176,10 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         // always-visible surface, so a degraded replica takes it over: the
         // rows are the last good set and still worth reading, but the claim
         // being made about them has changed and must LOOK changed.
-        let bar = if matches!(phase, Some(SyncPhase::Degraded { .. })) {
+        let bar = if matches!(phase, Some(Phase::Degraded { .. })) {
             Style::default().fg(Color::White).bg(Color::Red)
+        } else if matches!(phase, Some(Phase::Dormant { .. })) {
+            Style::default().fg(Color::Black).bg(Color::Yellow)
         } else {
             Style::default().fg(Color::Black).bg(Color::DarkGrey)
         };
@@ -1223,30 +1225,25 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
 ///
 /// `None` — no absorber attached — prints the bare count, which is honest:
 /// there is no stream to make a claim about.
-fn pod_count_label(n: usize, phase: Option<&SyncPhase>) -> String {
+fn pod_count_label(n: usize, phase: Option<&Phase>) -> String {
     let mut s = String::new();
-    match phase {
-        // Before anything has arrived, the count is not the news.
-        Some(SyncPhase::Absorbing) if n == 0 => {
-            s.push_str("absorbing…");
-            return s;
-        }
-        _ => {}
+    if matches!(phase, Some(Phase::Absorbing)) && n == 0 {
+        s.push_str("absorbing…");
+        return s;
     }
     s.push_str(&n.to_string());
     s.push_str(" pods");
     match phase {
-        Some(SyncPhase::Absorbing) => s.push_str(" (absorbing…)"),
-        // The cause, not just the fact: "the watch stopped" and "the watch
-        // stopped because your token expired" lead to different next actions.
-        Some(SyncPhase::Degraded { cause }) => {
+        Some(Phase::Absorbing) => s.push_str(" (absorbing…)"),
+        Some(Phase::Degraded { cause }) => {
             s.push_str(" · STALE — ");
             s.push_str(cause);
         }
-        // `Synced` is the unmarked case on purpose. Labelling the healthy
-        // state trains the eye to skip the label, which is precisely when the
-        // unhealthy one stops being read.
-        Some(SyncPhase::Synced) | None => {}
+        Some(Phase::Dormant { .. }) => {
+            s.push_str(" · DORMANT — the stream is parked; rows as of the park");
+        }
+        Some(Phase::Direct) => s.push_str(" (direct read)"),
+        Some(Phase::Live) | None => {}
     }
     s
 }
@@ -1257,22 +1254,25 @@ fn pod_count_label(n: usize, phase: Option<&SyncPhase>) -> String {
 /// responses — keep waiting, look elsewhere, fix the connection — and an
 /// empty grid says none of them. This is the same rule the status line
 /// follows one row down, applied where the operator is actually looking.
-fn draw_empty_state(buf: &mut Buffer, y: u16, width: u16, height: u16, phase: Option<&SyncPhase>) {
+fn draw_empty_state(buf: &mut Buffer, y: u16, width: u16, height: u16, phase: Option<&Phase>) {
     if width == 0 || height == 0 {
         return;
     }
     let (text, style) = match phase {
-        Some(SyncPhase::Absorbing) => (
+        Some(Phase::Absorbing) => (
             "  absorbing — waiting for the initial set…".to_owned(),
             Style::default().fg(Color::Yellow),
         ),
-        Some(SyncPhase::Degraded { cause }) => {
+        Some(Phase::Degraded { cause }) => {
             let mut s = String::from("  the watch stopped: ");
             s.push_str(cause);
             (s, Style::default().fg(Color::Red))
         }
-        // Distinct from `Absorbing` on purpose: this one IS an answer.
-        Some(SyncPhase::Synced) => (
+        Some(Phase::Dormant { .. }) => (
+            "  dormant — the stream is parked and nothing was held".to_owned(),
+            Style::default().fg(Color::Yellow),
+        ),
+        Some(Phase::Live | Phase::Direct) => (
             "  no pods in this cluster".to_owned(),
             Style::default().fg(Color::DarkGrey),
         ),
@@ -1813,8 +1813,8 @@ impl<E: ClusterEnv + Send + Sync, S: SessionEnv + Send + Sync> AsyncApp for Bank
     /// exactly the pre-feed behaviour, so an app built without one runs
     /// byte-identically to how it ran before this existed.
     async fn wake(&self) {
-        match &self.absorb {
-            Some(d) => d.changed().await,
+        match &self.vista {
+            Some(v) => v.changed().await,
             None => std::future::pending().await,
         }
     }
@@ -1846,14 +1846,17 @@ mod permit_gate_tests {
         }
     }
 
-    fn app_with(permit: Option<Permit>) -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
+    async fn app_with(permit: Option<Permit>) -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
         let a = BankenApp::try_new(
             FixtureClusterEnv::new(),
             MockSessionEnv::new(),
             OperatorId::new("drzzln").expect("non-blank"),
             "fixture".to_owned(),
         )
-        .expect("app");
+        .expect("app")
+        .settled_on_env()
+        .await
+        .expect("the default Armazém configuration is valid");
         match permit {
             Some(p) => a.with_permits(Arc::new(Fixed(p)) as Arc<dyn PermitEnv + Send + Sync>),
             None => a,
@@ -1864,11 +1867,12 @@ mod permit_gate_tests {
     /// rather than draw an empty table — the two are indistinguishable
     /// afterwards, and an empty one sends the operator to debug a healthy
     /// workload.
-    #[test]
-    fn a_denied_view_says_so_instead_of_drawing_an_empty_table() {
+    #[tokio::test]
+    async fn a_denied_view_says_so_instead_of_drawing_an_empty_table() {
         let mut a = app_with(Some(Permit::Denied {
             reason: "no RBAC for services".into(),
-        }));
+        }))
+        .await;
         let before = a.view_name().to_owned();
         a.switch_view("svc");
 
@@ -1893,11 +1897,12 @@ mod permit_gate_tests {
     /// **`Unknown` must NOT gate.** An inconclusive check is not evidence the
     /// operator lacks access, and refusing on it would hide a view they can
     /// use — with no way for them to tell why.
-    #[test]
-    fn an_unknown_permit_lets_the_view_through() {
+    #[tokio::test]
+    async fn an_unknown_permit_lets_the_view_through() {
         let mut a = app_with(Some(Permit::Unknown {
             why: "the review request timed out".into(),
-        }));
+        }))
+        .await;
         a.switch_view("svc");
         assert!(
             !matches!(&a.panel, Panel::Notice(m) if m.contains("not readable")),
@@ -1908,9 +1913,9 @@ mod permit_gate_tests {
     /// No checker attached means DO NOT GATE, never "denied". The fixture has
     /// no apiserver, and a view gated on a fabricated permit is worse than an
     /// ungated one.
-    #[test]
-    fn an_absent_checker_does_not_gate() {
-        let mut a = app_with(None);
+    #[tokio::test]
+    async fn an_absent_checker_does_not_gate() {
+        let mut a = app_with(None).await;
         a.switch_view("svc");
         assert!(
             !matches!(&a.panel, Panel::Notice(m) if m.contains("not readable")),
@@ -1920,10 +1925,10 @@ mod permit_gate_tests {
 
     /// An ALLOWED permit is transparent — the switch behaves exactly as it did
     /// before the gate existed.
-    #[test]
-    fn an_allowed_permit_is_transparent() {
-        let mut gated = app_with(Some(Permit::Allowed));
-        let mut ungated = app_with(None);
+    #[tokio::test]
+    async fn an_allowed_permit_is_transparent() {
+        let mut gated = app_with(Some(Permit::Allowed)).await;
+        let mut ungated = app_with(None).await;
         gated.switch_view("svc");
         ungated.switch_view("svc");
         assert_eq!(gated.view_name(), ungated.view_name());
@@ -1948,11 +1953,12 @@ mod tests {
     use super::*;
     use crate::fixture::FixtureClusterEnv;
     use banken_spec::testing::MockSessionEnv;
+    use banken_spec::types::ResourceKind;
 
     /// The app over the fixture cluster and a **recording** session env, so
     /// every test can assert what a confirm did or did not open. No tear
     /// daemon, no subprocess, no PTY.
-    fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
+    async fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
         BankenApp::try_new(
             FixtureClusterEnv::new(),
             MockSessionEnv::new(),
@@ -1960,24 +1966,27 @@ mod tests {
             "source: fixture",
         )
         .expect("the shipped vocabulary must build an app")
+        .settled_on_env()
+        .await
+        .expect("the default Armazém configuration is valid")
     }
 
     /// The same app, told which cluster it is reading — what a bancada needs
     /// to pre-warm a session on the RIGHT one.
-    fn app_on(cluster: &str) -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
-        app().with_cluster(cluster)
+    async fn app_on(cluster: &str) -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
+        app().await.with_cluster(cluster)
     }
 
-    #[test]
-    fn app_reads_the_pod_table_on_construction() {
-        let a = app();
+    #[tokio::test]
+    async fn app_reads_the_pod_table_on_construction() {
+        let a = app().await;
         assert_eq!(a.table().view().rows().len(), 5);
         assert!(a.overlay().is_none(), "no overlay at rest");
     }
 
-    #[test]
-    fn navigation_moves_the_selection() {
-        let mut a = app();
+    #[tokio::test]
+    async fn navigation_moves_the_selection() {
+        let mut a = app().await;
         // Start at row 0, move down twice → row 2, up once → row 1.
         assert_eq!(a.table().view().selected_index(), 0);
         a.apply_action(Action::SelectNext);
@@ -1987,9 +1996,9 @@ mod tests {
         assert_eq!(a.table().view().selected_index(), 1);
     }
 
-    #[test]
-    fn declare_action_shows_a_full_manifest_overlay() {
-        let mut a = app();
+    #[tokio::test]
+    async fn declare_action_shows_a_full_manifest_overlay() {
+        let mut a = app().await;
         a.apply_action(Action::DeclareScale);
         match a.overlay() {
             Some(ActionResult::DeclarePreview { full_manifest, .. }) => {
@@ -1999,26 +2008,26 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dismiss_clears_the_overlay() {
-        let mut a = app();
+    #[tokio::test]
+    async fn dismiss_clears_the_overlay() {
+        let mut a = app().await;
         a.apply_action(Action::ObserveLogs);
         assert!(a.overlay().is_some());
         a.apply_action(Action::Dismiss);
         assert!(a.overlay().is_none());
     }
 
-    #[test]
-    fn quit_sets_done() {
-        let mut a = app();
+    #[tokio::test]
+    async fn quit_sets_done() {
+        let mut a = app().await;
         assert!(!a.should_quit());
         a.apply_action(Action::Quit);
         assert!(a.should_quit());
     }
 
-    #[test]
-    fn keymap_binds_the_postigo_chords() {
-        let a = app();
+    #[tokio::test]
+    async fn keymap_binds_the_postigo_chords() {
+        let a = app().await;
         assert_eq!(
             act(
                 a.keymap(),
@@ -2046,9 +2055,9 @@ mod tests {
     /// on every chord — otherwise the legend advertises one gate and the
     /// keypress crosses another. Both sides now go through awase's typed
     /// `Hotkey`, so the comparison is on typed values, not strings.
-    #[test]
-    fn app_keymap_agrees_with_the_authored_chords() {
-        let a = app();
+    #[tokio::test]
+    async fn app_keymap_agrees_with_the_authored_chords() {
+        let a = app().await;
         let authored = banken_spec::load_actions().expect("authored actions load");
         for (name, expected_action) in [
             ("view-logs", Action::ObserveLogs),
@@ -2086,9 +2095,9 @@ mod tests {
 
     /// THE GATE. A held postigo action key is one event per OS repeat tick;
     /// without the gate a held `s` fires N full-manifest lowerings.
-    #[test]
-    fn a_held_postigo_action_key_is_debounced() {
-        let mut a = app();
+    #[tokio::test]
+    async fn a_held_postigo_action_key_is_debounced() {
+        let mut a = app().await;
         let t0 = Instant::now();
         assert!(
             a.dispatch_action_at(Action::DeclareScale, t0),
@@ -2112,9 +2121,9 @@ mod tests {
 
     /// Each gated action has an INDEPENDENT clock — holding `s` must not
     /// swallow a deliberate `shift+s`.
-    #[test]
-    fn gated_actions_have_independent_clocks() {
-        let mut a = app();
+    #[tokio::test]
+    async fn gated_actions_have_independent_clocks() {
+        let mut a = app().await;
         let t0 = Instant::now();
         assert!(a.dispatch_action_at(Action::DeclareScale, t0));
         assert!(
@@ -2125,9 +2134,9 @@ mod tests {
 
     // ── bancada: the banken → tear/mado bridge at the keystroke ──────
 
-    #[test]
-    fn keymap_binds_the_authored_bancada_chords() {
-        let a = app();
+    #[tokio::test]
+    async fn keymap_binds_the_authored_bancada_chords() {
+        let a = app().await;
         assert_eq!(a.bancadas().len(), 2, "both recipes launch from :pods");
         assert_eq!(
             act(
@@ -2152,9 +2161,9 @@ mod tests {
     /// **THE GATE.** The pre-warmed session plan carries the cluster banken
     /// is reading, the selected pod's namespace, and the selected pod — the
     /// whole point of the bridge.
-    #[test]
-    fn the_bancada_chord_plans_a_prewarmed_session_on_the_right_cluster() {
-        let mut a = app_on("alpha-eks");
+    #[tokio::test]
+    async fn the_bancada_chord_plans_a_prewarmed_session_on_the_right_cluster() {
+        let mut a = app_on("alpha-eks").await;
         a.apply_action(Action::OpenBancada(0));
         match a.overlay() {
             Some(ActionResult::BancadaPlan {
@@ -2185,9 +2194,9 @@ mod tests {
     /// **THE GATE.** The break-glass recipe's overlay states BREAK-GLASS. Its
     /// class is derived from the `kubectl exec` pane, so a recipe cannot
     /// present a live-effect session as a convenience.
-    #[test]
-    fn the_break_glass_bancada_overlay_states_the_gate_it_crosses() {
-        let mut a = app_on("alpha-eks");
+    #[tokio::test]
+    async fn the_break_glass_bancada_overlay_states_the_gate_it_crosses() {
+        let mut a = app_on("alpha-eks").await;
         a.apply_action(Action::OpenBancada(1));
         match a.overlay() {
             Some(ActionResult::BancadaPlan {
@@ -2210,9 +2219,9 @@ mod tests {
     /// pre-warm a session rather than opening one on whatever the operator's
     /// kubeconfig currently points at. A wrong-cluster session is worse than
     /// no session.
-    #[test]
-    fn without_a_known_cluster_the_bancada_refuses_by_name() {
-        let mut a = app(); // no `with_cluster`
+    #[tokio::test]
+    async fn without_a_known_cluster_the_bancada_refuses_by_name() {
+        let mut a = app().await; // no `with_cluster`
         a.apply_action(Action::OpenBancada(0));
         match a.overlay() {
             Some(ActionResult::Error(msg)) => {
@@ -2247,9 +2256,9 @@ mod tests {
     /// ```
     ///
     /// so it is checking the wire, not a shape nothing can violate.
-    #[test]
-    fn confirming_a_bancada_opens_it_through_the_session_seam() {
-        let mut a = app_on("alpha-eks");
+    #[tokio::test]
+    async fn confirming_a_bancada_opens_it_through_the_session_seam() {
+        let mut a = app_on("alpha-eks").await;
 
         // Resolving alone touches NOTHING. This half is what makes the
         // confirm step meaningful rather than decorative.
@@ -2333,9 +2342,9 @@ mod tests {
     /// WITNESSED arm, carrying the authored witness + runbook. The app adds
     /// no legality of its own — this is `bancada::open`'s discipline reaching
     /// the keystroke intact.
-    #[test]
-    fn confirming_a_break_glass_bancada_stages_through_the_witnessed_arm() {
-        let mut a = app_on("alpha-eks");
+    #[tokio::test]
+    async fn confirming_a_break_glass_bancada_stages_through_the_witnessed_arm() {
+        let mut a = app_on("alpha-eks").await;
         a.apply_action(Action::OpenBancada(1));
 
         // M0 has no container picker, so a recipe naming `(:context
@@ -2381,9 +2390,9 @@ mod tests {
 
     /// `enter` anywhere but a bancada preview is a deliberate no-op — it must
     /// not open anything, and it must not raise an error panel either.
-    #[test]
-    fn confirm_outside_a_preview_opens_nothing() {
-        let mut a = app_on("alpha-eks");
+    #[tokio::test]
+    async fn confirm_outside_a_preview_opens_nothing() {
+        let mut a = app_on("alpha-eks").await;
         a.apply_action(Action::Confirm);
         assert_eq!(a.session().sessions.borrow().len(), 0);
         assert!(a.overlay().is_none(), "and it raises no panel");
@@ -2396,9 +2405,9 @@ mod tests {
 
     /// Dismissing a preview must not open it. The escape hatch has to be a
     /// real escape hatch.
-    #[test]
-    fn dismissing_a_preview_opens_nothing() {
-        let mut a = app_on("alpha-eks");
+    #[tokio::test]
+    async fn dismissing_a_preview_opens_nothing() {
+        let mut a = app_on("alpha-eks").await;
         a.apply_action(Action::OpenBancada(0));
         a.apply_action(Action::Dismiss);
         assert!(a.pending_bancada().is_none());
@@ -2411,9 +2420,9 @@ mod tests {
     /// The authored `return` chord reaches the runtime as `enter` — the ONE
     /// measured awase→egaku-term translation this binding depends on. Without
     /// it the confirm key would be authored and unreachable.
-    #[test]
-    fn the_authored_confirm_chord_binds_to_enter() {
-        let a = app();
+    #[tokio::test]
+    async fn the_authored_confirm_chord_binds_to_enter() {
+        let a = app().await;
         assert_eq!(
             act(
                 a.keymap(),
@@ -2425,10 +2434,10 @@ mod tests {
 
     /// A bancada opens a whole session — the most expensive thing a held key
     /// could repeat.
-    #[test]
-    fn opening_a_bancada_is_repeat_gated() {
+    #[tokio::test]
+    async fn opening_a_bancada_is_repeat_gated() {
         assert!(Action::OpenBancada(0).is_repeat_gated());
-        let mut a = app_on("alpha-eks");
+        let mut a = app_on("alpha-eks").await;
         let t0 = Instant::now();
         assert!(a.dispatch_action_at(Action::OpenBancada(0), t0));
         assert!(
@@ -2448,9 +2457,9 @@ mod tests {
     /// **THE GATE.** The authored help chord opens the page, and the page
     /// shows the authored vocabulary. A help key that opened a hand-written
     /// blurb would be the rot this whole derivation exists to prevent.
-    #[test]
-    fn the_authored_help_chord_opens_the_derived_page() {
-        let mut a = app();
+    #[tokio::test]
+    async fn the_authored_help_chord_opens_the_derived_page() {
+        let mut a = app().await;
         assert!(!help_frame(&a).contains("NAVIGATION"), "closed at rest");
 
         // Through the KEYMAP, not by constructing the action — so this also
@@ -2475,9 +2484,9 @@ mod tests {
     /// `f1` is the second authored chord for the same intent — the `down`/`j`
     /// shape. It exists because `?` (the k9s idiom) is not authorable on the
     /// pinned awase; see `specs/navkeys.lisp`.
-    #[test]
-    fn the_second_authored_help_chord_opens_it_too() {
-        let mut a = app();
+    #[tokio::test]
+    async fn the_second_authored_help_chord_opens_it_too() {
+        let mut a = app().await;
         let action = *a
             .keymap()
             .find_binding(
@@ -2493,9 +2502,9 @@ mod tests {
     /// Help OWNS the navigation keys while it is up. Without this, `j` would
     /// scroll nothing and silently move a cursor the operator cannot see —
     /// so closing help would leave them somewhere else in the table.
-    #[test]
-    fn navigation_scrolls_the_help_page_and_leaves_the_cursor_alone() {
-        let mut a = app();
+    #[tokio::test]
+    async fn navigation_scrolls_the_help_page_and_leaves_the_cursor_alone() {
+        let mut a = app().await;
         a.apply_action(Action::SelectNext); // move the table cursor first
         let cursor = a.table().view().selected_index();
         assert_eq!(cursor, 1);
@@ -2516,10 +2525,10 @@ mod tests {
 
     /// The same key in and out — what an operator tries first — and `esc`
     /// too, since that is what closes every other overlay.
-    #[test]
-    fn help_closes_on_the_help_chord_and_on_dismiss() {
+    #[tokio::test]
+    async fn help_closes_on_the_help_chord_and_on_dismiss() {
         for closer in [Action::Help, Action::Dismiss] {
-            let mut a = app();
+            let mut a = app().await;
             a.apply_action(Action::Help);
             assert!(help_frame(&a).contains("NAVIGATION"));
             a.apply_action(closer);
@@ -2533,9 +2542,9 @@ mod tests {
     /// An action pressed from the help page ACTS rather than being swallowed.
     /// A modal that eats every key is a modal an operator has to escape from
     /// before doing the thing they already decided to do.
-    #[test]
-    fn a_postigo_chord_from_the_help_page_acts_and_closes_it() {
-        let mut a = app();
+    #[tokio::test]
+    async fn a_postigo_chord_from_the_help_page_acts_and_closes_it() {
+        let mut a = app().await;
         a.apply_action(Action::Help);
         a.apply_action(Action::ObserveLogs);
         let frame = help_frame(&a);
@@ -2547,9 +2556,9 @@ mod tests {
     /// at is a page nobody opens — and this is the ONE chord whose
     /// discoverability is not optional, because it is the way in to all the
     /// others.
-    #[test]
-    fn the_status_line_advertises_the_help_chord() {
-        let a = app();
+    #[tokio::test]
+    async fn the_status_line_advertises_the_help_chord() {
+        let a = app().await;
         let catalog = banken_spec::load_catalog().expect("the shipped vocabulary resolves");
         let legend = key_legend(&catalog);
         assert!(legend.contains("h:help"), "got: {legend}");
@@ -2568,11 +2577,225 @@ mod tests {
     /// a frame. The whole point is to drive the *published* plane, not the
     /// table directly: the claim under test is what the operator sees about
     /// rows they did not get.
-    fn frame_with(rows: Vec<banken_spec::env::Row>, phase: crate::absorb::SyncPhase) -> String {
-        let (despensa, publisher) = crate::absorb::channel();
-        publisher.publish(rows, phase);
-        let mut a = app().with_absorber(despensa);
+    enum Stage {
+        Absorbing,
+        Live,
+        Degraded(&'static str),
+    }
+
+    struct Staged {
+        rows: Vec<banken_spec::env::Row>,
+        stage: Stage,
+    }
+
+    impl izumi_armazem::Source for Staged {
+        type Key = KindKey;
+        type Record = Row;
+
+        fn open(
+            &self,
+            _key: KindKey,
+            _resume: Option<String>,
+            feed: izumi_armazem::Feed<Row>,
+        ) -> izumi_armazem::BoxFuture<()> {
+            let rows = self.rows.clone();
+            let stage = match self.stage {
+                Stage::Absorbing => None,
+                Stage::Live => Some(None),
+                Stage::Degraded(c) => Some(Some(c)),
+            };
+            Box::pin(async move {
+                match stage {
+                    None => {}
+                    Some(None) => {
+                        feed.reset(rows);
+                        feed.live();
+                    }
+                    Some(Some(cause)) => {
+                        feed.reset(rows);
+                        feed.degraded(cause);
+                    }
+                }
+                feed.until_stopped().await;
+            })
+        }
+
+        fn fetch(&self, _key: KindKey) -> izumi_armazem::BoxFuture<Result<Vec<Row>, String>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    struct Witnessed {
+        inner: FixtureClusterEnv,
+        threads: std::sync::Mutex<Vec<std::thread::ThreadId>>,
+    }
+
+    impl ClusterEnv for Witnessed {
+        fn grip(
+            &self,
+            id: &banken_spec::env::ObjectId,
+        ) -> Result<banken_spec::env::Grip, banken_spec::env::GripError> {
+            self.inner.grip(id)
+        }
+        fn list_resources(
+            &self,
+            kind: ResourceKind,
+            ns: Option<&str>,
+        ) -> Result<Vec<Row>, SpecError> {
+            if let Ok(mut t) = self.threads.lock() {
+                t.push(std::thread::current().id());
+            }
+            self.inner.list_resources(kind, ns)
+        }
+        fn get_resource(
+            &self,
+            kind: ResourceKind,
+            name: &str,
+            ns: Option<&str>,
+        ) -> Result<Row, SpecError> {
+            self.inner.get_resource(kind, name, ns)
+        }
+        fn logs(
+            &self,
+            pod: &str,
+            ns: &str,
+            follow: bool,
+        ) -> Result<banken_spec::env::LogStream, SpecError> {
+            self.inner.logs(pod, ns, follow)
+        }
+        fn events(&self, ns: Option<&str>) -> Result<Vec<banken_spec::env::Event>, SpecError> {
+            self.inner.events(ns)
+        }
+        fn topology(
+            &self,
+            root: &banken_spec::env::ResourceRef,
+        ) -> Result<banken_spec::env::DepTree, SpecError> {
+            self.inner.topology(root)
+        }
+        fn health_signals(
+            &self,
+            w: &banken_spec::env::Workload,
+        ) -> Result<banken_spec::env::HealthReading, SpecError> {
+            self.inner.health_signals(w)
+        }
+        fn watch(
+            &self,
+            kind: ResourceKind,
+            ns: Option<&str>,
+        ) -> Result<banken_spec::env::WatchStream, SpecError> {
+            self.inner.watch(kind, ns)
+        }
+        fn declare(
+            &self,
+            change: banken_spec::env::DeclareChange,
+        ) -> Result<banken_spec::env::ChangeRef, SpecError> {
+            self.inner.declare(change)
+        }
+        fn break_glass(
+            &self,
+            action: banken_spec::env::WitnessedAction,
+        ) -> Result<banken_spec::env::GlassRecord, SpecError> {
+            self.inner.break_glass(action)
+        }
+    }
+
+    #[tokio::test]
+    async fn no_view_reads_the_env_on_the_app_task() {
+        let env = Arc::new(Witnessed {
+            inner: FixtureClusterEnv::new(),
+            threads: std::sync::Mutex::new(Vec::new()),
+        });
+        let app_thread = std::thread::current().id();
+        let mut a = BankenApp::<Witnessed, MockSessionEnv>::try_new(
+            Arc::clone(&env),
+            MockSessionEnv::new(),
+            OperatorId::new("drzzln").expect("a literal witness is non-blank"),
+            "source: fixture",
+        )
+        .expect("app")
+        .settled_on_env()
+        .await
+        .expect("config");
+        assert_eq!(a.table().view().rows().len(), 5);
+        assert!(a.switch_view("deploy"));
+        assert!(a.switch_view("pods"));
+        a.filter = "catch".into();
+        a.refresh_current_view();
+        a.settle(Duration::from_secs(5)).await;
         a.apply_feed();
+        let threads = env.threads.lock().expect("lock").clone();
+        assert!(
+            !threads.is_empty(),
+            "the absorb plane must have read the env"
+        );
+        assert!(
+            threads.iter().all(|t| *t != app_thread),
+            "a view read the env on the app task: {} of {} reads ran on it",
+            threads.iter().filter(|t| **t == app_thread).count(),
+            threads.len()
+        );
+    }
+
+    fn status_of(a: &BankenApp<FixtureClusterEnv, MockSessionEnv>) -> String {
+        let mut backend = egaku_term::TestBackend::new(160, 12);
+        backend.draw(|buf| a.render(buf));
+        backend.to_lines().last().cloned().unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn a_parked_view_renders_dormant_never_as_live() {
+        let cfg = izumi_armazem::ArmazemConfig {
+            linger_ms: 0,
+            policy: izumi_armazem::PolicyEngine::Native,
+            ..izumi_armazem::ArmazemConfig::default()
+        };
+        let mut a = BankenApp::try_new(
+            FixtureClusterEnv::new(),
+            MockSessionEnv::new(),
+            OperatorId::new("drzzln").expect("a literal witness is non-blank"),
+            "source: fixture",
+        )
+        .expect("app")
+        .reading_env(None, &cfg)
+        .expect("config");
+        a.settle(Duration::from_secs(5)).await;
+        let live = status_of(&a);
+        assert!(live.contains("5 pods"), "{live}");
+        assert!(!live.to_lowercase().contains("dormant"), "{live}");
+
+        assert!(a.switch_view("deploy"));
+        let parked = a.estoque().expect("estoque").tick().expect("native policy");
+        assert_eq!(parked, [izumi_armazem::Action::Park("pod/*".into())]);
+
+        assert!(a.switch_view("pods"));
+        let back = status_of(&a);
+        assert!(
+            back.contains("DORMANT"),
+            "a parked stream's rows must be labelled dormant, not drawn as a live table: {back}"
+        );
+        assert!(back.contains("5 pods"), "the dormant rows are kept: {back}");
+
+        a.settle(Duration::from_secs(5)).await;
+        let resumed = status_of(&a);
+        assert!(!resumed.contains("DORMANT"), "{resumed}");
+        assert!(resumed.contains("5 pods"), "{resumed}");
+    }
+
+    async fn frame_with(rows: Vec<banken_spec::env::Row>, stage: Stage) -> String {
+        let armazem = izumi_armazem::Armazem::new(
+            crate::armazem::Fonte::new(Staged { rows, stage }),
+            izumi_armazem::ArmazemConfig::default(),
+        )
+        .expect("default config");
+        let mut a = BankenApp::try_new(
+            FixtureClusterEnv::new(),
+            MockSessionEnv::new(),
+            OperatorId::new("drzzln").expect("a literal witness is non-blank"),
+            "source: fixture",
+        )
+        .expect("app")
+        .with_estoque(armazem);
+        a.settle(Duration::from_millis(200)).await;
         let mut backend = egaku_term::TestBackend::new(120, 12);
         backend.draw(|buf| a.render(buf));
         backend.to_lines().join("\n")
@@ -2584,9 +2807,9 @@ mod tests {
     /// not earned. `SyncPhase::Absorbing` existed the whole time and **nothing
     /// rendered it**: the axis was carried to the app and dropped one step
     /// short of the operator's eye.
-    #[test]
-    fn an_absorbing_table_never_claims_zero_pods() {
-        let frame = frame_with(Vec::new(), crate::absorb::SyncPhase::Absorbing);
+    #[tokio::test]
+    async fn an_absorbing_table_never_claims_zero_pods() {
+        let frame = frame_with(Vec::new(), Stage::Absorbing).await;
         assert!(
             frame.contains("absorbing"),
             "the operator must be told banken is still looking: {frame}",
@@ -2600,9 +2823,9 @@ mod tests {
     /// The other half, and the reason `Absorbing` and `Synced`-with-no-rows
     /// are separate variants: this one IS an answer, and the operator should
     /// stop waiting for it.
-    #[test]
-    fn a_synced_empty_table_says_the_cluster_is_empty() {
-        let frame = frame_with(Vec::new(), crate::absorb::SyncPhase::Synced);
+    #[tokio::test]
+    async fn a_synced_empty_table_says_the_cluster_is_empty() {
+        let frame = frame_with(Vec::new(), Stage::Live).await;
         assert!(frame.contains("no pods"), "{frame}");
         assert!(
             !frame.contains("absorbing"),
@@ -2613,16 +2836,15 @@ mod tests {
     /// A dead watch must not render like a live one. The rows are kept — a
     /// transient apiserver failure must not erase a table someone is reading —
     /// so it is the *claim* that has to change, and visibly.
-    #[test]
-    fn a_degraded_feed_shows_the_cause_beside_the_stale_rows() {
+    #[tokio::test]
+    async fn a_degraded_feed_shows_the_cause_beside_the_stale_rows() {
         let frame = frame_with(
             crate::fixture::FixtureClusterEnv::new()
                 .list_resources(ResourceKind::Pod, None)
                 .expect("the fixture reads"),
-            crate::absorb::SyncPhase::Degraded {
-                cause: "token expired".into(),
-            },
-        );
+            Stage::Degraded("token expired"),
+        )
+        .await;
         assert!(frame.contains("STALE"), "{frame}");
         assert!(
             frame.contains("token expired"),
@@ -2637,13 +2859,13 @@ mod tests {
     /// `Synced` is deliberately the unmarked case: labelling the healthy state
     /// trains the eye to skip the label, which is exactly when the unhealthy
     /// one stops being read.
-    #[test]
-    fn a_healthy_feed_adds_no_noise_to_the_count() {
+    #[tokio::test]
+    async fn a_healthy_feed_adds_no_noise_to_the_count() {
         let rows = crate::fixture::FixtureClusterEnv::new()
             .list_resources(ResourceKind::Pod, None)
             .expect("the fixture reads");
         let n = rows.len();
-        let frame = frame_with(rows, crate::absorb::SyncPhase::Synced);
+        let frame = frame_with(rows, Stage::Live).await;
         let mut expected = n.to_string();
         expected.push_str(" pods");
         assert!(frame.contains(&expected), "{frame}");
@@ -2690,9 +2912,9 @@ mod tests {
 
     /// Navigation is deliberately NOT gated — throttling `j`/`k` would make
     /// the table feel broken, and gating what is cheap is a regression.
-    #[test]
-    fn navigation_is_not_repeat_gated() {
-        let mut a = app();
+    #[tokio::test]
+    async fn navigation_is_not_repeat_gated() {
+        let mut a = app().await;
         let t0 = Instant::now();
         for i in 0..4u64 {
             assert!(
@@ -2773,7 +2995,7 @@ mod prompt_tests {
     use crate::fixture::FixtureClusterEnv;
     use banken_spec::testing::MockSessionEnv;
 
-    fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
+    async fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
         BankenApp::try_new(
             FixtureClusterEnv::new(),
             MockSessionEnv::new(),
@@ -2781,6 +3003,9 @@ mod prompt_tests {
             "source: fixture",
         )
         .expect("the shipped vocabulary must build an app")
+        .settled_on_env()
+        .await
+        .expect("the default Armazém configuration is valid")
     }
 
     fn type_str(a: &mut BankenApp<FixtureClusterEnv, MockSessionEnv>, s: &str) {
@@ -2793,9 +3018,9 @@ mod prompt_tests {
     /// letters — `o` sorts, `s` declares, `q` quits — and those are consulted
     /// before `on_text`. Typing a view name at a `:` prompt under the table's
     /// keymap would sort on the `o` and never deliver the character.
-    #[test]
-    fn the_table_letter_chords_stop_claiming_keys_while_a_prompt_is_open() {
-        let a = app();
+    #[tokio::test]
+    async fn the_table_letter_chords_stop_claiming_keys_while_a_prompt_is_open() {
+        let a = app().await;
         let table_map = a.active_keymap();
         let o = awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::O);
         assert!(
@@ -2805,7 +3030,7 @@ mod prompt_tests {
             "`o` sorts on the table",
         );
 
-        let mut a = app();
+        let mut a = app().await;
         a.type_char(':');
         let prompt_map = a.active_keymap();
         assert!(
@@ -2816,9 +3041,9 @@ mod prompt_tests {
         );
     }
 
-    #[test]
-    fn typing_a_view_name_lands_in_the_prompt_intact() {
-        let mut a = app();
+    #[tokio::test]
+    async fn typing_a_view_name_lands_in_the_prompt_intact() {
+        let mut a = app().await;
         type_str(&mut a, ":deploy");
         assert_eq!(a.prompt().expect("open").text(), "deploy");
         assert_eq!(a.prompt().expect("open").rendered(), ":deploy");
@@ -2826,16 +3051,16 @@ mod prompt_tests {
 
     /// A printable with no prompt open is INERT — the table's vocabulary is
     /// chords, and a stray letter acting is how a navigator surprises someone.
-    #[test]
-    fn a_stray_letter_with_no_prompt_is_inert() {
-        let mut a = app();
+    #[tokio::test]
+    async fn a_stray_letter_with_no_prompt_is_inert() {
+        let mut a = app().await;
         assert!(!a.type_char('z'));
         assert!(a.prompt().is_none());
     }
 
-    #[test]
-    fn the_command_bar_switches_the_view() {
-        let mut a = app();
+    #[tokio::test]
+    async fn the_command_bar_switches_the_view() {
+        let mut a = app().await;
         assert_eq!(a.view_name(), "pods");
         type_str(&mut a, ":svc");
         a.apply_action(Action::Confirm);
@@ -2846,9 +3071,9 @@ mod prompt_tests {
     /// **An unknown view names the legal set.** An operator who types
     /// `:deploys` should learn the view is `deploy`, not wonder whether the
     /// key registered.
-    #[test]
-    fn an_unknown_view_is_refused_by_name_and_lists_the_alternatives() {
-        let mut a = app();
+    #[tokio::test]
+    async fn an_unknown_view_is_refused_by_name_and_lists_the_alternatives() {
+        let mut a = app().await;
         type_str(&mut a, ":deploys");
         a.apply_action(Action::Confirm);
         let Panel::Notice(msg) = &a.panel else {
@@ -2861,9 +3086,9 @@ mod prompt_tests {
 
     /// `esc` abandons WITHOUT applying — a `/` typed and thought better of
     /// must leave the previous filter alone rather than clearing it.
-    #[test]
-    fn escape_abandons_a_prompt_without_applying_it() {
-        let mut a = app();
+    #[tokio::test]
+    async fn escape_abandons_a_prompt_without_applying_it() {
+        let mut a = app().await;
         type_str(&mut a, "/nginx");
         a.apply_action(Action::Confirm);
         assert_eq!(a.filter(), "nginx");
@@ -2876,9 +3101,9 @@ mod prompt_tests {
 
     /// The erase chords work in the prompt — the same ones the picker gained,
     /// reaching the same editor.
-    #[test]
-    fn the_erase_chords_edit_the_prompt() {
-        let mut a = app();
+    #[tokio::test]
+    async fn the_erase_chords_edit_the_prompt() {
+        let mut a = app().await;
         type_str(&mut a, ":deploy");
         a.apply_action(Action::PromptEraseWord);
         assert_eq!(a.prompt().expect("open").text(), "");
@@ -2891,9 +3116,9 @@ mod prompt_tests {
     /// **A cleared filter must WIDEN.** The rows on screen are already
     /// filtered, so re-filtering them could only ever narrow — clearing has to
     /// re-read from the source or the table would never come back.
-    #[test]
-    fn clearing_the_filter_restores_the_full_set() {
-        let mut a = app();
+    #[tokio::test]
+    async fn clearing_the_filter_restores_the_full_set() {
+        let mut a = app().await;
         let all = a.table.view().rows().len();
         assert!(all > 1, "the fixture must have rows to filter");
 
@@ -2910,9 +3135,9 @@ mod prompt_tests {
     /// The prompt owns the status line while it is open — it is the only
     /// thing the operator is doing, and one sharing a bar with a sync phase
     /// and a key legend is one they cannot find.
-    #[test]
-    fn an_open_prompt_owns_the_status_line() {
-        let mut a = app();
+    #[tokio::test]
+    async fn an_open_prompt_owns_the_status_line() {
+        let mut a = app().await;
         type_str(&mut a, ":dep");
         let mut backend = egaku_term::TestBackend::new(100, 12);
         backend.draw(|buf| a.render(buf));

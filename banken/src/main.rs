@@ -30,7 +30,7 @@
 //! ```
 
 use banken::app::BankenApp;
-use banken::cli::{Invocation, parse_args};
+use banken::cli::{Invocation, Options, parse_launch};
 use banken::fixture::FixtureClusterEnv;
 use banken_spec::types::OperatorId;
 
@@ -42,8 +42,8 @@ const FIXTURE_CLUSTER: &str = "fixture";
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let invocation = match parse_args(&args) {
-        Ok(inv) => inv,
+    let (invocation, options) = match parse_launch(&args) {
+        Ok(parsed) => parsed,
         Err(e) => {
             eprintln!("banken: {e}");
             std::process::exit(2);
@@ -63,15 +63,14 @@ fn main() {
                 print_usage();
                 Ok(())
             }
-            Invocation::Fixture => run_fixture(operator).await,
-            Invocation::Pick { strategy } => run_pick(operator, strategy).await,
-            // `.map(|_| ())` on purpose: a cancelled connect is a decision,
-            // not a failure, so `--context` exits 0 in silence exactly as a
-            // successful run does. Both arms of the `live` cfg satisfy this.
-            Invocation::Live { context, strategy } => run_live(operator, &context, strategy)
-                .await
-                .map(|_landed| ()),
-            Invocation::Mcp { source } => run_mcp(source).await,
+            Invocation::Fixture => run_fixture(operator, &options).await,
+            Invocation::Pick { strategy } => run_pick(operator, strategy, &options).await,
+            Invocation::Live { context, strategy } => {
+                run_live(operator, &context, strategy, &options)
+                    .await
+                    .map(|_landed| ())
+            }
+            Invocation::Mcp { source } => run_mcp(source, &options).await,
         }
     });
 
@@ -110,6 +109,7 @@ fn main() {
 async fn run_pick(
     operator: OperatorId,
     strategy: banken::absorb::ListStrategy,
+    options: &Options,
 ) -> Result<(), String> {
     let catalog = banken_spec::load_catalog().map_err(|e| e.to_string())?;
 
@@ -165,6 +165,7 @@ async fn run_pick(
             &choice.name,
             choice.server.clone(),
             strategy,
+            options,
         )
         .await
         {
@@ -199,6 +200,7 @@ enum Landed {
 async fn run_pick(
     _operator: OperatorId,
     _strategy: banken::absorb::ListStrategy,
+    _options: &Options,
 ) -> Result<(), String> {
     Err(
         "choosing a cluster requires building with `--features live` (kube backend); \
@@ -245,47 +247,98 @@ fn session_env() -> banken::session::UnwiredSessionEnv {
 }
 
 /// Run the navigator over the fixture source (the proven path).
-async fn run_fixture(operator: OperatorId) -> Result<(), String> {
-    // Fallible: the keymap and the table columns come from the authored
-    // vocabulary, and a spec failure must SURFACE rather than fall back to
-    // hardcoded chords the legend does not describe.
-    let mut app = BankenApp::try_new(
-        FixtureClusterEnv::new(),
+async fn run_fixture(operator: OperatorId, options: &Options) -> Result<(), String> {
+    let settings = settings();
+    let env = std::sync::Arc::new(FixtureClusterEnv::new());
+    let estoque = banken::armazem::Estoque::over_env(
+        env.clone(),
+        refresh_interval(&settings),
+        &settings.armazem,
+    )
+    .map_err(|e| e.to_string())?;
+    let _zeladores = estoque.spawn_zeladores();
+    let _socket = share_over_socket(
+        options,
+        env.clone(),
+        FIXTURE_CLUSTER,
+        &estoque,
+        &settings,
+        None,
+    )
+    .await?;
+    let mut app = BankenApp::<FixtureClusterEnv, _>::try_new(
+        env,
         session_env(),
         operator,
         "source: fixture (no cluster read)",
     )
     .map_err(|e| e.to_string())?
-    // The fixture IS the cluster in this mode, and naming it honestly is what
-    // lets a `(defbancada)` resolve `(:context cluster)`. It is not a claim
-    // that a cluster named "fixture" exists — the status line says
-    // "source: fixture" right beside it.
     .with_cluster(FIXTURE_CLUSTER)
-    // Attached even here, where the fixture never changes and the feed can
-    // therefore never show anything new. That is deliberate: running the
-    // exact same absorb path in both modes is what keeps the fixture a real
-    // rehearsal of the live one. A feed that only existed under `--live`
-    // would be a feed nobody ever exercised until it mattered.
-    .with_feed(refresh_interval());
+    .with_estoque(estoque.rows.clone());
     egaku_term::run_async(&mut app)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Run the navigator over the live kube source, against the **named**
-/// kubeconfig context.
-///
-/// The context banken connected with is the context banken reports: it is
-/// carried into the status line and into every `(defbancada)`'s
-/// `(:context cluster)` from the same `String` that selected the apiserver, so
-/// the two cannot drift.
+fn settings() -> banken_config::BankenConfig {
+    banken_config::BankenConfig::discover_effective().unwrap_or_default()
+}
+
+#[cfg(feature = "mcp")]
+async fn share_over_socket(
+    options: &Options,
+    env: banken::armazem::SharedEnv,
+    cluster: &str,
+    estoque: &banken::armazem::Estoque,
+    settings: &banken_config::BankenConfig,
+    permits: Option<std::sync::Arc<dyn banken::permit::PermitEnv + Send + Sync>>,
+) -> Result<Option<banken::mcp::Servindo>, String> {
+    let Some(path) = options.mcp_socket.as_deref() else {
+        return Ok(None);
+    };
+    let plano = banken::mcp::Plano {
+        armazem: settings.armazem.clone(),
+        streams: settings.streams.clone(),
+        strategy: options.strategy,
+    };
+    let mut server = banken::mcp::BankenMcp::sharing(
+        env,
+        cluster,
+        estoque.clone(),
+        banken::ronda::Ronda::inert(),
+        plano,
+    );
+    if let Some(p) = permits {
+        server = server.with_permits(p);
+    }
+    banken::mcp::serve_socket(server, std::path::Path::new(path))
+        .await
+        .map(Some)
+}
+
+#[cfg(not(feature = "mcp"))]
+async fn share_over_socket(
+    options: &Options,
+    _env: banken::armazem::SharedEnv,
+    _cluster: &str,
+    _estoque: &banken::armazem::Estoque,
+    _settings: &banken_config::BankenConfig,
+    _permits: Option<std::sync::Arc<dyn banken::permit::PermitEnv + Send + Sync>>,
+) -> Result<Option<()>, String> {
+    match options.mcp_socket {
+        None => Ok(None),
+        Some(_) => Err("`--mcp-socket` requires building with `--features mcp`".into()),
+    }
+}
+
 #[cfg(feature = "live")]
 async fn run_live(
     operator: OperatorId,
     context: &str,
     strategy: banken::absorb::ListStrategy,
+    options: &Options,
 ) -> Result<Landed, String> {
-    run_live_from(operator, context, None, strategy).await
+    run_live_from(operator, context, None, strategy, options).await
 }
 
 /// Run the navigator over the live kube source, against the **named**
@@ -314,12 +367,15 @@ async fn run_live_from(
     context: &str,
     server: Option<String>,
     strategy: banken::absorb::ListStrategy,
+    options: &Options,
 ) -> Result<Landed, String> {
     use banken::antessala::{ConnectingScreen, SettleOnDrop, Stage, Waited, channel};
     use banken::live::KubeClusterEnv;
 
     let (reporter, watch) = channel();
     let owned = context.to_owned();
+    let settings = settings();
+    let owned_options = options.clone();
 
     // EVERYTHING up to the first drawable frame happens in here, not just the
     // connect. Ending the task at the connect is what the first version did,
@@ -357,29 +413,33 @@ async fn run_live_from(
         // reader through a poll. One reader type, two producers — a consumer
         // adapts by reading a declared capability, never by branching on its
         // backend.
-        let (despensa, publisher) = banken::absorb::channel();
-        let absorber = env.spawn_pod_absorber(publisher, strategy);
-        // `try_new` lists pods synchronously (`app.rs:309`). Against an
-        // unreachable cluster that is the longest wait in the whole startup,
-        // and it used to happen with the terminal already handed back.
+        let estoque = env
+            .estoque(strategy, &settings.armazem)
+            .map_err(|e| e.to_string())?;
+        let zeladores = estoque.spawn_zeladores();
         settle.reporter().reached(Stage::FirstRead);
-        // ONE env answers reads and authorization questions, so a view's
-        // "you cannot read this" can never disagree with the read it gates
-        // about which identity is asking.
         let shared = std::sync::Arc::new(env);
-        // The turbofish is required, not decorative: `try_new` takes
-        // `impl Into<Arc<E>>`, and `Arc<T>` itself implements `ClusterEnv`,
-        // so an `Arc` argument leaves E ambiguous between the two.
-        let app = BankenApp::<banken::live::KubeClusterEnv, _>::try_new(
+        let permits = shared.clone() as std::sync::Arc<dyn banken::permit::PermitEnv + Send + Sync>;
+        let socket = share_over_socket(
+            &owned_options,
             shared.clone(),
+            &cluster,
+            &estoque,
+            &settings,
+            Some(permits.clone()),
+        )
+        .await?;
+        let app = BankenApp::<banken::live::KubeClusterEnv, _>::try_new(
+            shared,
             session_env(),
             operator,
             label,
         )
         .map_err(|e| e.to_string())?
         .with_cluster(cluster.clone())
-        .with_permits(shared as std::sync::Arc<dyn banken::permit::PermitEnv + Send + Sync>)
-        .with_absorber(despensa);
+        .with_permits(permits)
+        .with_estoque(estoque.rows.clone());
+        let absorber = (zeladores, socket, estoque);
         Ok::<_, String>((app, absorber, cluster, receipt))
     });
 
@@ -429,23 +489,6 @@ async fn run_live_from(
     Ok(Landed::Opened)
 }
 
-/// The `:pods` refresh period, read from the AUTHORED config.
-///
-/// This function is the whole reason `banken-config` is now a dependency. The
-/// interval was a hardcoded `feed::DEFAULT_POLL`, so `:refresh-interval-ms` in
-/// a `(defbanken …)` form was authored, tested, and **ignored** — the config
-/// crate's 16 tests were green the entire time it had no consumer.
-///
-/// A discovery failure falls back to the documented default rather than
-/// refusing to start: banken must run on a machine that has never configured
-/// it, and a navigator that will not open because a config file is malformed
-/// is worse than one that opens on its prescribed defaults and says so.
-///
-/// `0` means "never auto-refresh" in the authored vocabulary — the
-/// zero-opinion floor — and is honoured as `DEFAULT_POLL` here only because
-/// the feed has no manual-only mode yet; that gap is
-/// `pending-banken: manual-refresh-mode` rather than a silent reinterpretation
-/// of an authored zero.
 /// The stance the picker opens in, from the AUTHORED config.
 ///
 /// A discovery failure falls back to the prescribed default rather than
@@ -479,29 +522,34 @@ fn ronda_cadence() -> banken::ronda::Cadence {
     )
 }
 
-fn refresh_interval() -> std::time::Duration {
-    let ms = banken_config::BankenConfig::discover_effective().map_or_else(
-        |_| u64::try_from(banken::feed::DEFAULT_POLL.as_millis()).unwrap_or(1000),
-        |c| c.refresh_interval_ms,
-    );
-    if ms == 0 {
-        return banken::feed::DEFAULT_POLL;
+/// The fixture source's refresh period, read from the AUTHORED config.
+///
+/// This function is the whole reason `banken-config` is now a dependency. The
+/// interval was a hardcoded `feed::DEFAULT_POLL`, so `:refresh-interval-ms` in
+/// a `(defbanken …)` form was authored, tested, and **ignored** — the config
+/// crate's 16 tests were green the entire time it had no consumer.
+///
+/// A discovery failure falls back to the documented default rather than
+/// refusing to start: banken must run on a machine that has never configured
+/// it, and a navigator that will not open because a config file is malformed
+/// is worse than one that opens on its prescribed defaults and says so.
+///
+/// `0` means "never auto-refresh" in the authored vocabulary, and is honoured:
+/// the env-backed source reads once and stays live without polling. A live
+/// cluster is watched, so the period never applies to it.
+fn refresh_interval(settings: &banken_config::BankenConfig) -> Option<std::time::Duration> {
+    match settings.refresh_interval_ms {
+        0 => None,
+        ms => Some(std::time::Duration::from_millis(ms)),
     }
-    std::time::Duration::from_millis(ms)
 }
 
-/// Without the `live` feature, `--live` is an explicit typed error — never
-/// a silent fall-through to the fixture (which would be a rounded-up claim).
-///
-/// The signature tracks the live one exactly (2026-08-09): it had drifted to
-/// two parameters against a three-argument call, so `--no-default-features`
-/// did not compile at all. A `#[cfg]`-gated arm nothing builds is a claim
-/// nothing checks.
 #[cfg(not(feature = "live"))]
 async fn run_live(
     _operator: OperatorId,
     _context: &str,
     _strategy: banken::absorb::ListStrategy,
+    _options: &Options,
 ) -> Result<(), String> {
     Err(
         "--live requires building with `--features live` (kube backend); \
@@ -527,53 +575,18 @@ async fn run_live(
 /// context, not just the one being served — which is what makes the tool worth
 /// calling before a read rather than after one fails.
 #[cfg(feature = "mcp")]
-async fn run_mcp(source: banken::cli::McpSource) -> Result<(), String> {
+async fn run_mcp(source: banken::cli::McpSource, options: &Options) -> Result<(), String> {
     use banken::cli::McpSource;
-    use banken::mcp::BankenMcp;
-    use banken_spec::env::ClusterEnv;
+    use banken::mcp::{BankenMcp, Plano};
     use rmcp::{ServiceExt, transport::stdio};
     use std::sync::Arc;
 
-    let mut permits: Option<Arc<dyn banken::permit::PermitEnv + Send + Sync>> = None;
-    let (env, cluster): (Arc<dyn ClusterEnv + Send + Sync>, String) = match source {
-        McpSource::Fixture => (Arc::new(FixtureClusterEnv::new()), FIXTURE_CLUSTER.into()),
-        // Resolved to a NAME first, then handed to the same live path — so a
-        // sole-context source and an explicitly-named one cannot diverge in
-        // how they connect, authorize, or report.
-        McpSource::SoleContextOf(path) => {
-            let name = banken::live::sole_context_of(std::path::Path::new(&path))?;
-            let env = banken::live::KubeClusterEnv::connect_with_context(&name)
-                .await
-                .map_err(|e| {
-                    let mut m = String::from("live connect failed (VPN/kubeconfig?): ");
-                    m.push_str(&e.to_string());
-                    m
-                })?;
-            let resolved = env.context_name().unwrap_or(name);
-            let shared = Arc::new(env);
-            permits = Some(shared.clone() as Arc<dyn banken::permit::PermitEnv + Send + Sync>);
-            (shared, resolved)
-        }
-        McpSource::Live(context) => {
-            let env = banken::live::KubeClusterEnv::connect_with_context(&context)
-                .await
-                .map_err(|e| {
-                    let mut m = String::from("live connect failed (VPN/kubeconfig?): ");
-                    m.push_str(&e.to_string());
-                    m
-                })?;
-            let name = env.context_name().unwrap_or(context);
-            let shared = Arc::new(env);
-            // The SAME env answers reads and authorization questions, so
-            // `banken_can_i` can never disagree with `banken_list` about which
-            // identity is asking.
-            permits = Some(shared.clone() as Arc<dyn banken::permit::PermitEnv + Send + Sync>);
-            (shared, name)
-        }
+    let settings = settings();
+    let plano = Plano {
+        armazem: settings.armazem.clone(),
+        streams: settings.streams.clone(),
+        strategy: options.strategy,
     };
-
-    // The rounds outlive this binding for the life of the process; the guard is
-    // held so the task is not cancelled the moment it is spawned.
     let (ronda, publisher) = banken::ronda::channel();
     let _rounds = banken::live::enumerate_contexts().ok().map(|contexts| {
         let climb: banken::ronda::DeepClimb = Arc::new(|context: String| {
@@ -589,13 +602,37 @@ async fn run_mcp(source: banken::cli::McpSource) -> Result<(), String> {
             ronda_cadence(),
         )
     });
-
-    eprintln!("banken mcp: serving OBSERVE-only reads of `{cluster}` over stdio");
-
-    let mut server = BankenMcp::new(env, cluster, ronda);
-    if let Some(p) = permits {
-        server = server.with_permits(p);
-    }
+    let connect = |name: String| async move {
+        banken::live::KubeClusterEnv::connect_with_context(&name)
+            .await
+            .map_err(|e| {
+                let mut m = String::from("live connect failed (VPN/kubeconfig?): ");
+                m.push_str(&e.to_string());
+                m
+            })
+    };
+    let server = match source {
+        McpSource::Fixture => BankenMcp::over_env(
+            Arc::new(FixtureClusterEnv::new()),
+            FIXTURE_CLUSTER,
+            ronda,
+            plano,
+        )
+        .map_err(|e| e.to_string())?,
+        McpSource::SoleContextOf(path) => {
+            let name = banken::live::sole_context_of(std::path::Path::new(&path))?;
+            BankenMcp::over_kube(Arc::new(connect(name).await?), ronda, plano)
+                .map_err(|e| e.to_string())?
+        }
+        McpSource::Live(context) => {
+            BankenMcp::over_kube(Arc::new(connect(context).await?), ronda, plano)
+                .map_err(|e| e.to_string())?
+        }
+    };
+    eprintln!(
+        "banken mcp: serving OBSERVE-only reads of `{}` over stdio",
+        server.served_cluster()
+    );
     server
         .serve(stdio())
         .await
@@ -606,13 +643,8 @@ async fn run_mcp(source: banken::cli::McpSource) -> Result<(), String> {
     Ok(())
 }
 
-/// The refusal when the agent surface was not compiled in.
-///
-/// Mirrors the `run_live` shape below, including taking the argument by value,
-/// so a signature drift in one arm cannot pass a `--no-default-features` build
-/// while failing the default one.
 #[cfg(not(feature = "mcp"))]
-async fn run_mcp(_source: banken::cli::McpSource) -> Result<(), String> {
+async fn run_mcp(_source: banken::cli::McpSource, _options: &Options) -> Result<(), String> {
     Err(
         "`banken mcp` requires building with `--features mcp` (the rmcp stdio server); \
          this binary was built without the agent surface"
@@ -642,6 +674,8 @@ fn print_usage() {
         \x20                              same, naming the file when the context\n\
         \x20                              name is derived and cannot be written"
     );
+    println!("  banken --context <name> --mcp-socket <path>");
+    println!("                                open :pods and share its store with an agent");
     println!("  banken --help");
     println!();
     println!("VIEWS:");
@@ -689,6 +723,12 @@ fn print_usage() {
     println!("                   path you got. `streaming` against a server that does not");
     println!("                   negotiate it stalls in `absorbing` with no rows and no");
     println!("                   error; `list-watch` sends nothing a minimal server lacks.");
+    println!("  --mcp-socket <path>");
+    println!("                   also serve the OBSERVE tools on a unix socket, reading the");
+    println!("                   SAME store this screen reads: an agent sees what the");
+    println!("                   operator sees, and a second question about a kind already");
+    println!("                   absorbed costs no apiserver read. Context switching stays");
+    println!("                   with the screen. Not with `mcp`, which already serves stdio.");
     println!("  -h, --help       print this help");
     println!();
     // ── The vocabulary — the SAME `HelpPage` the in-app `h` overlay draws ──

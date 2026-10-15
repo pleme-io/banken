@@ -20,7 +20,7 @@ use banken::fixture::FixtureClusterEnv;
 use banken_spec::testing::MockSessionEnv;
 use banken_spec::types::OperatorId;
 
-fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
+async fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
     BankenApp::try_new(
         FixtureClusterEnv::new(),
         MockSessionEnv::new(),
@@ -28,13 +28,16 @@ fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
         "source: fixture",
     )
     .expect("the shipped vocabulary must build an app")
+    .settled_on_env()
+    .await
+    .expect("the default Armazém configuration is valid")
 }
 
 /// Selecting a row + the `s` key produces a DECLARE Outcome whose
 /// full-manifest preview is present (the prompt's required proof).
-#[test]
-fn declare_key_produces_full_manifest_preview_through_the_app() {
-    let mut a = app();
+#[tokio::test]
+async fn declare_key_produces_full_manifest_preview_through_the_app() {
+    let mut a = app().await;
     // Move to a specific pod so the selection is deterministic.
     a.apply_action(Action::SelectNext);
     a.apply_action(Action::DeclareScale);
@@ -61,9 +64,9 @@ fn declare_key_produces_full_manifest_preview_through_the_app() {
 }
 
 /// The `l` key produces an OBSERVE read (logs), mutating nothing.
-#[test]
-fn observe_key_produces_a_read_result() {
-    let mut a = app();
+#[tokio::test]
+async fn observe_key_produces_a_read_result() {
+    let mut a = app().await;
     a.apply_action(Action::ObserveLogs);
     match a.overlay() {
         Some(ActionResult::Observed { lines, .. }) => {
@@ -75,9 +78,9 @@ fn observe_key_produces_a_read_result() {
 
 /// The `S` (shift+s) key produces a witnessed BREAK-GLASS record — never a
 /// live mutation. The witness + runbook are present.
-#[test]
-fn break_glass_key_produces_a_witnessed_record() {
-    let mut a = app();
+#[tokio::test]
+async fn break_glass_key_produces_a_witnessed_record() {
+    let mut a = app().await;
     a.apply_action(Action::BreakGlass);
     match a.overlay() {
         Some(ActionResult::BreakGlassRecord {

@@ -414,15 +414,18 @@ fn a_non_resource_view_cannot_build_a_resource_table() {
 /// `try_new` is FALLIBLE on purpose: the keymap and the columns come from the
 /// spec, so a spec failure must surface rather than fall back to hardcoded
 /// chords the authored legend does not describe.
-#[test]
-fn the_app_builds_from_the_shipped_vocabulary() {
-    let app = BankenApp::try_new(
+#[tokio::test]
+async fn the_app_builds_from_the_shipped_vocabulary() {
+    let app = BankenApp::<FixtureClusterEnv, MockSessionEnv>::try_new(
         FixtureClusterEnv::new(),
         MockSessionEnv::new(),
         OperatorId::new("drzzln").expect("a literal witness is non-blank"),
         "source: fixture",
     )
-    .expect("the shipped vocabulary must build an app");
+    .expect("the shipped vocabulary must build an app")
+    .settled_on_env()
+    .await
+    .expect("the default Armazém configuration is valid");
     assert_eq!(app.table().view().rows().len(), 5);
     assert_eq!(app.table().view().unresolved_fields(), Vec::<&str>::new());
 }

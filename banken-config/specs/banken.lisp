@@ -20,8 +20,8 @@
   :context ""
   ;; Empty ⇒ all namespaces (k9s's landing behaviour).
   :namespace ""
-  ;; BANKEN.md §VI M0: a 1 Hz POLL. True watch is M1 unbuilt substrate
-  ;; (§IX C-watch) — this knob is not renamed until the informer exists.
+  ;; The fixture source's poll period. A live cluster is watched, so it
+  ;; never applies there; 0 reads once and never polls.
   :refresh-interval-ms 1000
   ;; Which stance the cluster picker's filter opens in. `"normal"` ⇒ —
   ;; vim-true: `j`/`k` move rows, `i` starts typing, `esc` never leaves.

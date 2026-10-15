@@ -203,6 +203,23 @@ mod table_row_identity_tests {
     }
 }
 
+impl izumi_armazem::Record for Row {
+    fn id(&self) -> Option<&str> {
+        Some(self.uid.as_str())
+    }
+
+    fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.uid.as_str().hash(&mut h);
+        self.name.hash(&mut h);
+        self.namespace.hash(&mut h);
+        self.version.hash(&mut h);
+        self.cells.hash(&mut h);
+        h.finish()
+    }
+}
+
 impl egaku::TableRow for Row {
     /// The **uid**, never the name — see [`Uid`] for why the name was wrong.
     fn identity(&self) -> &str {
@@ -278,6 +295,9 @@ pub enum LogBound {
         /// Whether the newest line alone exceeded the budget and was cut to it.
         cut_newest: bool,
     },
+    RingLines {
+        limit: usize,
+    },
 }
 
 impl LogBound {
@@ -288,6 +308,7 @@ impl LogBound {
             Self::TailLines { .. } => "tailLines",
             Self::LimitBytes { .. } => "limitBytes",
             Self::AnswerBytes { .. } => "answerBytes",
+            Self::RingLines { .. } => "ringLines",
         }
     }
 
@@ -297,7 +318,8 @@ impl LogBound {
         match self {
             Self::TailLines { limit }
             | Self::LimitBytes { limit }
-            | Self::AnswerBytes { limit, .. } => limit,
+            | Self::AnswerBytes { limit, .. }
+            | Self::RingLines { limit } => limit,
         }
     }
 
@@ -305,9 +327,9 @@ impl LogBound {
     #[must_use]
     pub fn meaning(self) -> String {
         match self {
-            Self::TailLines { limit } => format!(
-                "the tail held {limit} lines, the most requested; older lines may exist"
-            ),
+            Self::TailLines { limit } => {
+                format!("the tail held {limit} lines, the most requested; older lines may exist")
+            }
             Self::LimitBytes { limit } => format!(
                 "the apiserver stopped at {limit} bytes; the newest lines of the tail were not received"
             ),
@@ -324,6 +346,9 @@ impl LogBound {
                 cut_newest: true,
             } => format!(
                 "the {dropped_lines} oldest lines were dropped and the newest line was cut to keep the answer within {limit} bytes"
+            ),
+            Self::RingLines { limit } => format!(
+                "banken keeps the newest {limit} lines of a followed log; older lines left the ring and cannot be paged"
             ),
         }
     }

@@ -135,7 +135,10 @@ async fn a_named_context_renders_real_pod_rows() {
     );
 
     // ── the render ──
-    let app = BankenApp::try_new(
+    let estoque = env
+        .estoque(strategy, &izumi_armazem::ArmazemConfig::default())
+        .expect("the default Armazém configuration is valid");
+    let mut app = BankenApp::try_new(
         env,
         UnwiredSessionEnv::new(),
         OperatorId::new("drzzln").expect("a literal witness is non-blank"),
@@ -147,12 +150,14 @@ async fn a_named_context_renders_real_pod_rows() {
         },
     )
     .expect("the app builds over the live env")
-    .with_cluster(context.clone());
+    .with_cluster(context.clone())
+    .with_estoque(estoque.rows.clone());
+    app.settle(std::time::Duration::from_secs(30)).await;
 
     assert_eq!(
         app.table().view().rows().len(),
         rows.len(),
-        "the app's own construction read returned the same row count",
+        "the app's absorbed pod set matches the direct list",
     );
 
     let mut backend = TestBackend::new(120, 24);
@@ -227,68 +232,34 @@ async fn the_watch_plane_absorbs_from_a_real_cluster() {
         .await
         .expect("connect to the named context");
 
-    let (despensa, publisher) = banken::absorb::channel();
-    // Named explicitly rather than defaulted: this test asserts the STREAMING
-    // path specifically (generation 1 for the whole initial set), and a silent
-    // strategy change would make it assert something else while staying green.
-    // The strategy is an INPUT, so this test is a differential harness across
-    // read paths rather than an assertion about one. Measured 2026-08-08: the
-    // same binary reaches `Synced` against alpha-eks on either strategy, and
-    // against a local engenho ONLY on `list-watch` — because engenho does not
-    // negotiate `sendInitialEvents`, so `streaming` degrades to a live tail
-    // whose terminating bookmark never arrives and `InitDone` never fires.
     let strategy = std::env::var("BANKEN_LIST_STRATEGY")
         .ok()
         .and_then(|s| banken::absorb::ListStrategy::parse(&s))
         .unwrap_or(banken::absorb::ListStrategy::Streaming);
     println!("list strategy: {}", strategy.label());
-    let _task = env.spawn_pod_absorber(publisher, strategy);
-
-    // Wait for the initial streaming list to complete. Generous, because a cold
-    // exec-credential plugin invocation is ~0.7 s on its own.
-    let mut synced = false;
-    for _ in 0..200 {
-        if matches!(
-            despensa.snapshot().phase(),
-            banken::absorb::SyncPhase::Synced
-        ) {
-            synced = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-
-    let snap = despensa.snapshot();
-    assert!(
-        synced,
-        "the streaming list must complete and reach Synced; phase was {:?}",
-        snap.phase()
+    let estoque = env
+        .estoque(strategy, &izumi_armazem::ArmazemConfig::default())
+        .expect("the default Armazém configuration is valid");
+    let mut pods = estoque
+        .rows
+        .interest(banken::armazem::KindKey::all(ResourceKind::Pod));
+    let snap = pods.settled(std::time::Duration::from_secs(20)).await;
+    assert_eq!(
+        snap.phase,
+        izumi_armazem::Phase::Live,
+        "the initial list must complete and reach Live"
     );
     assert!(
-        !snap.rows().is_empty(),
-        "a real cluster must yield rows; the fold applied nothing"
+        !snap.records.is_empty(),
+        "a real cluster must yield rows; the stream applied nothing"
     );
-    assert!(
-        !matches!(snap.phase(), banken::absorb::SyncPhase::Degraded { .. }),
-        "the watch must be healthy, not backing off behind plausible rows: {:?}",
-        snap.phase()
-    );
-
     println!(
-        "absorbed {} pods from `{ctx}` by watch, generation {}",
-        snap.rows().len(),
-        snap.generation()
+        "absorbed {} pods from `{ctx}` by watch, seq {}",
+        snap.records.len(),
+        snap.seq.0
     );
 }
 
-/// **The discovery gate.** Two aggregated requests build a real `RESTMapper`,
-/// and `po` resolves to Pod against an actual apiserver.
-///
-/// This is the thing kube-rs structurally cannot do (`ApiResource` discards
-/// shortNames), so a green unit test over a fixture document proves the
-/// parser and nothing about the wire. Only a real server proves the `Accept`
-/// negotiation — which is exactly the class of gap that let `--features live`
-/// compile clean for weeks while the first live read panicked.
 #[tokio::test]
 #[ignore = "reads a real cluster; run with --ignored and BANKEN_LIVE_CONTEXT set"]
 async fn discovery_resolves_shortnames_against_a_real_cluster() {

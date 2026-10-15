@@ -260,6 +260,10 @@ pub struct BankenConfig {
     /// Lisp face: `:ronda-climb-ms 300000`.
     #[serde(default = "default_ronda_climb_ms")]
     pub ronda_climb_ms: u64,
+    #[serde(default)]
+    pub armazem: izumi_armazem::ArmazemConfig,
+    #[serde(default)]
+    pub streams: izumi_mcp::StreamConfig,
 }
 
 fn default_gitops_base() -> String {
@@ -417,6 +421,8 @@ impl shikumi::TieredConfig for BankenConfig {
             // cadence is not an opinion about the estate, so the floor keeps it.
             ronda_round_ms: default_ronda_round_ms(),
             ronda_climb_ms: default_ronda_climb_ms(),
+            armazem: izumi_armazem::ArmazemConfig::default(),
+            streams: izumi_mcp::StreamConfig::default(),
         }
     }
 
@@ -945,5 +951,59 @@ mod overlay_tests {
             cfg.namespace, "flux-system",
             "a field the overlay omits must survive from the base"
         );
+    }
+
+    #[test]
+    fn the_armazem_knobs_default_to_izumi_and_an_overlay_sets_them_one_at_a_time() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let base = dir.path().join("banken.yaml");
+        let local = dir.path().join("banken-local.yaml");
+        std::fs::write(&base, BASE_YAML).expect("base");
+        std::fs::write(
+            &local,
+            "armazem:\n  linger-ms: 2000\n  mode: eager\nstreams:\n  budget-bytes: 4096\n",
+        )
+        .expect("overlay");
+
+        let untouched = shikumi::ConfigStore::<BankenConfig>::load_merged(
+            std::slice::from_ref(&base),
+            "BANKEN_ARMAZEM_BASE_TEST_",
+        )
+        .expect("base alone");
+        assert_eq!(
+            untouched.get().armazem,
+            izumi_armazem::ArmazemConfig::default()
+        );
+        assert_eq!(untouched.get().armazem.mode, izumi_armazem::Mode::Lazy);
+        assert_eq!(
+            untouched.get().armazem.policy,
+            izumi_armazem::PolicyEngine::Vigy
+        );
+        assert_eq!(untouched.get().streams, izumi_mcp::StreamConfig::default());
+
+        let store = shikumi::ConfigStore::<BankenConfig>::load_merged(
+            &[base, local],
+            "BANKEN_ARMAZEM_OVERLAY_TEST_",
+        )
+        .expect("merge");
+        let cfg = store.get();
+        assert_eq!(cfg.armazem.linger_ms, 2000);
+        assert_eq!(cfg.armazem.mode, izumi_armazem::Mode::Eager);
+        assert_eq!(
+            cfg.armazem.max_live,
+            izumi_armazem::ArmazemConfig::default().max_live
+        );
+        assert_eq!(cfg.streams.budget_bytes, 4096);
+        assert_eq!(
+            cfg.streams.cursor_ttl_ms,
+            izumi_mcp::StreamConfig::default().cursor_ttl_ms
+        );
+    }
+
+    #[test]
+    fn an_unknown_armazem_knob_is_refused() {
+        let doc = format!("{BASE_YAML}armazem:\n  linger: 5\n");
+        let err = serde_yaml::from_str::<BankenConfig>(&doc).expect_err("unknown knob");
+        assert!(err.to_string().contains("unknown field"), "{err}");
     }
 }

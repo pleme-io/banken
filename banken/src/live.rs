@@ -52,12 +52,9 @@ use banken_spec::env::{
 use banken_spec::error::SpecError;
 use banken_spec::types::ResourceKind;
 
-use crate::absorb::{Ev, Folded, ListStrategy, Publisher, Replica, SyncPhase};
-use futures::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::ListParams;
 use kube::config::{KubeConfigOptions, Kubeconfig};
-use kube::runtime::{WatchStreamExt, watcher};
 use kube::{Api, Client, Config};
 
 /// A [`Config`] for `context`, built from the ONE kubeconfig file that
@@ -477,7 +474,7 @@ pub fn enumerate_contexts() -> Result<Vec<ContextChoice>, ContextError> {
 /// view via a small runtime handle so the sync [`ClusterEnv`] trait is
 /// satisfied without changing the shipped seam.
 pub struct KubeClusterEnv {
-    client: Client,
+    pub(crate) client: Client,
     handle: tokio::runtime::Handle,
     /// The kubeconfig's `current-context`, when it could be read.
     ///
@@ -767,107 +764,6 @@ impl KubeClusterEnv {
         tokio::task::block_in_place(|| self.handle.block_on(fut))
     }
 
-    /// Start absorbing pods into `publisher` and return the task handle.
-    ///
-    /// This is the watch half of BANKEN.md's C-watch ceiling, and the ceiling
-    /// turned out to be a fact about banken's Cargo feature list rather than
-    /// about kube-rs: `kube-runtime` 0.99 already ships every piece below.
-    ///
-    /// # Why `streaming_lists()`
-    ///
-    /// It collapses the initial LIST and the WATCH into one call
-    /// (`sendInitialEvents=true` + `resourceVersionMatch=NotOlderThan`,
-    /// terminated by an `InitialEventsEnd` bookmark). The apiserver never
-    /// buffers a whole list body, so the first row reaches the operator at the
-    /// first streamed chunk instead of after a 2.0 s full-list round trip.
-    /// Verified serving on `alpha-eks` (v1.33) on 2026-08-08.
-    ///
-    /// # Why `default_backoff()` is not optional
-    ///
-    /// A bare `watcher()` has **no backoff at all** — kube-rs's own comment at
-    /// `watcher.rs:750-752` is *"This will normally happen immediately"*. When
-    /// the AWS SSO *session* expires (8–12 h) every request errors, and an
-    /// un-backed-off loop re-invokes the `aws` exec-credential plugin per
-    /// attempt: a hot loop spawning a subprocess. This is the single mandatory
-    /// line in the function.
-    ///
-    /// # What it deliberately does NOT do
-    ///
-    /// It does not carry identity. A `Row` has no `uid`, so the replica is keyed
-    /// on `(namespace, name)` — unique at an instant, **not** across
-    /// delete-and-recreate. Acting on a row is therefore no safer than before;
-    /// that is `pending-banken: grip`, and pretending otherwise here would be
-    /// the round-up this repo keeps catching.
-    #[must_use]
-    pub fn spawn_pod_absorber(
-        &self,
-        publisher: Publisher,
-        strategy: ListStrategy,
-    ) -> tokio::task::JoinHandle<()> {
-        let api: Api<Pod> = Api::all(self.client.clone());
-        self.handle.spawn(async move {
-            let mut replica = Replica::default();
-            // The strategy is NAMED, never probed. `ListWatch` sends no
-            // parameters a minimal apiserver need not implement, which is what
-            // lets banken read a conformance-partial backend; `Streaming`
-            // collapses LIST+WATCH into one call against a server that
-            // negotiates `sendInitialEvents`. There is no third arm that picks
-            // for you — see `ListStrategy`.
-            let config = match strategy {
-                ListStrategy::Streaming => watcher::Config::default().streaming_lists(),
-                ListStrategy::ListWatch => watcher::Config::default(),
-            };
-            let stream = watcher(api, config).default_backoff();
-            futures::pin_mut!(stream);
-
-            while let Some(next) = stream.next().await {
-                match next {
-                    Ok(event) => {
-                        let folded = match event {
-                            watcher::Event::Init => replica.fold(Ev::Init),
-                            watcher::Event::InitApply(p) => match pod_to_row(p) {
-                                Some(r) => replica.fold(Ev::InitApply(r)),
-                                None => Folded::Quiet,
-                            },
-                            watcher::Event::InitDone => replica.fold(Ev::InitDone),
-                            watcher::Event::Apply(p) => match pod_to_row(p) {
-                                Some(r) => replica.fold(Ev::Apply(r)),
-                                None => Folded::Quiet,
-                            },
-                            watcher::Event::Delete(p) => match pod_to_row(p) {
-                                Some(r) => replica.fold(Ev::Delete(r)),
-                                None => Folded::Quiet,
-                            },
-                        };
-                        // Only a set-changing fold reaches the publisher, and the
-                        // publisher gates again on the content hash. Two gates
-                        // because they catch different things: this one skips the
-                        // work of materialising rows mid-init, that one skips the
-                        // wake when a resourceVersion moved but no visible cell did.
-                        match folded {
-                            Folded::Quiet => {}
-                            Folded::Changed | Folded::InitComplete => {
-                                publisher.publish(replica.rows(), SyncPhase::Synced);
-                            }
-                        }
-                    }
-                    // The rows are KEPT and relabelled, never blanked: a transient
-                    // apiserver failure must not erase a table an operator is
-                    // reading. What changes is the claim banken makes about them.
-                    Err(e) => {
-                        publisher.publish(
-                            replica.rows(),
-                            SyncPhase::Degraded {
-                                cause: e.to_string(),
-                            },
-                        );
-                    }
-                }
-            }
-            publisher.mark_stopped();
-        })
-    }
-
     /// The `Accept` header that asks for **aggregated** discovery.
     ///
     /// One request for the whole cluster's resource map, versus kube-rs's
@@ -984,7 +880,7 @@ impl KubeClusterEnv {
     clippy::needless_pass_by_value,
     reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
 )]
-fn pod_to_row(pod: Pod) -> Option<Row> {
+pub(crate) fn pod_to_row(pod: Pod) -> Option<Row> {
     let status = pod.status.as_ref();
     let phase = status
         .and_then(|s| s.phase.clone())
@@ -1038,7 +934,7 @@ fn pod_to_row(pod: Pod) -> Option<Row> {
 /// A pod up for a week can hold hundreds of megabytes; a navigator that pulls
 /// all of it to render one pane has turned a keystroke into an outage. This is
 /// `kubectl logs --tail`'s own default order of magnitude.
-const LOG_TAIL_LINES: usize = 500;
+pub(crate) const LOG_TAIL_LINES: usize = 500;
 
 const LOG_LIMIT_BYTES: usize = 1024 * 1024;
 
@@ -1127,7 +1023,7 @@ fn row_of<K: kube::Resource>(o: &K, cells: Vec<(String, String)>) -> Option<Row>
     clippy::needless_pass_by_value,
     reason = "passed as fn(K) -> Option<Row> into consuming adapters; the fix is to move rather than clone, tracked separately"
 )]
-fn service_to_row(s: k8s_openapi::api::core::v1::Service) -> Option<Row> {
+pub(crate) fn service_to_row(s: k8s_openapi::api::core::v1::Service) -> Option<Row> {
     let spec = s.spec.as_ref();
     let ty = spec
         .and_then(|s| s.type_.clone())
@@ -1160,7 +1056,7 @@ fn service_to_row(s: k8s_openapi::api::core::v1::Service) -> Option<Row> {
     clippy::needless_pass_by_value,
     reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
 )]
-fn deployment_to_row(d: k8s_openapi::api::apps::v1::Deployment) -> Option<Row> {
+pub(crate) fn deployment_to_row(d: k8s_openapi::api::apps::v1::Deployment) -> Option<Row> {
     let st = d.status.as_ref();
     let desired = d.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
     let ready = st.and_then(|s| s.ready_replicas).unwrap_or(0);
@@ -1181,7 +1077,7 @@ fn deployment_to_row(d: k8s_openapi::api::apps::v1::Deployment) -> Option<Row> {
     clippy::needless_pass_by_value,
     reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
 )]
-fn replicaset_to_row(r: k8s_openapi::api::apps::v1::ReplicaSet) -> Option<Row> {
+pub(crate) fn replicaset_to_row(r: k8s_openapi::api::apps::v1::ReplicaSet) -> Option<Row> {
     let st = r.status.as_ref();
     let desired = r.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
     let current = st.map_or(0, |s| s.replicas);
@@ -1198,7 +1094,7 @@ fn replicaset_to_row(r: k8s_openapi::api::apps::v1::ReplicaSet) -> Option<Row> {
     clippy::needless_pass_by_value,
     reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
 )]
-fn configmap_to_row(c: k8s_openapi::api::core::v1::ConfigMap) -> Option<Row> {
+pub(crate) fn configmap_to_row(c: k8s_openapi::api::core::v1::ConfigMap) -> Option<Row> {
     // KEY COUNT, never the values. A ConfigMap routinely carries credentials
     // that were put there by mistake, and a navigator that renders them into a
     // terminal has published them to a scrollback, a screen share and a
@@ -1215,7 +1111,7 @@ fn configmap_to_row(c: k8s_openapi::api::core::v1::ConfigMap) -> Option<Row> {
     clippy::needless_pass_by_value,
     reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
 )]
-fn endpoints_to_row(e: k8s_openapi::api::core::v1::Endpoints) -> Option<Row> {
+pub(crate) fn endpoints_to_row(e: k8s_openapi::api::core::v1::Endpoints) -> Option<Row> {
     let addresses: usize = e.subsets.as_ref().map_or(0, |ss| {
         ss.iter()
             .map(|s| s.addresses.as_ref().map_or(0, Vec::len))
@@ -1228,7 +1124,7 @@ fn endpoints_to_row(e: k8s_openapi::api::core::v1::Endpoints) -> Option<Row> {
     clippy::needless_pass_by_value,
     reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
 )]
-fn namespace_to_row(n: k8s_openapi::api::core::v1::Namespace) -> Option<Row> {
+pub(crate) fn namespace_to_row(n: k8s_openapi::api::core::v1::Namespace) -> Option<Row> {
     let phase = n
         .status
         .as_ref()
@@ -1241,7 +1137,7 @@ fn namespace_to_row(n: k8s_openapi::api::core::v1::Namespace) -> Option<Row> {
     clippy::needless_pass_by_value,
     reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
 )]
-fn node_to_row(n: k8s_openapi::api::core::v1::Node) -> Option<Row> {
+pub(crate) fn node_to_row(n: k8s_openapi::api::core::v1::Node) -> Option<Row> {
     let st = n.status.as_ref();
     // A node's STATUS is the Ready condition, and `Unschedulable` on the spec
     // is what a cordon looks like — reporting only Ready would show a cordoned
@@ -1278,7 +1174,7 @@ fn node_to_row(n: k8s_openapi::api::core::v1::Node) -> Option<Row> {
     clippy::needless_pass_by_value,
     reason = "see the projector-cluster note above: fn(K) -> Option<Row> into consuming adapters; pending-banken: projectors-move-instead-of-clone"
 )]
-fn event_to_row(e: k8s_openapi::api::core::v1::Event) -> Option<Row> {
+pub(crate) fn event_to_row(e: k8s_openapi::api::core::v1::Event) -> Option<Row> {
     let reason = e.reason.clone().unwrap_or_else(|| "-".into());
     let kind = e.type_.clone().unwrap_or_else(|| "Normal".into());
     let message = e.message.clone().unwrap_or_default();
@@ -1367,9 +1263,9 @@ impl KubeClusterEnv {
     /// result. The caller can therefore SEE that it did not get a follow,
     /// rather than holding a stream that silently never updates.
     ///
-    /// `pending-banken: follow-logs` — a real follow needs the streaming seam
-    /// [`crate::absorb`] already models for pods, and that is the shape to
-    /// reuse rather than a second one invented here.
+    /// `pending-banken: follow-logs` — the agent surface follows through
+    /// [`crate::kube_source::KubeLogSource`]; this snapshot remains the TUI's
+    /// `l` action until that view reads the same log shelf.
     async fn tail_logs(&self, pod: &str, ns: &str) -> Result<LogStream, SpecError> {
         use k8s_openapi::api::core::v1::Pod;
         let api: Api<Pod> = Api::namespaced(self.client.clone(), ns);
@@ -1878,11 +1774,10 @@ mod tests {
     #[test]
     fn pod_to_row_derives_age_from_creation_timestamp() {
         let mut pod = pod_with("catch-api", "Running", None, true);
-        pod.metadata.creation_timestamp = Some(
-            k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+        pod.metadata.creation_timestamp =
+            Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
                 k8s_openapi::chrono::Utc::now() - k8s_openapi::chrono::Duration::days(2),
-            ),
-        );
+            ));
         let row = pod_to_row(pod).expect("the fixture pod carries a uid");
         let age = row
             .cells

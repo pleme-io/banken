@@ -37,6 +37,8 @@ shikumi = "0.1"
 # third-use test. Adopting the derive is a one-line change if banken's
 # visual surface grows.
 ishou-tokens = "0.1"
+izumi-armazem = { version = "0.1.23", default-features = false }
+izumi-mcp = "0.1.23"
 
 [lints.clippy]
 pedantic = "warn"

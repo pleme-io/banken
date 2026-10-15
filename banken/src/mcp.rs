@@ -46,8 +46,9 @@
 
 use std::sync::Arc;
 
-use banken_spec::env::ClusterEnv;
 use banken_spec::types::ResourceKind;
+use izumi_armazem::ArmazemConfig;
+use izumi_mcp::{Refusal, StreamConfig, Streams};
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -57,7 +58,8 @@ use rmcp::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-const LOG_ANSWER_BYTES: usize = 32 * 1024;
+use crate::absorb::ListStrategy;
+use crate::armazem::{Estoque, KindFonte, KindKey, LogFonte, LogKey, LogLine, SharedEnv};
 
 /// The agent-facing server over one cluster env.
 ///
@@ -84,40 +86,46 @@ const LOG_ANSWER_BYTES: usize = 32 * 1024;
 /// Swapping them as ONE value is what makes those invariants survive a context
 /// switch. Four independently-assigned fields would let a switch land halfway.
 struct Served {
-    env: Arc<dyn ClusterEnv + Send + Sync>,
+    env: SharedEnv,
     cluster: String,
     permits: Option<Arc<dyn crate::permit::PermitEnv + Send + Sync>>,
     glass: Option<crate::glass::GlassLedger>,
+    estoque: Estoque,
+    rows: Arc<Streams<KindFonte>>,
+    logs: Arc<Streams<LogFonte>>,
+}
+
+impl Served {
+    fn new(env: SharedEnv, cluster: String, estoque: Estoque, streams: &StreamConfig) -> Self {
+        Self {
+            rows: Arc::new(Streams::new(estoque.rows.clone(), streams.clone())),
+            logs: Arc::new(Streams::new(estoque.logs.clone(), streams.clone())),
+            glass: crate::glass::GlassLedger::default_path()
+                .map(|p| crate::glass::GlassLedger::at(p, cluster.clone())),
+            env,
+            cluster,
+            permits: None,
+            estoque,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Plano {
+    pub armazem: ArmazemConfig,
+    pub streams: StreamConfig,
+    pub strategy: ListStrategy,
 }
 
 #[derive(Clone)]
 pub struct BankenMcp {
-    /// The cluster currently served, swappable at runtime.
-    ///
-    /// `Arc<RwLock<_>>` rather than plain fields because this struct is
-    /// `Clone` — rmcp clones it — and a switch has to be visible to every
-    /// clone. A switch that moved only one clone's view would be one server
-    /// answering from two estates at once, which is precisely the confusion
-    /// the cluster stamp exists to prevent.
     served: Arc<std::sync::RwLock<Served>>,
     ronda: crate::ronda::Ronda,
-    /// The per-verb authorization check, when the env can perform one.
-    ///
-    /// `Option` because the fixture has no apiserver to ask, and a fixture
-    /// that answered "allowed" would be inventing an authorization result —
-    /// the one kind of answer that must never be fabricated.
-    /// The break-glass ledger, exposed READ-ONLY.
-    ///
-    /// Reading the audit trail is an OBSERVE, and a valuable one: "a human
-    /// exec'd into this pod twenty minutes ago" is often the whole answer to
-    /// "why does this pod look like that", and it is invisible in every other
-    /// read. Exposing the *record* is the opposite of exposing the *action* —
-    /// the agent learns that glass was broken and still has no way to break
-    /// any.
+    plano: Plano,
+    pinned: bool,
     tool_router: ToolRouter<Self>,
 }
 
-/// Which context to switch to.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct UseContextInput {
     /// A kubeconfig context name, as listed by `banken_readiness`.
@@ -182,6 +190,47 @@ fn fail(cluster: &str, e: &banken_spec::error::SpecError) -> String {
 }
 
 /// The caller named something banken does not know, and here is what it does.
+fn refusal(r: &Refusal) -> String {
+    kotae::Answer::refused(r.error.clone(), [r.legal.clone()]).render()
+}
+
+fn page(cluster: &str, key: &str, first: bool, settle_ms: u64, answer: Value) -> String {
+    if answer["outcome"] == "blind" {
+        let why = answer["error"].as_str().unwrap_or("the read failed");
+        return kotae::Answer::blind(format!("[{cluster}] {why}")).render();
+    }
+    if answer["key"] != key {
+        return kotae::Answer::refused(
+            format!(
+                "that cursor belongs to `{}`, not `{key}`",
+                answer["key"].as_str().unwrap_or("another read")
+            ),
+            ["pass a cursor with the same arguments that produced it, or omit it to start over"],
+        )
+        .render();
+    }
+    if first && answer["phase"]["phase"] == "absorbing" && answer["total"] == 0 {
+        return kotae::Answer::blind(format!(
+            "[{cluster}] `{key}` absorbed nothing within {settle_ms} ms and is still absorbing. \
+             This is not an empty result: ask again, or watch it in `banken_absorb`. A \
+             `streaming` list against an apiserver that does not negotiate \
+             sendInitialEvents stalls here; `--list-strategy list-watch` does not."
+        ))
+        .render();
+    }
+    if first && answer["phase"]["phase"] == "degraded" && answer["total"] == 0 {
+        let cause = answer["phase"]["cause"]
+            .as_str()
+            .unwrap_or("the stream failed");
+        return kotae::Answer::blind(format!("[{cluster}] {cause}")).render();
+    }
+    let mut answer = answer;
+    if let Some(o) = answer.as_object_mut() {
+        o.insert("cluster".into(), Value::String(cluster.to_owned()));
+    }
+    ok(&answer)
+}
+
 fn refuse_unknown_kind(got: &str) -> String {
     kotae::Answer::refused(format!("unknown kind `{got}`"), legal_kinds()).render()
 }
@@ -230,6 +279,11 @@ pub struct ListInput {
     /// Namespace to scope to. Omit for all namespaces. Ignored for
     /// cluster-scoped kinds (`node`, `namespace`).
     pub namespace: Option<String>,
+    /// A `next` or `follow` value from a previous answer to the same question.
+    /// `next` pages through the snapshot the first answer was cut from; `follow`
+    /// returns only what changed since. Omit to start a fresh read.
+    #[serde(default)]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -248,12 +302,25 @@ pub struct LogsInput {
     pub pod: String,
     /// The pod's namespace.
     pub namespace: String,
+    /// The container to follow. Omit for a single-container pod.
+    #[serde(default)]
+    pub container: Option<String>,
+    /// A `next` or `follow` value from a previous answer to the same question.
+    /// `next` pages through the snapshot the first answer was cut from; `follow`
+    /// returns only what changed since. Omit to start a fresh read.
+    #[serde(default)]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct EventsInput {
     /// Namespace to scope to. Omit for all namespaces.
     pub namespace: Option<String>,
+    /// A `next` or `follow` value from a previous answer to the same question.
+    /// `next` pages through the snapshot the first answer was cut from; `follow`
+    /// returns only what changed since. Omit to start a fresh read.
+    #[serde(default)]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -274,28 +341,122 @@ pub struct Empty {}
 #[tool_router]
 impl BankenMcp {
     /// Build the server over an env and the cluster it reads.
+    ///
+    /// # Panics
+    ///
+    /// Never in a build with izumi-armazem's `vigy` feature, which banken
+    /// always enables; the default configuration is otherwise invalid.
     #[must_use]
-    pub fn new(
-        env: Arc<dyn ClusterEnv + Send + Sync>,
+    pub fn new(env: SharedEnv, cluster: impl Into<String>, ronda: crate::ronda::Ronda) -> Self {
+        Self::over_env(env, cluster, ronda, Plano::default())
+            .expect("the default Armazém configuration is valid in a build with the vigy policy")
+    }
+
+    /// # Errors
+    ///
+    /// The Armazém configuration is invalid.
+    pub fn over_env(
+        env: SharedEnv,
         cluster: impl Into<String>,
         ronda: crate::ronda::Ronda,
-    ) -> Self {
-        let cluster = cluster.into();
-        Self {
-            served: Arc::new(std::sync::RwLock::new(Served {
-                env,
-                glass: crate::glass::GlassLedger::default_path()
-                    .map(|p| crate::glass::GlassLedger::at(p, cluster.clone())),
-                cluster,
-                permits: None,
-            })),
+        plano: Plano,
+    ) -> Result<Self, izumi_armazem::ConfigError> {
+        let estoque = Estoque::over_env(Arc::clone(&env), None, &plano.armazem)?;
+        let _ = estoque.spawn_zeladores();
+        Ok(Self::assemble(
+            env,
+            cluster.into(),
+            estoque,
             ronda,
+            plano,
+            false,
+        ))
+    }
+
+    /// # Errors
+    ///
+    /// The Armazém configuration is invalid.
+    pub fn over_kube(
+        env: Arc<crate::live::KubeClusterEnv>,
+        ronda: crate::ronda::Ronda,
+        plano: Plano,
+    ) -> Result<Self, izumi_armazem::ConfigError> {
+        let estoque = env.estoque(plano.strategy, &plano.armazem)?;
+        let _ = estoque.spawn_zeladores();
+        let cluster = env.context_name().unwrap_or_default();
+        let permits = Arc::clone(&env) as Arc<dyn crate::permit::PermitEnv + Send + Sync>;
+        Ok(Self::assemble(env, cluster, estoque, ronda, plano, false).with_permits(permits))
+    }
+
+    #[must_use]
+    pub fn sharing(
+        env: SharedEnv,
+        cluster: impl Into<String>,
+        estoque: Estoque,
+        ronda: crate::ronda::Ronda,
+        plano: Plano,
+    ) -> Self {
+        Self::assemble(env, cluster.into(), estoque, ronda, plano, true)
+    }
+
+    fn assemble(
+        env: SharedEnv,
+        cluster: String,
+        estoque: Estoque,
+        ronda: crate::ronda::Ronda,
+        plano: Plano,
+        pinned: bool,
+    ) -> Self {
+        Self {
+            served: Arc::new(std::sync::RwLock::new(Served::new(
+                env,
+                cluster,
+                estoque,
+                &plano.streams,
+            ))),
+            ronda,
+            plano,
+            pinned,
             tool_router: Self::tool_router(),
         }
     }
 
-    /// Point the ledger reader at an explicit path (a test, or an operator
-    /// with a non-default state dir).
+    fn row_streams(&self) -> Option<(Arc<Streams<KindFonte>>, String)> {
+        self.served
+            .read()
+            .ok()
+            .map(|g| (Arc::clone(&g.rows), g.cluster.clone()))
+    }
+
+    fn log_streams(&self) -> Option<(Arc<Streams<LogFonte>>, String)> {
+        self.served
+            .read()
+            .ok()
+            .map(|g| (Arc::clone(&g.logs), g.cluster.clone()))
+    }
+
+    async fn read_kind(
+        &self,
+        key: KindKey,
+        cursor: Option<&str>,
+        render: &(dyn Fn(&banken_spec::env::Row) -> Value + Sync),
+    ) -> String {
+        let Some((streams, cluster)) = self.row_streams() else {
+            return refuse_poisoned();
+        };
+        let name = key.to_string();
+        match streams.read(key, cursor, render).await {
+            Ok(answer) => page(
+                &cluster,
+                &name,
+                cursor.is_none(),
+                self.plano.streams.settle_ms,
+                answer,
+            ),
+            Err(r) => refusal(&r),
+        }
+    }
+
     #[must_use]
     pub fn with_glass_ledger(self, ledger: crate::glass::GlassLedger) -> Self {
         if let Ok(mut g) = self.served.write() {
@@ -324,6 +485,11 @@ impl BankenMcp {
     /// when it moves behind a lock this is the only line that changes. A stamp
     /// that silently went stale after a switch would be worse than no stamp —
     /// it would be a confident wrong answer about which estate replied.
+    #[must_use]
+    pub fn served_cluster(&self) -> String {
+        self.cluster()
+    }
+
     fn cluster(&self) -> String {
         self.served
             .read()
@@ -335,7 +501,7 @@ impl BankenMcp {
     }
 
     /// The env to read from, cloned out so no lock is held across an `.await`.
-    fn env(&self) -> Option<Arc<dyn ClusterEnv + Send + Sync>> {
+    fn env(&self) -> Option<SharedEnv> {
         self.served.read().ok().map(|g| Arc::clone(&g.env))
     }
 
@@ -368,6 +534,17 @@ impl BankenMcp {
             )
             .render();
         }
+        if self.pinned {
+            return kotae::Answer::refused(
+                format!(
+                    "this endpoint reads the same store as the banken screen serving `{}`; \
+                     switching it here would split the agent from the operator",
+                    self.cluster()
+                ),
+                ["switch the cluster in the banken screen, or run `banken mcp --context <name>` for a separate server"],
+            )
+            .render();
+        }
         let previous = self.cluster();
         if want == previous {
             // Not an error, and not silence either: a caller that re-asserts the
@@ -392,18 +569,25 @@ impl BankenMcp {
         match crate::live::KubeClusterEnv::connect_with_context(want).await {
             Ok(env) => {
                 let name = env.context_name().unwrap_or_else(|| want.to_string());
-                let shared = Arc::new(env);
-                let next = Served {
-                    env: shared.clone() as Arc<dyn ClusterEnv + Send + Sync>,
-                    glass: crate::glass::GlassLedger::default_path()
-                        .map(|pp| crate::glass::GlassLedger::at(pp, name.clone())),
-                    cluster: name.clone(),
-                    // Swapped WITH the env, never left behind: the invariant is
-                    // that one env answers both reads and authorization, so
-                    // `banken_can_i` cannot disagree with `banken_list` about
-                    // which identity is asking.
-                    permits: Some(shared as Arc<dyn crate::permit::PermitEnv + Send + Sync>),
+                let estoque = match env.estoque(self.plano.strategy, &self.plano.armazem) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        return kotae::Answer::refused_flatly(format!(
+                            "the Armazém configuration is invalid ({e}). Still serving \
+                             `{previous}` — nothing was switched."
+                        ))
+                        .render();
+                    }
                 };
+                let _ = estoque.spawn_zeladores();
+                let shared = Arc::new(env);
+                let mut next = Served::new(
+                    shared.clone() as SharedEnv,
+                    name.clone(),
+                    estoque,
+                    &self.plano.streams,
+                );
+                next.permits = Some(shared as Arc<dyn crate::permit::PermitEnv + Send + Sync>);
                 match self.served.write() {
                     Ok(mut g) => {
                         *g = next;
@@ -473,18 +657,18 @@ impl BankenMcp {
         let Some(kind) = kind_of(&p.kind) else {
             return refuse_unknown_kind(&p.kind);
         };
-        let Some(env) = self.env() else {
-            return refuse_poisoned();
+        let namespace = p.namespace.as_deref().filter(|_| kind.is_namespaced());
+        let key = match KindKey::within(kind, namespace) {
+            Ok(k) => k,
+            Err(e) => {
+                return kotae::Answer::refused(
+                    e.to_string(),
+                    ["name a non-blank namespace, or omit it for all namespaces"],
+                )
+                .render();
+            }
         };
-        match env.list_resources(kind, p.namespace.as_deref()) {
-            Ok(rows) => ok(&json!({
-                "cluster": self.cluster(),
-                "kind": kind.label(),
-                "count": rows.len(),
-                "rows": rows.iter().map(row_json).collect::<Vec<_>>(),
-            })),
-            Err(e) => fail(&self.cluster(), &e),
-        }
+        self.read_kind(key, p.cursor.as_deref(), &row_json).await
     }
 
     #[tool(
@@ -511,49 +695,84 @@ impl BankenMcp {
         description = "Tail a pod's logs (a bounded snapshot, not a follow). The first thing to read when a workload is failing and its status alone does not say why."
     )]
     pub async fn banken_logs(&self, Parameters(p): Parameters<LogsInput>) -> String {
-        // `follow: false` is fixed rather than exposed as a parameter. A follow
-        // stream has no terminating read, and a tool call that never returns is
-        // how an agent loop wedges — the TUI's pager can hold an open stream
-        // because a human can press a key to leave it.
-        let Some(env) = self.env() else {
+        let Some((streams, cluster)) = self.log_streams() else {
             return refuse_poisoned();
         };
-        match env.logs(&p.pod, &p.namespace, false) {
-            // ★ The stamp matters MOST here. Pod logs are the read an agent is
-            // most likely to quote back, reason over, or paste into a report,
-            // and log lines carry no intrinsic hint of which cluster produced
-            // them. Unstamped, a context switch makes them unplaceable.
-            Ok(s) => {
-                let cluster = self.cluster();
-                let s = s.keep_newest_fitting(LOG_ANSWER_BYTES, |c| {
-                    logs_answer(&cluster, c).len() <= LOG_ANSWER_BYTES
-                });
-                logs_answer(&cluster, &s)
-            }
-            Err(e) => fail(&self.cluster(), &e),
+        let key = LogKey {
+            namespace: p.namespace.clone(),
+            pod: p.pod.clone(),
+            container: p.container.clone(),
+        };
+        let name = key.to_string();
+        let first = p.cursor.is_none();
+        let answer = match streams.read(key, p.cursor.as_deref(), &line_json).await {
+            Ok(a) => a,
+            Err(r) => return refusal(&r),
+        };
+        let body = page(&cluster, &name, first, self.plano.streams.settle_ms, answer);
+        let mut v: Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(_) => return body,
+        };
+        if v["outcome"] != "found" {
+            return body;
         }
+        if let Some(o) = v.as_object_mut() {
+            o.insert("pod".into(), Value::String(p.pod));
+            o.insert("container".into(), json!(p.container));
+            o.insert(
+                "bounds".into(),
+                Value::Array(
+                    log_bounds(self.plano.armazem.journal_cap)
+                        .iter()
+                        .map(|b| {
+                            json!({
+                                "bound": b.token(),
+                                "limit": b.limit(),
+                                "meaning": b.meaning(),
+                            })
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        ok(&v)
     }
 
     #[tool(
         description = "Cluster events — type, reason, involved object, message. Where the reason a pod will not start is usually written down, and the read that most often ends a triage."
     )]
     pub async fn banken_events(&self, Parameters(p): Parameters<EventsInput>) -> String {
-        let Some(env) = self.env() else {
+        let key = match KindKey::within(ResourceKind::Event, p.namespace.as_deref()) {
+            Ok(k) => k,
+            Err(e) => {
+                return kotae::Answer::refused(
+                    e.to_string(),
+                    ["name a non-blank namespace, or omit it"],
+                )
+                .render();
+            }
+        };
+        self.read_kind(key, p.cursor.as_deref(), &event_json).await
+    }
+
+    #[tool(
+        description = "What this server has absorbed: every stream's key (`pod/*`, `deployment/flux-system`, `log/<ns>/<pod>`), its phase (absorbing / live / degraded / dormant / direct), change sequence, record count, how many readers hold it, whether its stream runs, and how long it has been idle or dormant. Separates 'what banken knows' from 'what was asked': a dormant key still holds its last rows and resumes from them."
+    )]
+    pub async fn banken_absorb(&self, Parameters(_): Parameters<Empty>) -> String {
+        let Ok(g) = self.served.read() else {
             return refuse_poisoned();
         };
-        match env.events(p.namespace.as_deref()) {
-            Ok(evs) => ok(&json!({
-                "cluster": self.cluster(),
-                "count": evs.len(),
-                "events": evs.iter().map(|e| json!({
-                    "type": e.kind,
-                    "reason": e.reason,
-                    "object": e.involved,
-                    "message": e.message,
-                })).collect::<Vec<_>>(),
-            })),
-            Err(e) => fail(&self.cluster(), &e),
-        }
+        ok(&json!({
+            "cluster": g.cluster,
+            "keys": g.estoque.inventory(),
+            "config": self.plano.armazem,
+            "zelador": {
+                "rows": g.estoque.rows.zelador_error(),
+                "logs": g.estoque.logs.zelador_error(),
+            },
+            "openCursors": g.rows.open_streams() + g.logs.open_streams(),
+        }))
     }
 
     #[tool(
@@ -692,20 +911,36 @@ impl BankenMcp {
     }
 }
 
-fn logs_answer(cluster: &str, s: &banken_spec::env::LogStream) -> String {
-    ok(&json!({
-        "cluster": cluster,
-        "pod": s.pod,
-        "lineCount": s.lines.len(),
-        "truncated": !s.bounds.is_empty(),
-        "bounds": s.bounds.iter().map(|b| json!({
-            "bound": b.token(),
-            "limit": b.limit(),
-            "meaning": b.meaning(),
-        })).collect::<Vec<_>>(),
-        "lines": s.lines,
-        "follow": s.follow,
-    }))
+fn log_bounds(ring: usize) -> [banken_spec::env::LogBound; 2] {
+    [
+        banken_spec::env::LogBound::TailLines {
+            limit: crate::live::LOG_TAIL_LINES,
+        },
+        banken_spec::env::LogBound::RingLines { limit: ring },
+    ]
+}
+
+fn line_json(l: &LogLine) -> Value {
+    json!({ "at": l.at, "text": l.text })
+}
+
+fn event_json(r: &banken_spec::env::Row) -> Value {
+    let cell = |k: &str| {
+        r.cells
+            .iter()
+            .find(|(key, _)| key == k)
+            .map(|(_, v)| v.clone())
+    };
+    json!({
+        "type": cell("event-type"),
+        "reason": cell("reason"),
+        "object": cell("object"),
+        "count": cell("count"),
+        "message": cell("message"),
+        "name": r.name,
+        "namespace": r.namespace,
+        "uid": r.uid.as_str(),
+    })
 }
 
 fn row_json(r: &banken_spec::env::Row) -> Value {
@@ -727,6 +962,59 @@ fn row_json(r: &banken_spec::env::Row) -> Value {
 
 // `router = self.tool_router` is NOT the default and is load-bearing.
 //
+/// # Errors
+///
+/// The path exists and is not a socket, is a socket another process serves,
+/// or cannot be bound.
+pub async fn serve_socket(server: BankenMcp, path: &std::path::Path) -> Result<Servindo, String> {
+    use rmcp::ServiceExt;
+    use std::os::unix::fs::FileTypeExt;
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if !meta.file_type().is_socket() {
+            return Err(format!(
+                "`{}` exists and is not a socket; banken will not replace it",
+                path.display()
+            ));
+        }
+        if tokio::net::UnixStream::connect(path).await.is_ok() {
+            return Err(format!(
+                "`{}` is already served by another process",
+                path.display()
+            ));
+        }
+        std::fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    let listener =
+        tokio::net::UnixListener::bind(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let handle = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let server = server.clone();
+            tokio::spawn(async move {
+                if let Ok(running) = server.serve(stream).await {
+                    let _ = running.waiting().await;
+                }
+            });
+        }
+    });
+    Ok(Servindo {
+        handle,
+        path: path.to_path_buf(),
+    })
+}
+
+#[must_use = "dropping it stops serving and removes the socket"]
+pub struct Servindo {
+    handle: tokio::task::JoinHandle<()>,
+    path: std::path::PathBuf,
+}
+
+impl Drop for Servindo {
+    fn drop(&mut self) {
+        self.handle.abort();
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 // rmcp 1.x's `#[tool_handler]` defaults to `Self::tool_router()` — the STATIC
 // constructor — so the cached field goes unread and the whole router is rebuilt
 // on every `list_tools` and every `call_tool`. Nothing fails; the surface
@@ -766,6 +1054,7 @@ impl ServerHandler for BankenMcp {
 mod tests {
     use super::*;
     use crate::fixture::FixtureClusterEnv;
+    use banken_spec::env::ClusterEnv;
 
     fn server() -> BankenMcp {
         BankenMcp::new(
@@ -857,47 +1146,375 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn a_long_line_log_is_bounded_in_bytes_and_says_so() {
-        let s = BankenMcp::new(
-            Arc::new(LongLines(FixtureClusterEnv::new())),
+    fn tight(env: SharedEnv, budget: usize) -> BankenMcp {
+        BankenMcp::over_env(
+            env,
             "fixture",
             crate::ronda::Ronda::inert(),
+            Plano {
+                streams: StreamConfig {
+                    budget_bytes: budget,
+                    ..StreamConfig::default()
+                },
+                ..Plano::default()
+            },
         )
-        .banken_logs(Parameters(LogsInput {
+        .expect("default config")
+    }
+
+    fn logs_of(cursor: Option<String>) -> Parameters<LogsInput> {
+        Parameters(LogsInput {
             pod: "pangea-operator-0".into(),
             namespace: "pangea-system".into(),
-        }))
-        .await;
-        assert!(
-            s.len() <= LOG_ANSWER_BYTES,
-            "a logs answer must fit an MCP result budget; it was {} bytes",
-            s.len()
-        );
-        let v: Value = serde_json::from_str(&s).expect("valid json");
-        assert_eq!(v["truncated"], true, "{}", &s[..s.len().min(400)]);
-        let bounds = v["bounds"].as_array().expect("bounds is a list");
-        assert!(
-            bounds.iter().any(|b| b["bound"] == "answerBytes"),
-            "the bound that fired is named: {bounds:?}"
-        );
-        let lines = v["lines"].as_array().expect("lines");
+            container: None,
+            cursor,
+        })
+    }
+
+    #[tokio::test]
+    async fn a_long_log_pages_inside_the_budget_and_the_pages_reassemble_every_line() {
+        let s = tight(Arc::new(LongLines(FixtureClusterEnv::new())), 8 * 1024);
+        let mut seen: Vec<String> = Vec::new();
+        let mut v: Value = serde_json::from_str(&s.banken_logs(logs_of(None)).await).unwrap();
+        assert_eq!(v["total"], 509, "{v}");
+        let mut pages = 0;
+        loop {
+            pages += 1;
+            assert_eq!(v["outcome"], "found", "{v}");
+            assert_eq!(v["cluster"], "fixture");
+            let items = serde_json::to_vec(&v["items"]).unwrap().len();
+            assert!(items <= 8 * 1024 + 2, "a page over budget: {items} bytes");
+            assert!(
+                v["bounds"]
+                    .as_array()
+                    .is_some_and(|b| b.iter().any(|x| x["bound"] == "ringLines")),
+                "{v}"
+            );
+            for it in v["items"].as_array().unwrap() {
+                seen.push(it["text"].as_str().unwrap()[..9].to_owned());
+            }
+            let Some(next) = v["next"].as_str().map(str::to_owned) else {
+                break;
+            };
+            assert_eq!(v["truncated"]["by"], "budget-bytes");
+            v = serde_json::from_str(&s.banken_logs(logs_of(Some(next))).await).unwrap();
+        }
+        assert!(pages > 1, "a 509-line log must not fit one 8 KiB page");
+        let want: Vec<String> = (0..509).map(|i| format!("line {i:04}")).collect();
         assert_eq!(
-            lines.last().and_then(Value::as_str).map(|l| &l[..9]),
-            Some("line 0508"),
-            "the NEWEST lines are the ones kept"
+            seen, want,
+            "nothing is cut: the oldest line is reachable by paging"
         );
     }
 
-    /// A FAILED read names the cluster it failed against.
-    ///
-    /// The gap this closes was found by driving the live server, not by
-    /// reading: every successful read was stamped and every failure was not,
-    /// so `outcome=blind` came back with no `cluster` field. Once the served
-    /// context can change under the caller, an unplaced failure cannot be told
-    /// from a failure somewhere else — and this server's own description tells
-    /// an agent to distinguish "the workload is missing" from "the cluster was
-    /// unreachable".
+    #[tokio::test]
+    async fn a_list_pages_and_its_follow_returns_only_changes() {
+        let s = tight(Arc::new(FixtureClusterEnv::new()), 600);
+        let list = |cursor: Option<String>| ListInput {
+            kind: "pods".into(),
+            namespace: None,
+            cursor,
+        };
+        let first: Value =
+            serde_json::from_str(&s.banken_list(Parameters(list(None))).await).unwrap();
+        assert_eq!(first["outcome"], "found", "{first}");
+        assert_eq!(first["cluster"], "fixture");
+        assert_eq!(first["key"], "pod/*");
+        assert_eq!(first["total"], 5);
+        assert!(
+            first["count"].as_u64().unwrap() < 5,
+            "600 bytes holds fewer than five rows: {first}"
+        );
+        assert!(
+            first["items"][0]["uid"]
+                .as_str()
+                .is_some_and(|u| !u.is_empty())
+        );
+        let mut seen = first["count"].as_u64().unwrap();
+        let mut next = first["next"].as_str().map(str::to_owned);
+        while let Some(cursor) = next {
+            let v: Value =
+                serde_json::from_str(&s.banken_list(Parameters(list(Some(cursor)))).await).unwrap();
+            assert_eq!(v["outcome"], "found", "{v}");
+            seen += v["count"].as_u64().unwrap();
+            next = v["next"].as_str().map(str::to_owned);
+        }
+        assert_eq!(seen, 5);
+        let follow = first["follow"].as_str().unwrap().to_owned();
+        let quiet: Value =
+            serde_json::from_str(&s.banken_list(Parameters(list(Some(follow)))).await).unwrap();
+        assert_eq!(quiet["outcome"], "found", "{quiet}");
+        assert_eq!(
+            quiet["changes"],
+            json!([]),
+            "a still fixture changes nothing: {quiet}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_question_about_the_same_kind_reads_the_same_stream() {
+        let s = server();
+        for _ in 0..3 {
+            s.banken_list(Parameters(ListInput {
+                kind: "po".into(),
+                namespace: None,
+                cursor: None,
+            }))
+            .await;
+        }
+        let v: Value = serde_json::from_str(&s.banken_absorb(Parameters(Empty {})).await).unwrap();
+        let keys = v["keys"].as_array().expect("keys");
+        let pods: Vec<&Value> = keys.iter().filter(|k| k["key"] == "pod/*").collect();
+        assert_eq!(
+            pods.len(),
+            1,
+            "one stream per key, however often it is asked: {v}"
+        );
+        assert_eq!(pods[0]["phase"]["phase"], "live", "{v}");
+        assert_eq!(pods[0]["records"], 5, "{v}");
+        assert_eq!(v["cluster"], "fixture");
+        assert_eq!(v["config"]["mode"], "lazy");
+        assert_eq!(v["config"]["policy"], "vigy");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_or_foreign_cursor_is_refused_never_an_empty_list() {
+        let s = server();
+        for bad in ["garbage", "p999.0.0", "f42.7"] {
+            let v: Value = serde_json::from_str(
+                &s.banken_list(Parameters(ListInput {
+                    kind: "pods".into(),
+                    namespace: None,
+                    cursor: Some(bad.into()),
+                }))
+                .await,
+            )
+            .unwrap();
+            assert_eq!(v["outcome"], "refused", "{bad}: {v}");
+            assert!(v["legal"].as_array().is_some_and(|l| !l.is_empty()), "{v}");
+            assert!(v["items"].is_null() && v["changes"].is_null(), "{v}");
+        }
+        let pods: Value = serde_json::from_str(
+            &s.banken_list(Parameters(ListInput {
+                kind: "pods".into(),
+                namespace: None,
+                cursor: None,
+            }))
+            .await,
+        )
+        .unwrap();
+        let follow = pods["follow"].as_str().unwrap().to_owned();
+        let crossed: Value = serde_json::from_str(
+            &s.banken_list(Parameters(ListInput {
+                kind: "deploy".into(),
+                namespace: None,
+                cursor: Some(follow),
+            }))
+            .await,
+        )
+        .unwrap();
+        assert_eq!(
+            crossed["outcome"], "refused",
+            "a pods cursor cannot answer deployments: {crossed}"
+        );
+    }
+
+    async fn call(
+        lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>>,
+        write: &mut tokio::net::unix::OwnedWriteHalf,
+        id: u64,
+        tool: &str,
+        args: Value,
+    ) -> Value {
+        use tokio::io::AsyncWriteExt;
+        let req = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": tool, "arguments": args}});
+        write
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .expect("write");
+        loop {
+            let line = lines.next_line().await.expect("read").expect("an answer");
+            let v: Value = serde_json::from_str(&line).expect("json-rpc");
+            if v["id"] == id {
+                let text = v["result"]["content"][0]["text"].as_str().expect("text");
+                return serde_json::from_str(text).expect("tool json");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_socket_endpoint_reads_the_screens_own_store_and_will_not_switch_it() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let env: SharedEnv = Arc::new(FixtureClusterEnv::new());
+        let estoque =
+            Estoque::over_env(Arc::clone(&env), None, &ArmazemConfig::default()).expect("config");
+        let mut screen = estoque
+            .rows
+            .interest(KindKey::all(ResourceKind::Deployment));
+        screen.settled(std::time::Duration::from_secs(5)).await;
+
+        let dir = std::env::temp_dir().join(format!("banken-sock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("mcp.sock");
+        let server = BankenMcp::sharing(
+            Arc::clone(&env),
+            "fixture",
+            estoque.clone(),
+            crate::ronda::Ronda::inert(),
+            Plano::default(),
+        );
+        let _served = serve_socket(server, &path).await.expect("bind");
+
+        let stream = tokio::net::UnixStream::connect(&path)
+            .await
+            .expect("connect");
+        let (read, mut write) = stream.into_split();
+        let mut lines = tokio::io::BufReader::new(read).lines();
+        let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-03-26", "capabilities": {},
+            "clientInfo": {"name": "probe", "version": "0"}}});
+        write
+            .write_all(format!("{init}\n").as_bytes())
+            .await
+            .expect("init");
+        lines
+            .next_line()
+            .await
+            .expect("read")
+            .expect("initialize answer");
+        let done = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+        write
+            .write_all(format!("{done}\n").as_bytes())
+            .await
+            .expect("initialized");
+
+        let absorb = call(&mut lines, &mut write, 2, "banken_absorb", json!({})).await;
+        let keys: Vec<&str> = absorb["keys"]
+            .as_array()
+            .expect("keys")
+            .iter()
+            .filter_map(|k| k["key"].as_str())
+            .collect();
+        assert!(
+            keys.contains(&"deployment/*"),
+            "the agent must see the key the screen opened, in the same store: {absorb}"
+        );
+        let switched = call(
+            &mut lines,
+            &mut write,
+            3,
+            "banken_use_context",
+            json!({"context": "somewhere-else"}),
+        )
+        .await;
+        assert_eq!(switched["outcome"], "refused", "{switched}");
+        drop(screen);
+        drop(_served);
+        assert!(!path.exists(), "a dropped endpoint removes its socket");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct Silent;
+
+    impl izumi_armazem::Source for Silent {
+        type Key = KindKey;
+        type Record = banken_spec::env::Row;
+
+        fn open(
+            &self,
+            _key: KindKey,
+            _resume: Option<String>,
+            feed: izumi_armazem::Feed<banken_spec::env::Row>,
+        ) -> izumi_armazem::BoxFuture<()> {
+            Box::pin(async move { feed.until_stopped().await })
+        }
+
+        fn fetch(
+            &self,
+            _key: KindKey,
+        ) -> izumi_armazem::BoxFuture<Result<Vec<banken_spec::env::Row>, String>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_still_absorbing_is_blind_not_an_empty_list() {
+        let env: SharedEnv = Arc::new(FixtureClusterEnv::new());
+        let estoque = Estoque::new(
+            crate::armazem::Fonte::new(Silent),
+            crate::armazem::Fonte::new(crate::armazem::EnvLogSource::new(Arc::clone(&env))),
+            &ArmazemConfig::default(),
+        )
+        .expect("config");
+        let s = BankenMcp::sharing(
+            env,
+            "fixture",
+            estoque,
+            crate::ronda::Ronda::inert(),
+            Plano {
+                streams: StreamConfig {
+                    settle_ms: 20,
+                    ..StreamConfig::default()
+                },
+                ..Plano::default()
+            },
+        );
+        let v: Value = serde_json::from_str(
+            &s.banken_list(Parameters(ListInput {
+                kind: "pods".into(),
+                namespace: None,
+                cursor: None,
+            }))
+            .await,
+        )
+        .unwrap();
+        assert_eq!(v["outcome"], "blind", "{v}");
+        assert!(
+            v["because"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("still absorbing"),
+            "{v}"
+        );
+        assert!(v["items"].is_null() && v["total"].is_null(), "{v}");
+    }
+
+    #[tokio::test]
+    async fn an_expired_cursor_is_refused() {
+        let s = BankenMcp::over_env(
+            Arc::new(FixtureClusterEnv::new()),
+            "fixture",
+            crate::ronda::Ronda::inert(),
+            Plano {
+                streams: StreamConfig {
+                    cursor_ttl_ms: 1,
+                    ..StreamConfig::default()
+                },
+                ..Plano::default()
+            },
+        )
+        .expect("config");
+        let q = |cursor| ListInput {
+            kind: "pods".into(),
+            namespace: None,
+            cursor,
+        };
+        let first: Value = serde_json::from_str(&s.banken_list(Parameters(q(None))).await).unwrap();
+        let follow = first["follow"].as_str().unwrap().to_owned();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let v: Value =
+            serde_json::from_str(&s.banken_list(Parameters(q(Some(follow)))).await).unwrap();
+        assert_eq!(v["outcome"], "refused", "{v}");
+        assert!(
+            v["because"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("expired"),
+            "{v}"
+        );
+    }
+
     #[tokio::test]
     async fn a_failed_read_names_the_cluster_it_failed_against() {
         let s = server();
@@ -907,6 +1524,8 @@ mod tests {
             .banken_logs(Parameters(LogsInput {
                 pod: "no-such-pod-anywhere".into(),
                 namespace: "default".into(),
+                container: None,
+                cursor: None,
             }))
             .await;
         assert!(
@@ -993,6 +1612,7 @@ mod tests {
             .banken_list(Parameters(ListInput {
                 kind: "pod".into(),
                 namespace: None,
+                cursor: None,
             }))
             .await;
         assert!(
@@ -1048,6 +1668,8 @@ mod tests {
             .banken_logs(Parameters(LogsInput {
                 pod: "banken-0".into(),
                 namespace: "default".into(),
+                container: None,
+                cursor: None,
             }))
             .await;
         assert!(
@@ -1201,13 +1823,14 @@ mod tests {
             .banken_list(Parameters(ListInput {
                 kind: "pods".into(),
                 namespace: None,
+                cursor: None,
             }))
             .await;
         let v: Value = serde_json::from_str(&s).expect("valid json");
-        assert_eq!(v["kind"], "pod");
+        assert_eq!(v["key"], "pod/*");
         assert!(v["count"].as_u64().unwrap_or(0) > 0, "{s}");
         assert!(
-            v["rows"][0]["uid"].as_str().is_some_and(|u| !u.is_empty()),
+            v["items"][0]["uid"].as_str().is_some_and(|u| !u.is_empty()),
             "a row must carry the identity that survives a recreate: {s}",
         );
     }
@@ -1222,6 +1845,7 @@ mod tests {
             .banken_list(Parameters(ListInput {
                 kind: "poddz".into(),
                 namespace: None,
+                cursor: None,
             }))
             .await;
         let v: Value = serde_json::from_str(&s).expect("valid json");
@@ -1236,7 +1860,7 @@ mod tests {
         );
         assert!(v["legal"].as_array().is_some_and(|a| !a.is_empty()), "{s}");
         assert!(
-            v["rows"].is_null() && v["count"].is_null(),
+            v["items"].is_null() && v["count"].is_null(),
             "a refusal must not be shaped like an empty read: {s}",
         );
     }
@@ -1370,11 +1994,13 @@ mod tests {
             .banken_logs(Parameters(LogsInput {
                 pod: "nonexistent".into(),
                 namespace: "default".into(),
+                container: None,
+                cursor: None,
             }))
             .await;
         let v: Value = serde_json::from_str(&s).expect("valid json");
         assert!(
-            v.get("error").is_some() || v.get("lines").is_some(),
+            v.get("because").is_some() || v.get("items").is_some(),
             "either a typed refusal or a real read: {s}",
         );
     }

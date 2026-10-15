@@ -125,15 +125,18 @@ fn status_cells_are_pathology_colored() {
 /// The full app frame (title + table + status line) renders through the
 /// `BankenApp::render` path with the source label present in the status
 /// line — proving the runtime's draw path, not just the bare table drawer.
-#[test]
-fn app_frame_renders_title_table_and_status_line() {
-    let app = BankenApp::try_new(
+#[tokio::test]
+async fn app_frame_renders_title_table_and_status_line() {
+    let app = BankenApp::<FixtureClusterEnv, MockSessionEnv>::try_new(
         FixtureClusterEnv::new(),
         MockSessionEnv::new(),
         OperatorId::new("drzzln").expect("a literal witness is non-blank"),
         "source: fixture",
     )
-    .expect("the shipped vocabulary must build an app");
+    .expect("the shipped vocabulary must build an app")
+    .settled_on_env()
+    .await
+    .expect("the default Armazém configuration is valid");
     let mut backend = TestBackend::new(80, 16);
     backend.draw(|buf| app.render(buf));
     let lines = backend.to_lines();

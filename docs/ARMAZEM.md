@@ -1,9 +1,9 @@
 # Armazém — lazy absorb, state apart from the screen
 
 **Status (2026-10-15):** the substrate is built and released in izumi
-(`izumi-armazem`, `izumi-mcp`). banken's adoption (phases A1–A6 below) is
-not built yet. It closes `pending-banken: absorb-multi-gvk` and replaces the
-per-view synchronous read.
+(`izumi-armazem`, `izumi-mcp` 0.1.23). banken adopts it through A4: every
+view reads a shelf, the zelador ticks in the binary, and MCP pages and
+follows through `izumi_mcp::Streams`. A5 and A6 remain.
 
 ## What is wrong today, measured
 
@@ -124,18 +124,29 @@ source.**
 | CronJob-made Jobs carry no `creationTimestamp` | engenho | in progress |
 | server-side Table prints only NAME and a raw-timestamp AGE | engenho | in progress |
 | pod AGE hardcoded to `-` | banken | fixed, 0.1.42 |
-| `banken_logs` bounded by lines only | banken | capped at 32 KiB in 0.1.43; paging and follow come with A4 |
 | readiness reported a climb in flight as settled at `network` | banken | fixed, 0.1.42 |
+| a paged pod list (1,133 pods, three pages) takes ~10–30 s; a streaming list once did not finish in 90 s | engenho | open |
+| a resume watch can withhold its response until an event exists | engenho | open; banken bounds the open at 5 s and relists |
+| `readyz` reported `store failed` mid-session; requests failed with `SendRequest` | engenho | observed 2026-10-15 |
+| `Streams::first` stamps the cursor's `touched` before the settle wait, so a first read slower than `cursor-ttl-ms` returns an expired cursor | izumi-mcp | open; take `Instant::now()` after the read |
+| `banken_logs` bounded by lines only | banken | paging and follow via `LogSource`, A4 |
 
 ## Phases
 
-| # | Phase | Closes |
-|---|---|---|
-| A1 | `KindKey` + `KubeSource`; every typed kind absorbed; no view reads the env | `absorb-multi-gvk` (typed kinds) |
-| A2 | resume from rv, relist on 410, dormant rows drawn as dormant | — |
-| A3 | the zelador ticking inside banken, its knobs in `banken-config`'s overlay tier | — |
-| A4 | MCP through `izumi_mcp::Streams`, `banken_absorb`, `LogSource`, `--mcp-socket` | `mcp-shares-state` |
-| A5 | `KubeClusterEnv::from_config`, then engenho's `client_conformance` | — |
-| A6 | `engenho_live.rs` against ryn | — |
+| # | Phase | Closes | Status |
+|---|---|---|---|
+| A1 | `KindKey` + `KubeSource`; every typed kind absorbed; no view reads the env | `absorb-multi-gvk` (typed kinds) | built |
+| A2 | resume from rv, relist on 410, dormant rows drawn as dormant | — | built; `resume-token-after-relist` open |
+| A3 | the zelador ticking inside banken, its knobs in `banken-config`'s overlay tier | — | built |
+| A4 | MCP through `izumi_mcp::Streams`, `banken_absorb`, `LogSource`, `--mcp-socket` | `mcp-shares-state` | built |
+| A5 | `KubeClusterEnv::from_config`, then engenho's `client_conformance` | — | open |
+| A6 | `engenho_live.rs` against ryn | — | open |
+
+The overlay keys are `armazem:` (`mode`, `policy`, `linger-ms`, `max-live`,
+`evict-dormant-after-ms`, `journal-cap`, `tick-ms`) and `streams:`
+(`budget-bytes`, `settle-ms`, `cursor-ttl-ms`, `max-cursors`), each in
+izumi's kebab-case and each defaulting to izumi's value. A cursor holds its
+key's interest until `cursor-ttl-ms` passes, so a key an agent is paging
+does not park.
 
 pending-banken: armazem — this document; each phase above is a row.

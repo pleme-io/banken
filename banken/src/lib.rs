@@ -81,6 +81,7 @@
 pub mod absorb;
 pub mod action;
 pub mod app;
+pub mod armazem;
 pub mod cli;
 pub mod feed;
 pub mod fixture;
@@ -103,6 +104,8 @@ pub mod antessala;
 #[cfg(feature = "live")]
 pub mod ronda;
 
+#[cfg(feature = "live")]
+pub mod kube_source;
 #[cfg(feature = "live")]
 pub mod live;
 

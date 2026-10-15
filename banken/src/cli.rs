@@ -192,6 +192,8 @@ pub enum CliError {
     McpWithoutSource,
     /// `--sole-context-of` with no path, or an empty one.
     EmptySoleContextPath,
+    McpSocketWithoutValue,
+    McpSocketWithoutScreen,
 }
 
 impl std::fmt::Display for CliError {
@@ -239,6 +241,13 @@ impl std::fmt::Display for CliError {
                  defaulting to the merged KUBECONFIG: serving whichever estate that \
                  happens to point at, to a reader who cannot see the mistake, is the \
                  bug this flag exists to avoid.",
+            ),
+            CliError::McpSocketWithoutValue => f.write_str(
+                "`--mcp-socket` needs a path for the unix socket the agent will connect to",
+            ),
+            CliError::McpSocketWithoutScreen => f.write_str(
+                "`--mcp-socket` shares a running screen's store with an agent; `banken mcp` \
+                 already serves over stdio and has no screen to share",
             ),
             CliError::McpWithoutSource => f.write_str(
                 "`banken mcp` needs a source: `mcp --context <name>` for a cluster, or \
@@ -292,9 +301,23 @@ impl std::error::Error for CliError {}
 ///
 /// Any [`CliError`].
 pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
+    parse_launch(args).map(|(invocation, _)| invocation)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Options {
+    pub strategy: crate::absorb::ListStrategy,
+    pub mcp_socket: Option<String>,
+}
+
+/// # Errors
+///
+/// Any [`CliError`].
+pub fn parse_launch(args: &[String]) -> Result<(Invocation, Options), CliError> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        return Ok(Invocation::Help);
+        return Ok((Invocation::Help, Options::default()));
     }
+    let mut mcp_socket: Option<String> = None;
 
     let mut want_fixture = false;
     let mut want_live = false;
@@ -355,6 +378,14 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
                 sole_of = Some(value.to_string());
                 i += 1;
             }
+            "--mcp-socket" => {
+                let value = args.get(i + 1).ok_or(CliError::McpSocketWithoutValue)?;
+                if value.is_empty() || value.starts_with('-') {
+                    return Err(CliError::McpSocketWithoutValue);
+                }
+                mcp_socket = Some(value.clone());
+                i += 1;
+            }
             _ if arg.starts_with(':') => {}
             _ if arg.starts_with('-') => return Err(CliError::UnknownFlag(arg.to_owned())),
             // The one meaningful positional: serve MCP instead of a screen.
@@ -365,6 +396,32 @@ pub fn parse_args(args: &[String]) -> Result<Invocation, CliError> {
         i += 1;
     }
 
+    let options = Options {
+        strategy,
+        mcp_socket,
+    };
+    if want_mcp && options.mcp_socket.is_some() {
+        return Err(CliError::McpSocketWithoutScreen);
+    }
+    let invocation = landing(
+        want_fixture,
+        want_live,
+        want_mcp,
+        context,
+        sole_of,
+        strategy,
+    )?;
+    Ok((invocation, options))
+}
+
+fn landing(
+    want_fixture: bool,
+    want_live: bool,
+    want_mcp: bool,
+    context: Option<String>,
+    sole_of: Option<String>,
+    strategy: crate::absorb::ListStrategy,
+) -> Result<Invocation, CliError> {
     // Naming more than one source is exactly as ambiguous for an agent as it
     // is for a human, so every pair is the same refusal.
     if (want_fixture && (want_live || context.is_some()))
@@ -798,5 +855,49 @@ mod list_strategy_cli_tests {
             parse(&["--live", "--list-strategy", "--context", "c"]),
             Err(CliError::ListStrategyWithoutValue)
         );
+    }
+
+    fn launch(args: &[&str]) -> Result<(Invocation, Options), CliError> {
+        let owned: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+        parse_launch(&owned)
+    }
+
+    #[test]
+    fn a_screen_can_share_its_store_over_a_socket() {
+        let (inv, opts) = launch(&["--context", "ryn", "--mcp-socket", "/tmp/b.sock"]).unwrap();
+        assert_eq!(
+            inv,
+            Invocation::Live {
+                context: "ryn".into(),
+                strategy: crate::absorb::ListStrategy::default(),
+            }
+        );
+        assert_eq!(opts.mcp_socket.as_deref(), Some("/tmp/b.sock"));
+        let (_, fixture) = launch(&["--fixture", "--mcp-socket", "s"]).unwrap();
+        assert_eq!(fixture.mcp_socket.as_deref(), Some("s"));
+    }
+
+    #[test]
+    fn a_socket_needs_a_path_and_a_screen() {
+        assert_eq!(
+            launch(&["--fixture", "--mcp-socket"]),
+            Err(CliError::McpSocketWithoutValue)
+        );
+        assert_eq!(
+            launch(&["--fixture", "--mcp-socket", "--context"]),
+            Err(CliError::McpSocketWithoutValue)
+        );
+        assert_eq!(
+            launch(&["mcp", "--fixture", "--mcp-socket", "s"]),
+            Err(CliError::McpSocketWithoutScreen)
+        );
+    }
+
+    #[test]
+    fn mcp_carries_the_named_list_strategy() {
+        let (inv, opts) =
+            launch(&["mcp", "--context", "ryn", "--list-strategy", "list-watch"]).unwrap();
+        assert!(matches!(inv, Invocation::Mcp { .. }));
+        assert_eq!(opts.strategy, crate::absorb::ListStrategy::ListWatch);
     }
 }
