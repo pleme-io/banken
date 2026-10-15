@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "b08b387a577501b2a8822379ebc711b6c98186d78e654c1d20be0d05d001ceb4",
+  "cargo_lock_sha256": "aa360f3b7cb5771b8a59d4648878efe8611aa26666d29ce7b50d2beafa4af40e",
   "manifest_sha256": {
     "Cargo.toml": "169cd81d10ee457dad7b9b6c19739b8ccf7264b0d1b71c13cba2566fa7830850",
-    "banken-config/Cargo.toml": "fc97901b92f2bd77b97823d9d480992396c3b88362bc26319e022550ddbd32b4",
-    "banken-spec/Cargo.toml": "e1ecf83d30e316dc0c10402cc17634a09a84bb0e2bc3e0d9117ecf4a4382e799",
-    "banken/Cargo.toml": "5b44f1419b7baa0634ed38ed0204a29bc64ad902477ac9e7620e9a2269a2fd93"
+    "banken-config/Cargo.toml": "864d4da444a3018074666a5e87010e60f7e882cdef7d9c00cc68a3ca09c11ac2",
+    "banken-spec/Cargo.toml": "407d0fce820b85fa31b54ab8c1bbbe4b270bf04e909da8922ca338dec9fbe2e3",
+    "banken/Cargo.toml": "c64e12693cabc411b30f4ed8db54eaffa14bac4f155c659e6b1989902b90c4b8"
   },
   "target_resolves": {
     "base": {
@@ -635,7 +635,7 @@
           },
           {
             "name": "izumi_armazem",
-            "package_key": "izumi-armazem-0.1.23",
+            "package_key": "izumi-armazem-0.1.24",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -645,7 +645,7 @@
           },
           {
             "name": "izumi_mcp",
-            "package_key": "izumi-mcp-0.1.23",
+            "package_key": "izumi-mcp-0.1.24",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -837,7 +837,7 @@
           },
           {
             "name": "izumi_armazem",
-            "package_key": "izumi-armazem-0.1.23",
+            "package_key": "izumi-armazem-0.1.24",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -847,7 +847,7 @@
           },
           {
             "name": "izumi_mcp",
-            "package_key": "izumi-mcp-0.1.23",
+            "package_key": "izumi-mcp-0.1.24",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -945,7 +945,7 @@
           },
           {
             "name": "izumi_armazem",
-            "package_key": "izumi-armazem-0.1.23",
+            "package_key": "izumi-armazem-0.1.24",
             "kind": "normal",
             "features": [],
             "uses_default_features": false,
@@ -5013,7 +5013,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "izumi-armazem-0.1.23": {
+      "izumi-armazem-0.1.24": {
         "runtime_dependencies": [
           {
             "name": "parking_lot",
@@ -5109,11 +5109,11 @@
           "vigy"
         ]
       },
-      "izumi-mcp-0.1.23": {
+      "izumi-mcp-0.1.24": {
         "runtime_dependencies": [
           {
             "name": "izumi_armazem",
-            "package_key": "izumi-armazem-0.1.23",
+            "package_key": "izumi-armazem-0.1.24",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -16640,10 +16640,10 @@
     "izumi-0.1.14": {
       "edition": "2024"
     },
-    "izumi-armazem-0.1.23": {
+    "izumi-armazem-0.1.24": {
       "edition": "2024"
     },
-    "izumi-mcp-0.1.23": {
+    "izumi-mcp-0.1.24": {
       "edition": "2024"
     },
     "json-patch-4.2.0": {

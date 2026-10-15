@@ -47,7 +47,7 @@ serde.workspace = true
 serde_yaml.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-izumi-armazem = { version = "0.1.23", default-features = false }
+izumi-armazem = { version = "0.1.24", default-features = false }
 
 [lints.clippy]
 pedantic = "warn"

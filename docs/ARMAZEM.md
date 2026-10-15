@@ -128,7 +128,7 @@ source.**
 | a paged pod list (1,133 pods, three pages) takes ~10–30 s; a streaming list once did not finish in 90 s | engenho | open |
 | a resume watch can withhold its response until an event exists | engenho | open; banken bounds the open at 5 s and relists |
 | `readyz` reported `store failed` mid-session; requests failed with `SendRequest` | engenho | observed 2026-10-15 |
-| `Streams::first` stamps the cursor's `touched` before the settle wait, so a first read slower than `cursor-ttl-ms` returns an expired cursor | izumi-mcp | open; take `Instant::now()` after the read |
+| `Streams::first` stamps the cursor's `touched` before the settle wait, so a first read slower than `cursor-ttl-ms` returns an expired cursor | izumi-mcp | fixed, izumi 0.1.24 |
 | `banken_logs` bounded by lines only | banken | paging and follow via `LogSource`, A4 |
 
 ## Phases
