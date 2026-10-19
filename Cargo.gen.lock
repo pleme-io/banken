@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "e33ea74b551b411df4953c260366ab7e66b609387bd7917b2d6eb6428b3caaf5",
+  "cargo_lock_sha256": "67f286afa03f1c8732c4830e481b7a1399615eeb69ad3933e9370ef2ee62e49f",
   "manifest_sha256": {
-    "Cargo.toml": "8a6ad75cbdf68b5a2aead88c336dfea6ccf47b16a9f82ece2de512af5d07c5d5",
+    "Cargo.toml": "56ec4d3b9f544d9db6cb546b499bba23bc3ce3f0668d5c92d053a3d17963bfee",
     "banken-config/Cargo.toml": "864d4da444a3018074666a5e87010e60f7e882cdef7d9c00cc68a3ca09c11ac2",
     "banken-spec/Cargo.toml": "407d0fce820b85fa31b54ab8c1bbbe4b270bf04e909da8922ca338dec9fbe2e3",
     "banken/Cargo.toml": "c64e12693cabc411b30f4ed8db54eaffa14bac4f155c659e6b1989902b90c4b8"
@@ -507,7 +507,7 @@
           "tokio-sleep"
         ]
       },
-      "banken-0.1.45": {
+      "banken-0.1.46": {
         "runtime_dependencies": [
           {
             "name": "anyhow",
@@ -541,7 +541,7 @@
           },
           {
             "name": "banken_config",
-            "package_key": "banken-config-0.1.45",
+            "package_key": "banken-config-0.1.46",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -551,7 +551,7 @@
           },
           {
             "name": "banken_spec",
-            "package_key": "banken-spec-0.1.45",
+            "package_key": "banken-spec-0.1.46",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -823,7 +823,7 @@
           "tear"
         ]
       },
-      "banken-config-0.1.45": {
+      "banken-config-0.1.46": {
         "runtime_dependencies": [
           {
             "name": "ishou_tokens",
@@ -921,7 +921,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "banken-spec-0.1.45": {
+      "banken-spec-0.1.46": {
         "runtime_dependencies": [
           {
             "name": "awase",
@@ -16249,7 +16249,7 @@
     "backon-1.6.0": {
       "edition": "2024"
     },
-    "banken-0.1.45": {
+    "banken-0.1.46": {
       "edition": "2024",
       "lib_target": {
         "name": "banken",
@@ -16262,14 +16262,14 @@
         }
       ]
     },
-    "banken-config-0.1.45": {
+    "banken-config-0.1.46": {
       "edition": "2024",
       "lib_target": {
         "name": "banken_config",
         "path": "src/lib.rs"
       }
     },
-    "banken-spec-0.1.45": {
+    "banken-spec-0.1.46": {
       "edition": "2024",
       "lib_target": {
         "name": "banken_spec",
