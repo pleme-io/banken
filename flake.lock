@@ -281,11 +281,11 @@
         "pre-commit-hooks": "pre-commit-hooks"
       },
       "locked": {
-        "lastModified": 1782759041,
-        "narHash": "sha256-2577vxyoBa8+ZRiXr3CuPtOuEtPRYsFPSZuEc/KI/80=",
+        "lastModified": 1790579054,
+        "narHash": "sha256-S2NrwKB7aQa6HZsg2UGCmzQPI5Dw+bqUPm8R23BAUh8=",
         "owner": "nix-community",
         "repo": "crate2nix",
-        "rev": "5e1ecfd2d15b34ec90c2e51fdffbe8116595a767",
+        "rev": "1cb60331b14f15dad145dbd4e207c1ec110e5675",
         "type": "github"
       },
       "original": {
@@ -1113,11 +1113,11 @@
         "systems": "systems"
       },
       "locked": {
-        "lastModified": 1731533236,
-        "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
+        "lastModified": 1791914995,
+        "narHash": "sha256-Zf/xfQEAasnwnmEfHqW/4hjDE/s44yn2hD4RuVIZRjA=",
         "owner": "numtide",
         "repo": "flake-utils",
-        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
+        "rev": "b7a79d3fea1e214f6d668d521cecec0c01e26544",
         "type": "github"
       },
       "original": {
@@ -2718,11 +2718,11 @@
         "tatara-lisp": "tatara-lisp"
       },
       "locked": {
-        "lastModified": 1786221179,
-        "narHash": "sha256-FuFE63Vhoy6Ac0G4ry7EgLEcS/jYMcuSaa+oykQ+q5c=",
+        "lastModified": 1792430082,
+        "narHash": "sha256-w6+cCo4nBc99Qrg+7TVC3OZ0d+jivr051XmsMaQPH+Q=",
         "owner": "pleme-io",
         "repo": "substrate",
-        "rev": "6bbf581991599444c3137151cdf0e4d3a5b19061",
+        "rev": "cf95a9b37c7bd6bbfcf278643fcca35b22c81401",
         "type": "github"
       },
       "original": {
