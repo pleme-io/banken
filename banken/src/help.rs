@@ -218,7 +218,7 @@ fn footer(page: &HelpPage) -> String {
     // what closes every other overlay in banken.
     s.push_str(&primary_chord(page, "help"));
     s.push_str(" / ");
-    s.push_str(&primary_chord(page, "dismiss"));
+    s.push_str(&primary_chord(page, "ascend"));
     s.push_str(": close  ·  ");
     s.push_str(&primary_chord(page, "quit"));
     s.push_str(": quit banken ");
@@ -337,7 +337,7 @@ mod tests {
     fn the_footer_advertises_one_chord_per_slot() {
         let p = page();
         assert_eq!(primary_chord(&p, "select-next"), "down");
-        assert_eq!(primary_chord(&p, "help"), "h");
+        assert_eq!(primary_chord(&p, "help"), "shift+h");
         // The group really does hold more than one, so this is not vacuous.
         assert!(
             p.section_for(banken_spec::help::HelpTopic::Navigation)

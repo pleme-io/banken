@@ -46,7 +46,7 @@ fn the_authored_bancadas_compile_into_typed_values() {
         .iter()
         .find(|g| g.name == "pod-triage")
         .expect("pod-triage");
-    assert_eq!(triage.keys.canonical(), "g");
+    assert_eq!(triage.keys.canonical(), "t");
     assert_eq!(triage.from, "pods");
     assert_eq!(triage.layout, SessionLayout::MainVertical);
     assert_eq!(triage.panes.len(), 3);
@@ -61,7 +61,7 @@ fn the_authored_bancadas_compile_into_typed_values() {
         .expect("pod-break-glass");
     // `shift+g`, not `G` — awase folds case, so `G` WOULD BE `g` and would
     // collide with pod-triage above. Same trap the `shell` action hit.
-    assert_eq!(glass.keys.canonical(), "shift+g");
+    assert_eq!(glass.keys.canonical(), "shift+t");
     assert_eq!(glass.panes.last().expect("last pane").role, PaneRole::Shell);
 }
 

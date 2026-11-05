@@ -228,6 +228,7 @@ dependencies = [
  "awase",
  "banken-config",
  "banken-spec",
+ "blue-lang-host",
  "bytes",
  "chrono",
  "egaku",
@@ -296,6 +297,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64ct"
+version = "1.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -322,6 +329,163 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "blue-lang-bidama"
+version = "0.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dadc936c7a8bda31c4e361f71f6fc780f99a618960c7b4e2508731e12ce3b11"
+dependencies = [
+ "blue-lang-waku",
+]
+
+[[package]]
+name = "blue-lang-check"
+version = "0.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5fce4813019e583045489cbcdd53547da32fb89cae38646cecd98972112b30a"
+dependencies = [
+ "blue-lang-syntax",
+ "tatara-lisp 0.4.13",
+]
+
+[[package]]
+name = "blue-lang-fmt"
+version = "0.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c647197fe302d256cc02658f4c14c93bade61fa61aa7dc272964b27b36ad805"
+dependencies = [
+ "blue-lang-syntax",
+ "tatara-lisp 0.4.13",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "blue-lang-host"
+version = "0.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ffc49e16698fe1f4fa6ea2164ec8c9ee24a4c8d49eac1686e4cdded34a067f0"
+dependencies = [
+ "blue-lang-host-macros",
+ "blue-lang-pkg",
+ "blue-lang-runtime",
+ "blue-lang-waku",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "tatara-lisp 0.4.13",
+ "tatara-lisp-eval",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "blue-lang-host-macros"
+version = "0.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a35a4c6a17e835c2fc5c60307ab9d1dd9747af5efcf598b510adc702014bc4f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "blue-lang-mondou"
+version = "0.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9aeda1fc6a7aea52ad913101fa6a4a3d96d860de26416d107a0f8592452f86b7"
+dependencies = [
+ "blake3",
+ "blue-lang-check",
+ "blue-lang-fmt",
+ "blue-lang-runtime",
+ "blue-lang-syntax",
+ "blue-lang-waku",
+ "serde_json",
+ "tatara-lisp-eval",
+]
+
+[[package]]
+name = "blue-lang-pkg"
+version = "0.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e150a62708cdcb950c2dac72861484eceb3b0bb0e1484d9031d559cfa2373368"
+dependencies = [
+ "blake3",
+ "blue-lang-bidama",
+ "blue-lang-check",
+ "blue-lang-fmt",
+ "blue-lang-mondou",
+ "blue-lang-proc",
+ "blue-lang-runtime",
+ "blue-lang-syntax",
+ "blue-lang-waku",
+ "serde",
+ "serde_json",
+ "tatara-lisp 0.4.13",
+ "tatara-lisp-eval",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "blue-lang-proc"
+version = "0.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9873e201017da11d7a73c0bbd75839c8ea6ac6337960ba9b92736138076315a5"
+dependencies = [
+ "blake3",
+ "blue-lang-waku",
+ "libc",
+ "rustix 1.1.4",
+ "serde_json",
+ "tatara-lisp 0.4.13",
+ "tatara-lisp-eval",
+]
+
+[[package]]
+name = "blue-lang-runtime"
+version = "0.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0091985143fbf7fc96dbf63209903b495f3f4ee7199e71f8c2dfcbd44e64b83"
+dependencies = [
+ "blake3",
+ "blue-lang-check",
+ "blue-lang-fmt",
+ "blue-lang-proc",
+ "blue-lang-syntax",
+ "blue-lang-waku",
+ "ed25519-dalek",
+ "hmac",
+ "quick-xml",
+ "rnix",
+ "rowan",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tatara-lisp 0.4.13",
+ "tatara-lisp-eval",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "blue-lang-syntax"
+version = "0.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77add8e11947ca169daf7ecbd9e93eb2ee51cd720f55d2f1a063a694c3161491"
+dependencies = [
+ "tatara-lisp 0.4.13",
+]
+
+[[package]]
+name = "blue-lang-waku"
+version = "0.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56f7a3da54897f5dc5f4c13dca350a844d58509bfc199efb0b2ec2bf0a24de44"
+dependencies = [
+ "blue-lang-syntax",
+ "serde",
+ "tatara-lisp 0.4.13",
 ]
 
 [[package]]
@@ -446,6 +610,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "const-oid"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
+
+[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -466,6 +636,12 @@ name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+
+[[package]]
+name = "countme"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7704b5fdd17b18ae31c4c1da5a2e0305a2bf17b5249300a9ee9ed7b72114c636"
 
 [[package]]
 name = "cpufeatures"
@@ -553,6 +729,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "curve25519-dalek"
+version = "4.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "curve25519-dalek-derive",
+ "digest",
+ "fiat-crypto",
+ "rustc_version",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "curve25519-dalek-derive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -587,6 +790,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "der"
+version = "0.7.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
+dependencies = [
+ "const-oid",
+ "zeroize",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -603,6 +816,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -642,6 +856,30 @@ name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
+name = "ed25519"
+version = "2.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
+dependencies = [
+ "pkcs8",
+ "signature",
+]
+
+[[package]]
+name = "ed25519-dalek"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519",
+ "serde",
+ "sha2",
+ "subtle",
+ "zeroize",
+]
 
 [[package]]
 name = "educe"
@@ -729,7 +967,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -806,6 +1044,12 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
+name = "fiat-crypto"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
 name = "figment"
@@ -1051,6 +1295,12 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
+version = "0.14.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
+
+[[package]]
+name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
@@ -1095,6 +1345,15 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
 
 [[package]]
 name = "home"
@@ -1392,7 +1651,7 @@ dependencies = [
  "archery",
  "equivalent",
  "imbl-sized-chunks",
- "rand_core",
+ "rand_core 0.9.5",
  "rand_xoshiro",
  "version_check",
  "wide",
@@ -1802,9 +2061,9 @@ dependencies = [
 
 [[package]]
 name = "monosashi"
-version = "0.4.6"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6c71f4f6679895373aa804cdcc30382d7cd1e39e1e8cf7bc8225786ccd6988c"
+checksum = "24546c97f73a6193a1200810ee58a9d825b94aabf011124da966a1b36a5fb0f9"
 
 [[package]]
 name = "notify"
@@ -2107,6 +2366,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pkcs8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
+dependencies = [
+ "der",
+ "spki",
+]
+
+[[package]]
 name = "potential_utf"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2163,6 +2432,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-xml"
+version = "0.38.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2190,7 +2468,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
 dependencies = [
  "rand_chacha",
- "rand_core",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -2200,7 +2478,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
- "rand_core",
+ "rand_core 0.9.5",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+dependencies = [
+ "getrandom 0.2.17",
 ]
 
 [[package]]
@@ -2218,7 +2505,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f703f4665700daf5512dcca5f43afa6af89f09db47fb56be587f80636bda2d41"
 dependencies = [
- "rand_core",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -2360,6 +2647,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "rnix"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c163bd17372eecdf10d351c34584b7de7c1a33be4e92a32f3fb3f5a7fe3f579b"
+dependencies = [
+ "rowan",
+]
+
+[[package]]
+name = "rowan"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "417a3a9f582e349834051b8a10c8d71ca88da4211e4093528e36b9845f6b5f21"
+dependencies = [
+ "countme",
+ "hashbrown 0.14.5",
+ "rustc-hash",
+ "text-size",
+]
+
+[[package]]
+name = "rustc-hash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
+
+[[package]]
+name = "rustc_version"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
+dependencies = [
+ "semver",
+]
+
+[[package]]
 name = "rustix"
 version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2382,7 +2705,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2574,6 +2897,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "semver"
+version = "1.0.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+
+[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2718,6 +3047,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest",
+]
+
+[[package]]
 name = "shibori"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2782,6 +3122,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "signature"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
+dependencies = [
+ "rand_core 0.6.4",
+]
+
+[[package]]
 name = "simple_asn1"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2834,6 +3183,16 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "spki"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
+dependencies = [
+ "base64ct",
+ "der",
 ]
 
 [[package]]
@@ -2922,18 +3281,18 @@ dependencies = [
 
 [[package]]
 name = "tatara-closed-set"
-version = "0.4.9"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b218856bd6451057eebc2abb1e01ca7f80ee2a9a13b87b47e3debfd0a6232bea"
+checksum = "ca305fd7c71e4a80f8e1d737855c3cb8930ea6db9dd09d6c27abad93ac0b9729"
 dependencies = [
  "tatara-closed-set-derive",
 ]
 
 [[package]]
 name = "tatara-closed-set-derive"
-version = "0.4.9"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64b42b93bbb2b11bb63c159756739b0a98d7c241d40e38e9cf5e633ed6036e06"
+checksum = "074a6a2211be2edb268c38faadb82311b1a6734d3137ed4ea9bbbdfa48526173"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2955,15 +3314,15 @@ dependencies = [
 
 [[package]]
 name = "tatara-lisp"
-version = "0.4.9"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05a1714ef7c3da2a0c0a0aa893b8907fff268fb2556dc0bcce414a096a5a9f14"
+checksum = "c1f93c4feecbf53843d41781f9293e6fa18cd51a2d07fac157249db40b4f065c"
 dependencies = [
  "blake3",
  "serde",
  "serde_json",
  "tatara-closed-set",
- "tatara-lisp-derive 0.4.9",
+ "tatara-lisp-derive 0.4.13",
  "thiserror 2.0.19",
 ]
 
@@ -2980,9 +3339,9 @@ dependencies = [
 
 [[package]]
 name = "tatara-lisp-derive"
-version = "0.4.9"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee03c93f9f06f62a3e346f0219b0e61ebeac24e59f06a1b2cc77418dd3490e42"
+checksum = "b7626ef7227ba32c3a98d60747d118ffe61be4dd26e0f524bfe34fa0a5960003"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2991,15 +3350,17 @@ dependencies = [
 
 [[package]]
 name = "tatara-lisp-eval"
-version = "0.4.6"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2eb8ca670cf9e66b104dac852421b523cb0a7773183641ce0be3aa38412bc616"
+checksum = "3bc1768b66e106da38365cefda1484a3ad9548aaa095aeb06458c2e9ce924328"
 dependencies = [
+ "blake3",
  "imbl",
  "monosashi",
+ "serde",
  "stacker",
  "tatara-closed-set",
- "tatara-lisp 0.4.9",
+ "tatara-lisp 0.4.13",
  "thiserror 2.0.19",
 ]
 
@@ -3059,8 +3420,14 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "text-size"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f18aa187839b2bdb1ad2fa35ead8c4c2976b64e4363c386d45ac0f7ee85c9233"
 
 [[package]]
 name = "thiserror"
@@ -3467,7 +3834,7 @@ dependencies = [
  "async-trait",
  "serde",
  "serde_json",
- "tatara-lisp 0.4.9",
+ "tatara-lisp 0.4.13",
  "tatara-lisp-eval",
  "thiserror 2.0.19",
  "time",
@@ -3613,7 +3980,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

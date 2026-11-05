@@ -205,8 +205,8 @@ fn authored_nav_keys_compile_into_typed_values() {
     let ns = load_nav_keys().expect("the authored nav keys must compile");
     assert_eq!(
         ns.len(),
-        10,
-        "down/j + up/k + o + escape + return + h/f1 + q"
+        23,
+        "down/j + up/k + o + 3 descend + 3 ascend + gg/G + 4 page + back/forward + / + shift+h/f1 + q"
     );
 
     // The k9s/vi pair: two names, two chords, ONE intent.
@@ -222,8 +222,8 @@ fn authored_nav_keys_compile_into_typed_values() {
 
     // `escape` is awase's spelling; the ONE verified translation to
     // egaku-term's `esc` lives in `banken::keys::chord_to_combo`.
-    let dismiss = ns.iter().find(|n| n.intent == NavIntent::Dismiss).unwrap();
-    assert_eq!(dismiss.keys.canonical(), "escape");
+    let ascend = ns.iter().find(|n| n.intent == NavIntent::Ascend).unwrap();
+    assert_eq!(ascend.keys.canonical(), "escape");
 
     // Every intent the app can perform is actually bound by the shipped
     // catalog — an unbound intent is a capability the operator cannot reach.
@@ -248,7 +248,7 @@ fn the_shipped_vocabulary_cross_resolves() {
     assert_eq!(c.pathologies().len(), 3);
     assert_eq!(c.wards().len(), 1);
     assert_eq!(c.drills().len(), 3);
-    assert_eq!(c.nav_keys().len(), 10);
+    assert_eq!(c.nav_keys().len(), 23);
 
     // The ward's pathologies resolve to values, totally.
     let rules = c.pathologies_for(&c.wards()[0]);

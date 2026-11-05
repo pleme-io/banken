@@ -41,8 +41,9 @@
 ;; events, and its full manifest. Nothing here mutates, so the recipe is
 ;; OBSERVE and carries no witness.
 (defbancada
+;; `t`, not `g`: `gg` and `shift+g` are the vim row motions.
   :name "pod-triage"
-  :keys "g"
+  :keys "t"
   :from "pods"
   :layout main-vertical
   :session-prefix "triage"
@@ -99,7 +100,7 @@
 ;; all three keyed domains against one namespace. See banken_spec::chord.
 (defbancada
   :name "pod-break-glass"
-  :keys "shift+g"
+  :keys "shift+t"
   :from "pods"
   :layout main-horizontal
   :session-prefix "glass"

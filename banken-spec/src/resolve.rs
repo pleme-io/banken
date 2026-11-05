@@ -44,6 +44,7 @@ use std::collections::BTreeSet;
 use crate::{
     bancada::BancadaSpec,
     bindings::build_binding_map,
+    chord::ActionChord,
     drill::DrillSpec,
     error::SpecError,
     nav::NavKeySpec,
@@ -191,6 +192,84 @@ impl Catalog {
         })
     }
 
+    #[must_use]
+    pub fn with_nav_overlay(
+        &self,
+        binds: &[(String, String)],
+        offs: &[String],
+    ) -> (Self, Vec<String>) {
+        let mut refusals = Vec::new();
+        let mut current = self.clone();
+        for off in offs {
+            let keep: Vec<NavKeySpec> = current
+                .nav_keys
+                .iter()
+                .filter(|n| n.name != *off && n.keys.canonical() != *off)
+                .cloned()
+                .collect();
+            if keep.len() == current.nav_keys.len() {
+                refusals.push(format!("off {off}: no binding has that name or chord"));
+                continue;
+            }
+            match current.with_nav_keys(keep) {
+                Ok(c) => current = c,
+                Err(e) => refusals.push(format!("off {off}: {e}")),
+            }
+        }
+        for (chord, action) in binds {
+            let keys = match ActionChord::parse(chord) {
+                Ok(k) => k,
+                Err(e) => {
+                    refusals.push(format!("bind {chord}: {e}"));
+                    continue;
+                }
+            };
+            let label = action.replace('_', "-");
+            let Some(intent) = crate::nav::NavIntent::ALL
+                .iter()
+                .find(|i| i.label() == label)
+            else {
+                let legal: Vec<&str> = crate::nav::NavIntent::ALL
+                    .iter()
+                    .map(|i| i.label())
+                    .collect();
+                refusals.push(format!(
+                    "bind {chord}: `{action}` is no navigation action; legal: {}",
+                    legal.join(", ")
+                ));
+                continue;
+            };
+            let mut keys_list: Vec<NavKeySpec> = current
+                .nav_keys
+                .iter()
+                .filter(|n| n.keys != keys)
+                .cloned()
+                .collect();
+            keys_list.push(NavKeySpec {
+                name: format!("world:{}", keys.canonical()),
+                keys,
+                intent: *intent,
+            });
+            match current.with_nav_keys(keys_list) {
+                Ok(c) => current = c,
+                Err(e) => refusals.push(format!("bind {chord}: {e}")),
+            }
+        }
+        (current, refusals)
+    }
+
+    fn with_nav_keys(&self, nav_keys: Vec<NavKeySpec>) -> Result<Self, SpecError> {
+        Self::resolve(
+            self.views.clone(),
+            self.actions.clone(),
+            self.pathologies.clone(),
+            self.wards.clone(),
+            self.drills.clone(),
+            nav_keys,
+            self.bancadas.clone(),
+        )
+    }
+
     /// The declared views.
     #[must_use]
     pub fn views(&self) -> &[K8sViewSpec] {
@@ -331,6 +410,37 @@ fn join_quoted(items: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_world_binding_replaces_its_chord_and_a_bad_one_is_refused_alone() {
+        let shipped = crate::load_catalog().expect("shipped");
+        let (c, refusals) = shipped.with_nav_overlay(
+            &[
+                ("ctrl+n".into(), "select_next".into()),
+                ("j".into(), "bottom".into()),
+                ("ctrl+y".into(), "no-such-action".into()),
+                ("shift+s".into(), "top".into()),
+                ("not a chord!!".into(), "top".into()),
+            ],
+            &["k".into(), "nothing-here".into()],
+        );
+        assert_eq!(refusals.len(), 4, "{refusals:?}");
+        assert!(refusals.iter().any(|r| r.starts_with("bind ctrl+y")));
+        assert!(refusals.iter().any(|r| r.starts_with("bind shift+s")));
+        assert!(refusals.iter().any(|r| r.starts_with("off nothing-here")));
+        let chord = |n: &crate::nav::NavKeySpec| n.keys.canonical();
+        let intent_of = |k: &str| {
+            c.nav_keys()
+                .iter()
+                .find(|n| chord(n) == k)
+                .map(|n| n.intent)
+        };
+        assert_eq!(intent_of("ctrl+n"), Some(crate::nav::NavIntent::SelectNext));
+        assert_eq!(intent_of("j"), Some(crate::nav::NavIntent::Bottom));
+        assert_eq!(intent_of("k"), None);
+        assert_eq!(intent_of("up"), Some(crate::nav::NavIntent::SelectPrev));
+    }
+
     use super::*;
     use crate::{
         drill::{DrillLevel, DrillStep},

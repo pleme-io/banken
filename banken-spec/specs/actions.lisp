@@ -17,8 +17,9 @@
 
 ;; OBSERVE — always allowed, mutates nothing.
 (defk8saction
+;; `shift+l`, not `l`: `l` descends the tree, the vim reading.
   :name "view-logs"
-  :keys "l"
+  :keys "shift+l"
   :legality (:class observe)
   :manifest-scope full)
 

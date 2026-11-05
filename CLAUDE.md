@@ -106,7 +106,8 @@ stashing this work (`E0061` at `main.rs:65`); now green, 68 tests.
 - **A refusal wraps rather than clips.** Measured in a 120-column PTY: the
   one-line footer cut the ambiguity message mid-path, dropping the second
   declaring file — the half that says which one to remove.
-- `pending-banken: pick-on-quit` — `q` in the pod table exits to the shell
+- `pending-banken: pick-on-quit` — CLOSED 2026-11-04 by the `ascend` intent (see
+  the tree section). The history below is kept. `q` in the pod table exits to the shell
   rather than back to the picker. Deliberately NOT done with the reconnect loop
   above, and the reason is the legend: `q` is advertised as `q:quit` by a
   status line derived from the authored vocabulary, so re-pointing `q` at
@@ -124,6 +125,75 @@ stashing this work (`E0061` at `main.rs:65`); now green, 68 tests.
   keystroke clears it for the same reason a refusal is cleared. The loop
   advances only on a successful connect or on the operator declining, so it
   terminates.
+
+## The estate, the credential doctor and the tree (2026-11-04)
+
+**The estate.** `banken/src/estate.rs` holds the pure rules. `live::read_estate`
+reads two sources: the target registry (`~/.kube/targets/<target>`, one
+kubeconfig per target, the same files the `k-<target>` and `k9s-<target>`
+wrappers use) and the `KUBECONFIG` merge list. The picker and `resolve_context`
+both read `Estate`, so the list and the verdict cannot disagree.
+
+- A context whose first declaration has the credential helper `nerai-refuse`
+  is a refusal stub. Its reason is the helper's argument.
+  `ContextError::Refused` carries it, and names the registry target when one
+  covers the name.
+- A stub that shadows a registry target does not count toward "declared by N
+  files". Only real declarations count. A stub after a real declaration
+  refuses nothing, because the merge never reaches it.
+- An ambient context with the same name and server as a registry target is
+  hidden as a duplicate. The same name with a different server stays visible.
+- A target file that is not a single-context kubeconfig is refused alone.
+- Refused rows are hidden by default and counted in the title.
+  `config(:picker, {refused: :dim})` shows them dimmed with the reason.
+
+**The wrong-estate invariant holds and is stronger.** A registry target opens
+with its own file only (`config_for_resolved(resolved.context, resolved.file)`).
+An ambiguous name still cannot be chosen or connected. A refused name now has
+no path past `resolve`, where before it read as an ambiguity.
+`pending-banken: bancada-target-kubeconfig`: a bancada pane on a registry
+target still passes `--context <ctx>` without `--kubeconfig <file>`, so the
+ambient refusal answers it. It fails loud, not wrong.
+
+**The credential doctor.** `banken/bidamas/shinsatsu/shinsatsu.b` is blue. It
+declares providers (Azure, AWS, Google Cloud, nerai), their failure classes,
+and for each class a title, a diagnosis, remediation steps (typed argv) and a
+verify step (the kubeconfig's own exec helper). `banken/src/doctor.rs` embeds
+it through `blue_lang_host::Embedded` and speaks JSON with it. The climb note,
+the picker notice and `--context` errors all show `Diagnosis::headline`.
+`banken/src/doctor_screen.rs` shows every command before it runs; `enter`
+runs them in the terminal, then the verify step; a pass reconnects.
+`every_failure_class_is_reachable_by_its_own_marker` and
+`every_failure_class_has_a_diagnosis_and_a_remediation` fail when a class has
+no test row, no marker or no remediation. Blue's `json_stringify` writes a
+list of two-element lists as an object, so every list the doctor returns holds
+records (`{argv:}`, `{label:, value:}`).
+`pending-banken: shinsatsu-to-blue-bidamas`: the bidama is general. Its
+destination is `pleme-io/blue/bidamas/shinsatsu`, consumed by banken and mado.
+
+**The tree.** The screens are a path: cluster › namespace › kind › object ›
+detail. `NavIntent` gained `ascend`, `descend`, `top`, `bottom`, `page-down`,
+`page-up`, `back`, `forward` and `filter`; `confirm` and `dismiss` became
+`descend` and `ascend`. `ascend` closes a detail, then clears the filter, then
+drops the namespace scope, then sets `BankenApp::ascended`, and `main` returns
+to the picker (`Landed::Ascended`). It never quits; `q`, `:q` and `ctrl+c`
+quit. `descend` confirms a bancada preview, scopes to a namespace from `:ns`,
+or opens the object's describe detail. `:` takes paths (`:ns/kube-system`,
+`:pods/ns/web`, `:ns/*`, `:..`, `:q`). `ctrl+o` and `tab` walk the history.
+`top` is a sequence: two presses. Logs moved to `shift+l`, help to `shift+h`
+and `f1`, and the bancadas to `t` / `shift+t`.
+`pending-banken: pick-on-quit` is CLOSED by `ascend`: `q` still quits, and the
+legend still says so.
+
+**Configuration is blue.** `banken/src/world.rs` reads `~/.config/banken/banken.b`
+(or `$BANKEN_WORLD`) in a `banken blue-world` child, the mado shape. Entries:
+`bind(chord, :intent)`, `bind(chord, :off)`, `config(:picker, {refused:,
+targets:})`. `Catalog::with_nav_overlay` applies each binding alone, so a bad
+chord, an unknown intent or a clash with a postigo chord is refused alone and
+shown in the picker notice. The help page and the legend read the overlaid
+catalog, so they cannot drift from the keymap. `motenashi::off` refuses an
+entry the world did not declare, which is why a default is turned off with
+`bind(chord, :off)`.
 
 ## Freshness reaches the operator's eye (2026-08-09)
 
@@ -185,8 +255,9 @@ someone else's fallback.
 
 ## The help page — the authored vocabulary, rendered back (2026-08-09)
 
-`h` (or `f1`) in the pod table opens a full-screen, scrollable help page; the
-status-line legend carries `h:help` so it is discoverable rather than merely
+`shift+h` (or `f1`) in the pod table opens a full-screen, scrollable help
+page (it was `h` until `h` became `ascend` on 2026-11-04); the status-line
+legend carries `shift+h:help` so it is discoverable rather than merely
 documented. **It is DERIVED, and that is the whole design** — a hand-written
 help screen is a second copy of the vocabulary that rots in the one direction
 nobody notices: the app grows a chord, the help does not, and the feature is

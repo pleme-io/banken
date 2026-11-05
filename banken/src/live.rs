@@ -166,163 +166,146 @@ pub fn kubeconfig_files() -> Vec<PathBuf> {
     }
 }
 
-/// A context name that resolved to exactly ONE declaration, and the apiserver
-/// that declaration names.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedContext {
-    /// The context name, as asked for.
-    pub name: String,
-    /// The `cluster.server` URL the context resolves to. **This is the field
-    /// that makes "the right cluster" checkable** — a name is not unique, a
-    /// URL is what actually gets dialled.
-    pub server: String,
-    /// The single kubeconfig file that declared it.
-    pub file: PathBuf,
+pub use crate::estate::{ContextChoice, ContextError, ResolvedContext};
+
+/// # Errors
+///
+/// [`ContextError::Ambiguous`] when more than one file declares `name`,
+/// [`ContextError::Refused`] when the ambient refusal file answers for it,
+/// [`ContextError::NotFound`] when nothing does, and
+/// [`ContextError::Unreadable`] when a listed file cannot be parsed.
+pub fn resolve_context(name: &str) -> Result<ResolvedContext, ContextError> {
+    read_estate()?.resolve(name)
 }
 
-/// Why a `--context` could not be turned into exactly one apiserver.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ContextError {
-    /// **The silent-wrong-cluster class.** Two or more files in the merge list
-    /// declare this context name. kube-rs (and client-go) resolve this
-    /// first-wins and say NOTHING: `append_new_named`
-    /// (`kube-client-0.99.0/src/config/file_config.rs`) filters out every later
-    /// entry whose name already exists — no error, no warning. So the operator
-    /// asks for a name, gets whichever file happened to sort first, and every
-    /// row they read is real. Only the cluster is wrong.
-    ///
-    /// Measured 2026-08-08: `charlie-local` named a local apiserver in one file
-    /// and `charlie-local.example.invalid` in `~/.kube/config`. banken read the
-    /// remote one and looked entirely healthy doing it.
-    Ambiguous {
-        name: String,
-        /// Every file declaring the name, in merge order. The first is the one
-        /// that would silently have won.
-        files: Vec<PathBuf>,
-    },
-    /// No file declares it. Carries what IS available, so the refusal costs a
-    /// keystroke rather than a detour.
-    NotFound {
-        name: String,
-        available: Vec<String>,
-    },
-    /// A file in the merge list could not be read or parsed.
-    Unreadable { file: PathBuf, message: String },
+/// # Errors
+///
+/// [`ContextError::Unreadable`] when a kubeconfig file that exists cannot be
+/// parsed.
+pub fn read_estate() -> Result<crate::estate::Estate, ContextError> {
+    Ok(crate::estate::Estate {
+        files: read_unmerged()?,
+        targets: read_targets(&targets_dir()),
+    })
 }
 
-impl std::fmt::Display for ContextError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Ambiguous { name, files } => {
-                write!(
-                    f,
-                    "context `{name}` is declared by {} kubeconfig files",
-                    files.len()
-                )?;
-                for (i, p) in files.iter().enumerate() {
-                    write!(f, "\n  {}. {}", i + 1, p.display())?;
-                    if i == 0 {
-                        write!(f, "   <- would silently win")?;
+#[must_use]
+pub fn diagnosis_for(name: &str, message: &str) -> Option<crate::doctor::Diagnosis> {
+    let estate = read_estate().ok()?;
+    let target = estate
+        .targets
+        .iter()
+        .find(|t| t.name == name)
+        .map(|t| t.name.clone());
+    let facts = match estate.resolve(name) {
+        Ok(r) => crate::doctor::facts_for(
+            r.exec.as_ref(),
+            message,
+            name,
+            Some(&r.server),
+            target.as_deref(),
+        ),
+        Err(ContextError::Refused { reason, target, .. }) => crate::doctor::Facts {
+            program: crate::estate::REFUSER.to_owned(),
+            args: Vec::new(),
+            message: format!("nerai: {reason}"),
+            cluster: Some(name.to_owned()),
+            server: None,
+            target,
+        },
+        Err(_) => return None,
+    };
+    crate::doctor::diagnose(&facts).ok().flatten()
+}
+
+static TARGETS_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub fn set_targets_dir(dir: PathBuf) {
+    let _first = TARGETS_DIR.set(dir);
+}
+
+#[must_use]
+pub fn targets_dir() -> PathBuf {
+    if let Some(dir) = TARGETS_DIR.get() {
+        return dir.clone();
+    }
+    if let Some(dir) = std::env::var_os("BANKEN_TARGETS_DIR") {
+        return PathBuf::from(dir);
+    }
+    std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".kube").join("targets"))
+        .unwrap_or_default()
+}
+
+#[must_use]
+pub fn read_targets(dir: &std::path::Path) -> Vec<crate::estate::Target> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|file| {
+            let name = file.file_name()?.to_str()?.to_owned();
+            let sole = match Kubeconfig::read_from(&file) {
+                Ok(kc) => {
+                    let mut decls = declarations_of(&kc);
+                    match decls.len() {
+                        1 => Ok(decls.remove(0)),
+                        0 => Err("declares no context".to_owned()),
+                        n => Err(format!(
+                            "declares {n} contexts, so the file names no one cluster"
+                        )),
                     }
                 }
-                write!(
-                    f,
-                    "\nRefusing: the name does not identify one cluster. \
-                     Point KUBECONFIG at a single file, or rename one context."
-                )
-            }
-            Self::NotFound { name, available } => {
-                write!(f, "no kubeconfig context named `{name}`. Available:")?;
-                for a in available {
-                    write!(f, "\n  {a}")?;
-                }
-                Ok(())
-            }
-            Self::Unreadable { file, message } => {
-                write!(
-                    f,
-                    "kubeconfig {} could not be read: {message}",
-                    file.display()
-                )
-            }
-        }
-    }
+                Err(e) => Err(format!("not a kubeconfig: {e}")),
+            };
+            Some(crate::estate::Target { name, file, sole })
+        })
+        .collect()
 }
 
-impl std::error::Error for ContextError {}
-
-/// Resolve a context name against **each kubeconfig file separately**, and
-/// refuse unless exactly one declares it.
-///
-/// # Why this cannot delegate to kube-rs
-///
-/// `Kubeconfig::read()` merges the whole list *before* anyone can look, and the
-/// merge is lossy by design: a duplicate name is dropped silently. By the time
-/// a caller holds the merged config, the evidence that the name was ambiguous
-/// is gone. The only place the question is answerable is before the merge —
-/// which is here.
-///
-/// # Errors
-///
-/// [`ContextError::Ambiguous`] when >1 file declares `name` — the whole point.
-/// [`ContextError::NotFound`] when none does. [`ContextError::Unreadable`] when
-/// a listed file cannot be parsed.
-pub fn resolve_context(name: &str) -> Result<ResolvedContext, ContextError> {
-    let mut declaring: Vec<(PathBuf, Option<String>)> = Vec::new();
-    let mut available: Vec<String> = Vec::new();
-
-    for (file, declarations) in read_unmerged()? {
-        for (ctx_name, server) in declarations {
-            if !available.contains(&ctx_name) {
-                available.push(ctx_name.clone());
+fn declarations_of(kc: &Kubeconfig) -> Vec<crate::estate::Declaration> {
+    kc.contexts
+        .iter()
+        .map(|ctx| {
+            let (cluster, user) = ctx
+                .context
+                .as_ref()
+                .map(|c| (c.cluster.clone(), c.user.clone()))
+                .unwrap_or_default();
+            let server = kc
+                .clusters
+                .iter()
+                .find(|cl| cl.name == cluster)
+                .and_then(|cl| cl.cluster.as_ref())
+                .and_then(|cl| cl.server.clone());
+            let exec = user.and_then(|u| {
+                kc.auth_infos
+                    .iter()
+                    .find(|a| a.name == u)
+                    .and_then(|a| a.auth_info.as_ref())
+                    .and_then(|a| a.exec.as_ref())
+                    .map(|e| crate::estate::ExecSpec {
+                        command: e.command.clone().unwrap_or_default(),
+                        args: e.args.clone().unwrap_or_default(),
+                    })
+            });
+            crate::estate::Declaration {
+                context: ctx.name.clone(),
+                cluster,
+                server,
+                exec,
             }
-            if ctx_name == name {
-                declaring.push((file.clone(), server));
-            }
-        }
-    }
-
-    match declaring.len() {
-        0 => Err(ContextError::NotFound {
-            name: name.to_owned(),
-            available,
-        }),
-        1 => {
-            let (file, server) = declaring.remove(0);
-            Ok(ResolvedContext {
-                name: name.to_owned(),
-                server: server.unwrap_or_else(|| "<no server declared>".to_owned()),
-                file,
-            })
-        }
-        _ => Err(ContextError::Ambiguous {
-            name: name.to_owned(),
-            files: declaring.into_iter().map(|(f, _)| f).collect(),
-        }),
-    }
+        })
+        .collect()
 }
 
-/// One kubeconfig file's context declarations: `(context name, its cluster's
-/// server URL)` pairs, in file order.
-type Declarations = Vec<(PathBuf, Vec<(String, Option<String>)>)>;
-
-/// Every kubeconfig file's context declarations, **file by file, unmerged**.
-///
-/// The one place the pre-merge question is answerable, and therefore the one
-/// place either [`resolve_context`] or [`enumerate_contexts`] may read from.
-/// They used to carry a copy each of this loop; the copies are what let the
-/// picker's list and the resolver's verdict disagree about what a kubeconfig
-/// says, which is the exact class of bug the resolver exists to close.
-///
-/// Each entry is `(file, [(context name, its cluster's server URL)])`. A
-/// context whose cluster entry lives in a *different* file resolves to `None`
-/// rather than to an invented URL — the common case is co-located, and a
-/// missing server is reported, never guessed.
-///
-/// # Errors
-///
-/// [`ContextError::Unreadable`] when a file that EXISTS cannot be parsed. A
-/// file merely absent from disk is skipped, which is what client-go does.
 /// The ONE context declared in `path`, or a refusal naming what was found.
 ///
 /// The resolver behind `banken mcp --sole-context-of <path>`. It refuses zero
@@ -361,17 +344,11 @@ pub fn sole_context_of(path: &std::path::Path) -> Result<String, String> {
     }
 }
 
-fn read_unmerged() -> Result<Declarations, ContextError> {
-    let mut out: Declarations = Vec::new();
+fn read_unmerged() -> Result<Vec<crate::estate::FileDeclarations>, ContextError> {
+    let mut out = Vec::new();
     for file in kubeconfig_files() {
         let kc = match Kubeconfig::read_from(&file) {
             Ok(kc) => kc,
-            // A missing entry in a merge list is normal (client-go tolerates
-            // it); an unreadable one that EXISTS is not.
-            // An ABSENT file is not an error — a kubeconfig naming a path
-            // that is not there is the normal shape of a stale KUBECONFIG
-            // entry. An unreadable file that EXISTS is a different fact and
-            // falls through to the arm below.
             Err(_) if !file.exists() => continue,
             Err(e) => {
                 return Err(ContextError::Unreadable {
@@ -380,92 +357,20 @@ fn read_unmerged() -> Result<Declarations, ContextError> {
                 });
             }
         };
-
-        let declarations = kc
-            .contexts
-            .iter()
-            .map(|ctx| {
-                let server = ctx.context.as_ref().and_then(|c| {
-                    kc.clusters
-                        .iter()
-                        .find(|cl| cl.name == c.cluster)
-                        .and_then(|cl| cl.cluster.as_ref())
-                        .and_then(|cl| cl.server.clone())
-                });
-                (ctx.name.clone(), server)
-            })
-            .collect();
-        out.push((file, declarations));
+        out.push(crate::estate::FileDeclarations {
+            contexts: declarations_of(&kc),
+            file,
+        });
     }
     Ok(out)
 }
 
-/// One kubeconfig context, as something an operator can be asked to CHOOSE.
-///
-/// The point of the type is the third field. A context *name* is what an
-/// operator recognises and is what `--context` takes, but the name is not
-/// unique across a merged `KUBECONFIG` — so a chooser that offers names alone
-/// offers a choice it cannot honour. Carrying every declaring file makes the
-/// ambiguity a visible property of the row at the moment of choosing, instead
-/// of a refusal that arrives after the operator has already decided.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContextChoice {
-    /// The context name, exactly as `--context` would take it.
-    pub name: String,
-    /// The apiserver the **first** declaration names — i.e. the one kube-rs
-    /// would silently have won with. `None` when no declaration names a
-    /// server, which is reported rather than papered over.
-    pub server: Option<String>,
-    /// Every kubeconfig file declaring this name, in merge order. Length 1 is
-    /// the healthy case; more is [`ContextError::Ambiguous`] waiting to happen.
-    pub files: Vec<PathBuf>,
-}
-
-impl ContextChoice {
-    /// Whether more than one kubeconfig file declares this name.
-    ///
-    /// An ambiguous choice is **not selectable**: [`resolve_context`] refuses
-    /// it, so offering it as though it were pickable would be an affordance
-    /// that cannot be honoured.
-    #[must_use]
-    pub fn is_ambiguous(&self) -> bool {
-        self.files.len() > 1
-    }
-}
-
-/// Every context the kubeconfig merge list declares, first-seen order, each
-/// carrying its apiserver and its declaring files.
-///
-/// This is the picker's source, and it deliberately does **not** go through
-/// `Kubeconfig::read()`: that merges first, and the merge drops a duplicate
-/// name without a word (`append_new_named`), so a merged read cannot tell an
-/// unambiguous context from an ambiguous one. Reading unmerged is what lets a
-/// row say "two files declare this".
-///
 /// # Errors
 ///
 /// [`ContextError::Unreadable`] when a kubeconfig file that exists cannot be
-/// parsed. An empty `Ok` result means the files parsed and declare nothing —
-/// a different answer from "could not read", and both are reported honestly.
+/// parsed.
 pub fn enumerate_contexts() -> Result<Vec<ContextChoice>, ContextError> {
-    let mut out: Vec<ContextChoice> = Vec::new();
-    for (file, declarations) in read_unmerged()? {
-        for (name, server) in declarations {
-            if let Some(existing) = out.iter_mut().find(|c| c.name == name) {
-                // A second declaration does NOT overwrite the server: the
-                // first one is what kube-rs resolves to, so showing a later
-                // file's URL would describe a cluster banken would not dial.
-                existing.files.push(file.clone());
-            } else {
-                out.push(ContextChoice {
-                    name,
-                    server,
-                    files: vec![file.clone()],
-                });
-            }
-        }
-    }
-    Ok(out)
+    Ok(read_estate()?.choices())
 }
 
 /// A live cluster env reading through the typed `kube` client against the
@@ -595,7 +500,7 @@ impl KubeClusterEnv {
             message: e.to_string(),
         })?;
         reporter.reached(Stage::Configuration);
-        let config = config_for_resolved(context, &resolved.file)
+        let config = config_for_resolved(&resolved.context, &resolved.file)
             .await
             .map_err(|e| SpecError::Interp {
                 phase: "connect".into(),
@@ -619,7 +524,7 @@ impl KubeClusterEnv {
         Ok(Self {
             client,
             handle: tokio::runtime::Handle::current(),
-            context_name: Some(context.to_owned()),
+            context_name: Some(resolved.context.clone()),
             server: Some(resolved.server),
         })
     }
@@ -665,7 +570,7 @@ impl KubeClusterEnv {
                 return Standing::stopped(Rung::Network, e.to_string());
             }
         };
-        let config = match config_for_resolved(context, &resolved.file).await {
+        let config = match config_for_resolved(&resolved.context, &resolved.file).await {
             Ok(c) => c,
             Err(e) => {
                 return Standing::stopped(Rung::Network, Self::error_chain(&e));
@@ -675,8 +580,16 @@ impl KubeClusterEnv {
         let client = match Client::try_from(config) {
             Ok(c) => c,
             Err(e) => {
+                let raw = Self::error_chain(&e);
+                let facts = crate::doctor::facts_for(
+                    resolved.exec.as_ref(),
+                    &raw,
+                    context,
+                    Some(&resolved.server),
+                    None,
+                );
                 let mut m = String::from("credentials: ");
-                m.push_str(&Self::error_chain(&e));
+                m.push_str(&crate::doctor::legible(&raw, &facts));
                 return Standing::stopped(Rung::Network, m);
             }
         };
@@ -1705,6 +1618,20 @@ mod tests {
     /// cargo test -p banken --lib -- --ignored --nocapture climb_against
     /// BANKEN_CLIMB_CONTEXT=bravo cargo test … climb_against
     /// ```
+    #[test]
+    #[ignore = "reads this workstation's kubeconfig and target registry"]
+    fn the_estate_of_this_workstation() {
+        for c in enumerate_contexts().expect("the kubeconfig parses") {
+            println!(
+                "{:<36} {:?} {} {}",
+                c.name,
+                c.origin,
+                c.server.unwrap_or_default(),
+                c.refused.unwrap_or_default()
+            );
+        }
+    }
+
     #[tokio::test]
     #[ignore = "needs a real kubeconfig and network"]
     async fn climb_against_the_real_kubeconfig() {

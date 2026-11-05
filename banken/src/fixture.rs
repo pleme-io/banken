@@ -107,6 +107,23 @@ fn fixture_pods() -> Vec<Row> {
     ]
 }
 
+fn fixture_namespaces() -> Vec<Row> {
+    ["catch", "quiet"]
+        .into_iter()
+        .map(|name| Row {
+            uid: banken_spec::env::Uid::new(uid_for(name))
+                .expect("a fixture uid is non-blank by construction"),
+            name: name.into(),
+            namespace: None,
+            version: None,
+            cells: vec![
+                ("phase".into(), "Active".into()),
+                ("age".into(), "3d".into()),
+            ],
+        })
+        .collect()
+}
+
 impl ClusterEnv for FixtureClusterEnv {
     /// The fixture never changes, so a grip here always succeeds for a row the
     /// fixture holds — which is the point: the same code path runs against the
@@ -130,6 +147,7 @@ impl ClusterEnv for FixtureClusterEnv {
     fn list_resources(&self, kind: ResourceKind, _ns: Option<&str>) -> Result<Vec<Row>, SpecError> {
         match kind {
             ResourceKind::Pod => Ok(self.pods.clone()),
+            ResourceKind::Namespace => Ok(fixture_namespaces()),
             // Other kinds are not fixtured for M0 — an empty read, never a
             // fake `Ok` claiming rows that do not exist.
             _ => Ok(Vec::new()),

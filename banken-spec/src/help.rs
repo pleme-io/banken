@@ -294,7 +294,7 @@ fn navigation_entries(catalog: &Catalog) -> Vec<HelpEntry> {
                 keys: Some(chords.join(" / ")),
                 gate: None,
                 subject: intent.label().to_owned(),
-                detail: String::new(),
+                detail: intent.meaning().to_owned(),
             })
         })
         .collect()

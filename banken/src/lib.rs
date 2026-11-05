@@ -92,6 +92,7 @@ pub mod session;
 pub mod table;
 /// The picker's modal editing — `unsoku` wired to the query line.
 pub mod vim;
+pub mod world;
 
 /// antessala — the antechamber: the connect, made into a place you can watch
 /// and leave. Behind `live` because there is nothing to wait for without it.
@@ -129,6 +130,9 @@ pub mod permit;
 /// git and a reconciler converges the cluster, so a change is reviewable and
 /// revertable by construction rather than by policy.
 pub mod declare;
+pub mod doctor;
+pub mod doctor_screen;
+pub mod estate;
 
 /// palette — the fleet's colours, for the places that genuinely need RGB.
 ///

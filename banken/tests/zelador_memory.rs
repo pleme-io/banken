@@ -42,7 +42,11 @@ static GLOBAL: Counting = Counting;
 #[test]
 fn an_idle_mcp_estoque_does_not_grow_per_zelador_tick() {
     let cfg = ArmazemConfig::default();
-    assert_eq!(cfg.policy, PolicyEngine::Vigy, "the served default is the vigy policy");
+    assert_eq!(
+        cfg.policy,
+        PolicyEngine::Vigy,
+        "the served default is the vigy policy"
+    );
     let estoque = Estoque::over_env(Arc::new(FixtureClusterEnv::new()), None, &cfg)
         .expect("the default configuration is valid");
     let tick = || {

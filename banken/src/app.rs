@@ -63,6 +63,8 @@ use izumi_armazem::{Interesse, Phase, Seq, Since};
 /// bancada filter cannot drift onto three different spellings of it.
 pub const VIEW_NAME: &str = "pods";
 
+pub const NAMESPACE_VIEW: &str = "ns";
+
 /// The one action the app keymap resolves a key to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
@@ -94,17 +96,21 @@ pub enum Action {
     /// recipe list cannot disagree: [`keymap_from_catalog`] builds both from
     /// the same filtered iteration.
     OpenBancada(usize),
-    /// Confirm the previewed action (`enter`).
-    ///
-    /// The app has exactly one confirmable overlay — a resolved
-    /// [`PendingBancada`] — and everywhere else this is a deliberate no-op
-    /// rather than an error: pressing `enter` on the table is not a mistake
-    /// worth an error panel.
-    Confirm,
+    /// Go one level down the path (`enter` / `l`): confirm a previewed
+    /// [`PendingBancada`], scope to the selected namespace, or open the
+    /// selected object's detail.
+    Descend,
     /// Open the help page — the authored vocabulary, rendered (`h` / `f1`).
     Help,
-    /// Dismiss the action-result overlay (`esc`).
-    Dismiss,
+    /// Go one level up the path (`esc` / `h`).
+    Ascend,
+    Top,
+    Bottom,
+    PageDown,
+    PageUp,
+    Back,
+    Forward,
+    Filter,
     /// Erase backwards in an open prompt (`backspace`).
     PromptErase,
     /// Erase the word before the caret in an open prompt (`ctrl+w`).
@@ -150,7 +156,7 @@ impl Action {
                 // firing one session per OS repeat tick is the mado
                 // runaway-font shape pointed at the most costly action in
                 // the app.
-                | Action::Confirm
+                | Action::Descend
         )
     }
 }
@@ -173,7 +179,7 @@ enum Panel {
     /// A resolved `(defbancada)` awaiting the operator's `enter`.
     ///
     /// It holds the **typed plan**, not its rendering, which is what makes
-    /// the confirm step real: [`Action::Confirm`] opens exactly the plan that
+    /// the confirm step real: [`Action::Descend`] opens exactly the plan that
     /// was previewed, not a re-resolution against a table the operator may
     /// have scrolled since. A separate variant rather than a flag on
     /// [`Panel::ActionOverlay`] so "confirmable" is a property of the screen
@@ -308,6 +314,19 @@ pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
     prompt_keys: awase::KeyMode<Action>,
     /// The active `/` filter. Empty means unfiltered.
     filter: String,
+    scope: Option<String>,
+    ascended: bool,
+    pending_top: bool,
+    history: Vec<Location>,
+    future: Vec<Location>,
+    page: std::sync::atomic::AtomicU16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    pub view: String,
+    pub scope: Option<String>,
+    pub filter: String,
 }
 
 /// Which prompt is open.
@@ -461,6 +480,12 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             prompt: None,
             prompt_keys: prompt_keymap(),
             filter: String::new(),
+            scope: None,
+            ascended: false,
+            pending_top: false,
+            history: Vec::new(),
+            future: Vec::new(),
+            page: std::sync::atomic::AtomicU16::new(10),
         })
     }
 
@@ -510,13 +535,203 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     /// is a filter over live rows where a surprising match reads as a wrong
     /// reading of the cluster.
     fn filtered(&self, rows: Vec<Row>) -> Vec<Row> {
-        if self.filter.is_empty() {
-            return rows;
-        }
         let needle = self.filter.to_lowercase();
         rows.into_iter()
-            .filter(|r| r.name.to_lowercase().contains(&needle))
+            .filter(|r| needle.is_empty() || r.name.to_lowercase().contains(&needle))
+            .filter(|r| {
+                self.scope
+                    .as_deref()
+                    .is_none_or(|ns| r.namespace.as_deref() == Some(ns))
+            })
             .collect()
+    }
+
+    #[must_use]
+    pub fn location(&self) -> Location {
+        Location {
+            view: self.view_name.clone(),
+            scope: self.scope.clone(),
+            filter: self.filter.clone(),
+        }
+    }
+
+    #[must_use]
+    pub fn scope(&self) -> Option<&str> {
+        self.scope.as_deref()
+    }
+
+    #[must_use]
+    pub fn ascended(&self) -> bool {
+        self.ascended
+    }
+
+    #[must_use]
+    pub fn breadcrumb(&self) -> Vec<String> {
+        let mut path = Vec::new();
+        path.push(if self.cluster.is_empty() {
+            "cluster".to_owned()
+        } else {
+            self.cluster.clone()
+        });
+        if let Some(ns) = &self.scope {
+            let mut s = String::from("ns/");
+            s.push_str(ns);
+            path.push(s);
+        }
+        path.push(self.view_name.clone());
+        if !self.filter.is_empty() {
+            let mut s = String::from("/");
+            s.push_str(&self.filter);
+            path.push(s);
+        }
+        match &self.panel {
+            Panel::ActionOverlay(_) | Panel::BancadaPreview(_) => {
+                if let Some(row) = self.table.view().selected_row() {
+                    path.push(row.name.clone());
+                }
+                path.push(self.detail_label());
+            }
+            Panel::Help { .. } => path.push("help".to_owned()),
+            Panel::Table | Panel::Notice(_) => {}
+        }
+        path
+    }
+
+    fn detail_label(&self) -> String {
+        match &self.panel {
+            Panel::ActionOverlay(ActionResult::Observed { title, .. }) => title
+                .split(|c: char| !c.is_alphanumeric() && c != '-')
+                .find(|w| !w.is_empty())
+                .unwrap_or("detail")
+                .to_owned(),
+            Panel::ActionOverlay(ActionResult::DeclarePreview { .. }) => "declare".to_owned(),
+            Panel::ActionOverlay(ActionResult::BreakGlassRecord { .. }) => "break-glass".to_owned(),
+            Panel::BancadaPreview(_)
+            | Panel::ActionOverlay(
+                ActionResult::BancadaPlan { .. } | ActionResult::BancadaOpened { .. },
+            ) => "bancada".to_owned(),
+            Panel::ActionOverlay(ActionResult::Error(_)) => "error".to_owned(),
+            Panel::Table | Panel::Notice(_) | Panel::Help { .. } => String::new(),
+        }
+    }
+
+    fn visit(&mut self) {
+        self.history.push(self.location());
+        self.future.clear();
+    }
+
+    fn restore(&mut self, to: &Location) {
+        self.scope.clone_from(&to.scope);
+        self.filter.clone_from(&to.filter);
+        if to.view == self.view_name {
+            self.refresh_current_view();
+        } else {
+            let _ = self.switch_view(&to.view.clone());
+        }
+    }
+
+    fn go_back(&mut self) {
+        if let Some(to) = self.history.pop() {
+            self.future.push(self.location());
+            self.restore(&to);
+        }
+    }
+
+    fn go_forward(&mut self) {
+        if let Some(to) = self.future.pop() {
+            self.history.push(self.location());
+            self.restore(&to);
+        }
+    }
+
+    fn ascend(&mut self) {
+        if !matches!(self.panel, Panel::Table) {
+            self.panel = Panel::Table;
+        } else if !self.filter.is_empty() {
+            self.visit();
+            self.filter.clear();
+            self.refresh_current_view();
+        } else if self.scope.is_some() {
+            self.visit();
+            self.scope = None;
+            self.refresh_current_view();
+        } else {
+            self.ascended = true;
+            self.done = true;
+        }
+    }
+
+    fn descend(&mut self) {
+        let Some(row) = self.table.view().selected_row().cloned() else {
+            return;
+        };
+        if self.view_name == NAMESPACE_VIEW {
+            self.visit();
+            self.scope = Some(row.name);
+            let _ = self.switch_view(VIEW_NAME);
+            return;
+        }
+        let r = dispatch(&self.table, RowAction::Describe, &self.operator, &self.env);
+        self.panel = Panel::ActionOverlay(r);
+    }
+
+    fn rows_by(&mut self, n: usize, down: bool) {
+        self.panel = Panel::Table;
+        for _ in 0..n {
+            if down {
+                self.table.view_mut().select_next();
+            } else {
+                self.table.view_mut().select_prev();
+            }
+        }
+    }
+
+    /// Jump by a `:` path: a view name, `ns/<name>`, `ns/*`, `..`, or `q`.
+    fn jump(&mut self, path: &str) -> bool {
+        let mut view: Option<String> = None;
+        let mut scope: Option<Option<String>> = None;
+        let mut segments = path.split('/').filter(|s| !s.is_empty()).peekable();
+        while let Some(seg) = segments.next() {
+            match seg {
+                "q" | "quit" | "q!" => {
+                    self.done = true;
+                    return true;
+                }
+                ".." => {
+                    self.ascend();
+                    return true;
+                }
+                "ns" | "namespace" | "namespaces" if segments.peek().is_some() => {
+                    let ns = segments.next().unwrap_or_default();
+                    scope = Some(match ns {
+                        "*" | "-" | "all" => None,
+                        other => Some(other.to_owned()),
+                    });
+                }
+                other => view = Some(other.to_owned()),
+            }
+        }
+        let target_view = view.unwrap_or_else(|| {
+            if scope.is_some() && self.view_name == NAMESPACE_VIEW {
+                VIEW_NAME.to_owned()
+            } else {
+                self.view_name.clone()
+            }
+        });
+        let known = self.catalog.views().iter().any(|v| v.name == target_view);
+        if !known {
+            return self.switch_view(&target_view);
+        }
+        self.visit();
+        if let Some(sc) = scope {
+            self.scope = sc;
+        }
+        if target_view == self.view_name {
+            self.refresh_current_view();
+            true
+        } else {
+            self.switch_view(&target_view)
+        }
     }
 
     /// The keymap that applies to the CURRENT screen state.
@@ -609,7 +824,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                 if text.is_empty() {
                     return true;
                 }
-                self.switch_view(&text)
+                self.jump(&text)
             }
         }
     }
@@ -902,12 +1117,12 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         // property of this function rather than a coincidence of the keymap.
         if self.prompt.is_some() {
             match action {
-                Action::Confirm => {
+                Action::Descend => {
                     let _committed = self.commit_prompt();
                 }
                 // Cancel WITHOUT applying. A `/` typed and abandoned must
                 // leave the previous filter alone, not clear it.
-                Action::Dismiss => self.prompt = None,
+                Action::Ascend => self.prompt = None,
                 Action::PromptErase => {
                     let _ = self.prompt_stroke(crate::vim::Stroke::Backspace);
                 }
@@ -930,6 +1145,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             return;
         }
 
+        let top_armed = std::mem::take(&mut self.pending_top);
         // Any navigation/action dismisses a stale overlay first, except the
         // explicit Dismiss/Quit which are handled below.
         // While help is up it OWNS the navigation keys: `j`/`k` scroll the
@@ -954,7 +1170,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                 }
                 // `h` again closes it — the same key in and out, which is what
                 // an operator tries first.
-                Action::Help | Action::Dismiss => {
+                Action::Help | Action::Ascend => {
                     self.panel = Panel::Table;
                     return;
                 }
@@ -1034,7 +1250,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                     )),
                 };
             }
-            Action::Confirm => {
+            Action::Descend => {
                 // The ONLY confirmable screen. Anywhere else `enter` is a
                 // deliberate no-op — pressing it on the table is not a
                 // mistake worth an error panel.
@@ -1062,9 +1278,35 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                         Err(e) => ActionResult::Error(e.to_string()),
                     };
                     self.panel = Panel::ActionOverlay(r);
+                } else if matches!(self.panel, Panel::Table | Panel::Notice(_)) {
+                    self.panel = Panel::Table;
+                    self.descend();
                 }
             }
-            Action::Dismiss => self.panel = Panel::Table,
+            Action::Ascend => self.ascend(),
+            Action::Top => {
+                if top_armed {
+                    let n = self.table.view().selected_index();
+                    self.rows_by(n, false);
+                } else {
+                    self.pending_top = true;
+                }
+            }
+            Action::Bottom => {
+                let n = self.table.view().len();
+                self.rows_by(n, true);
+            }
+            Action::PageDown | Action::PageUp => {
+                let half =
+                    usize::from(self.page.load(std::sync::atomic::Ordering::Relaxed) / 2).max(1);
+                self.rows_by(half, action == Action::PageDown);
+            }
+            Action::Back => self.go_back(),
+            Action::Forward => self.go_forward(),
+            Action::Filter => {
+                self.panel = Panel::Table;
+                self.open_prompt(PromptKind::Filter);
+            }
             Action::Quit => self.done = true,
         }
     }
@@ -1106,11 +1348,15 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
 
         // ── Title bar ──
         let title_style = Style::default().fg(Color::Cyan).bold();
-        buf.set_stringn(0, 0, "banken 番犬  :pods", width, title_style);
+        let x = buf.set_stringn(0, 0, "banken 番犬  ", width, title_style);
+        let crumb = self.breadcrumb().join(" › ");
+        buf.set_stringn(x, 0, &crumb, width.saturating_sub(x), title_style);
 
         // ── The table (rows 2..height-1) ──
         let table_top = 2;
         let table_height = height.saturating_sub(table_top + 1);
+        self.page
+            .store(table_height, std::sync::atomic::Ordering::Relaxed);
         draw_pod_table(buf, 0, table_top, width, table_height, &self.table);
         // An empty table is not self-explanatory, and the three reasons it can
         // be empty call for three different operator responses. Saying nothing
@@ -1475,9 +1721,16 @@ impl From<NavIntent> for Action {
             NavIntent::SelectNext => Action::SelectNext,
             NavIntent::SelectPrev => Action::SelectPrev,
             NavIntent::ToggleSort => Action::ToggleSort,
-            NavIntent::Confirm => Action::Confirm,
+            NavIntent::Descend => Action::Descend,
             NavIntent::Help => Action::Help,
-            NavIntent::Dismiss => Action::Dismiss,
+            NavIntent::Ascend => Action::Ascend,
+            NavIntent::Top => Action::Top,
+            NavIntent::Bottom => Action::Bottom,
+            NavIntent::PageDown => Action::PageDown,
+            NavIntent::PageUp => Action::PageUp,
+            NavIntent::Back => Action::Back,
+            NavIntent::Forward => Action::Forward,
+            NavIntent::Filter => Action::Filter,
             NavIntent::Quit => Action::Quit,
         }
     }
@@ -1557,6 +1810,11 @@ pub fn keymap_from_catalog(catalog: &Catalog) -> Result<awase::KeyMode<Action>, 
     for (i, g) in catalog.bancadas_from(VIEW_NAME).into_iter().enumerate() {
         bind(&mut km, g.keys, Action::OpenBancada(i), &g.name)?;
     }
+
+    let _prev = km.add_binding(awase::Binding::new(
+        awase::Hotkey::new(awase::Modifiers::CTRL, awase::Key::C),
+        Action::Quit,
+    ));
 
     Ok(km)
 }
@@ -1709,6 +1967,7 @@ pub fn key_legend_parts(catalog: &Catalog) -> Vec<String> {
     //   `l:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  g:OBSERVE  h:help …`
     for (intent, label) in [
         (NavIntent::Help, "help"),
+        (NavIntent::Ascend, "up"),
         (NavIntent::ToggleSort, "sort"),
         (NavIntent::Quit, "quit"),
     ] {
@@ -2013,7 +2272,7 @@ mod tests {
         let mut a = app().await;
         a.apply_action(Action::ObserveLogs);
         assert!(a.overlay().is_some());
-        a.apply_action(Action::Dismiss);
+        a.apply_action(Action::Ascend);
         assert!(a.overlay().is_none());
     }
 
@@ -2031,7 +2290,7 @@ mod tests {
         assert_eq!(
             act(
                 a.keymap(),
-                awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::L)
+                awase::Hotkey::new(awase::Modifiers::SHIFT, awase::Key::L)
             ),
             Some(&Action::ObserveLogs)
         );
@@ -2141,14 +2400,14 @@ mod tests {
         assert_eq!(
             act(
                 a.keymap(),
-                awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::G)
+                awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::T)
             ),
             Some(&Action::OpenBancada(0)),
         );
         assert_eq!(
             act(
                 a.keymap(),
-                awase::Hotkey::new(awase::Modifiers::SHIFT, awase::Key::G)
+                awase::Hotkey::new(awase::Modifiers::SHIFT, awase::Key::T)
             ),
             Some(&Action::OpenBancada(1)),
         );
@@ -2244,7 +2503,7 @@ mod tests {
     /// the overlay says. "banken reported a session" and "the seam was
     /// called" are different claims and only the second one is evidence.
     ///
-    /// Fail-once measured (2026-07-31): replacing the `Action::Confirm` arm's
+    /// Fail-once measured (2026-07-31): replacing the `Action::Descend` arm's
     /// `open_bancada(pending, &self.session)` with the old
     /// preview-only behaviour turns this test red with
     ///
@@ -2288,7 +2547,7 @@ mod tests {
         );
 
         // Confirming opens it.
-        a.apply_action(Action::Confirm);
+        a.apply_action(Action::Descend);
 
         let sessions = a.session().sessions.borrow().clone();
         assert_eq!(
@@ -2361,7 +2620,7 @@ mod tests {
         };
         assert_eq!(pending.legality_label(), "BREAK-GLASS");
 
-        a.apply_action(Action::Confirm);
+        a.apply_action(Action::Descend);
 
         let witnessed = a.session().witnessed.borrow().clone();
         assert_eq!(
@@ -2388,18 +2647,21 @@ mod tests {
         }
     }
 
-    /// `enter` anywhere but a bancada preview is a deliberate no-op — it must
-    /// not open anything, and it must not raise an error panel either.
     #[tokio::test]
-    async fn confirm_outside_a_preview_opens_nothing() {
+    async fn descend_on_a_row_opens_its_detail_and_never_a_session() {
         let mut a = app_on("alpha-eks").await;
-        a.apply_action(Action::Confirm);
+        a.apply_action(Action::Descend);
         assert_eq!(a.session().sessions.borrow().len(), 0);
-        assert!(a.overlay().is_none(), "and it raises no panel");
+        assert!(
+            matches!(a.overlay(), Some(ActionResult::Observed { .. })),
+            "enter on a row opens the object's detail"
+        );
+        a.apply_action(Action::Ascend);
+        assert!(a.overlay().is_none());
 
         // Nor on a postigo result overlay.
         a.apply_action(Action::DeclareScale);
-        a.apply_action(Action::Confirm);
+        a.apply_action(Action::Descend);
         assert_eq!(a.session().sessions.borrow().len(), 0);
     }
 
@@ -2409,11 +2671,11 @@ mod tests {
     async fn dismissing_a_preview_opens_nothing() {
         let mut a = app_on("alpha-eks").await;
         a.apply_action(Action::OpenBancada(0));
-        a.apply_action(Action::Dismiss);
+        a.apply_action(Action::Ascend);
         assert!(a.pending_bancada().is_none());
         assert_eq!(a.session().sessions.borrow().len(), 0);
         // And a confirm after the dismissal has nothing to act on.
-        a.apply_action(Action::Confirm);
+        a.apply_action(Action::Descend);
         assert_eq!(a.session().sessions.borrow().len(), 0);
     }
 
@@ -2428,7 +2690,7 @@ mod tests {
                 a.keymap(),
                 awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::Return)
             ),
-            Some(&Action::Confirm),
+            Some(&Action::Descend),
         );
     }
 
@@ -2462,16 +2724,14 @@ mod tests {
         let mut a = app().await;
         assert!(!help_frame(&a).contains("NAVIGATION"), "closed at rest");
 
-        // Through the KEYMAP, not by constructing the action — so this also
-        // proves the authored `h` reaches `Action::Help`.
         let action = *a
             .keymap()
             .find_binding(
-                &awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::H),
+                &awase::Hotkey::new(awase::Modifiers::SHIFT, awase::Key::H),
                 &awase::MatchContext::default(),
             )
             .map(|b| &b.action)
-            .expect("`h` is bound");
+            .expect("`shift+h` is bound");
         assert_eq!(action, Action::Help);
         a.apply_action(action);
 
@@ -2527,7 +2787,7 @@ mod tests {
     /// too, since that is what closes every other overlay.
     #[tokio::test]
     async fn help_closes_on_the_help_chord_and_on_dismiss() {
-        for closer in [Action::Help, Action::Dismiss] {
+        for closer in [Action::Help, Action::Ascend] {
             let mut a = app().await;
             a.apply_action(Action::Help);
             assert!(help_frame(&a).contains("NAVIGATION"));
@@ -2951,11 +3211,11 @@ fn prompt_keymap() -> awase::KeyMode<Action> {
     for (hotkey, action) in [
         (
             awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::Return),
-            Action::Confirm,
+            Action::Descend,
         ),
         (
             awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::Escape),
-            Action::Dismiss,
+            Action::Ascend,
         ),
         (
             awase::Hotkey::new(awase::Modifiers::NONE, awase::Key::Backspace),
@@ -2987,6 +3247,184 @@ fn prompt_keymap() -> awase::KeyMode<Action> {
         let _prev = km.add_binding(awase::Binding::new(hotkey, action));
     }
     km
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+    use crate::fixture::FixtureClusterEnv;
+    use banken_spec::testing::MockSessionEnv;
+
+    async fn app() -> BankenApp<FixtureClusterEnv, MockSessionEnv> {
+        BankenApp::try_new(
+            FixtureClusterEnv::new(),
+            MockSessionEnv::new(),
+            OperatorId::new("drzzln").expect("a literal witness is non-blank"),
+            "source: fixture",
+        )
+        .expect("the shipped vocabulary must build an app")
+        .with_cluster("east")
+        .settled_on_env()
+        .await
+        .expect("the default Armazém configuration is valid")
+    }
+
+    fn type_str(a: &mut BankenApp<FixtureClusterEnv, MockSessionEnv>, s: &str) {
+        for c in s.chars() {
+            let _ = a.type_char(c);
+        }
+    }
+
+    fn selected(a: &BankenApp<FixtureClusterEnv, MockSessionEnv>) -> usize {
+        a.table().view().selected_index()
+    }
+
+    #[tokio::test]
+    async fn escape_rises_one_level_at_a_time_until_the_cluster_list() {
+        let mut a = app().await;
+        a.apply_action(Action::Filter);
+        type_str(&mut a, "web");
+        a.apply_action(Action::Descend);
+        assert_eq!(a.filter(), "web");
+        type_str(&mut a, ":ns/catch");
+        a.apply_action(Action::Descend);
+        assert_eq!(a.scope(), Some("catch"));
+        a.apply_action(Action::ObserveDescribe);
+        assert!(a.overlay().is_some());
+        assert_eq!(
+            a.breadcrumb(),
+            [
+                "east",
+                "ns/catch",
+                "pods",
+                "/web",
+                "catch-web-5f2d",
+                "describe"
+            ]
+        );
+
+        a.apply_action(Action::Ascend);
+        assert!(a.overlay().is_none(), "first the detail closes");
+        a.apply_action(Action::Ascend);
+        assert_eq!(a.filter(), "", "then the filter clears");
+        assert_eq!(a.scope(), Some("catch"));
+        a.apply_action(Action::Ascend);
+        assert_eq!(a.scope(), None, "then the namespace scope drops");
+        assert!(!a.should_quit());
+        a.apply_action(Action::Ascend);
+        assert!(a.ascended(), "at the top, escape lands on the cluster list");
+        assert!(a.should_quit(), "the app hands control back to the chooser");
+    }
+
+    #[tokio::test]
+    async fn escape_on_the_help_page_closes_it_and_never_leaves() {
+        let mut a = app().await;
+        a.apply_action(Action::Help);
+        a.apply_action(Action::Ascend);
+        assert!(!a.ascended());
+        assert!(!a.should_quit());
+    }
+
+    #[tokio::test]
+    async fn enter_on_a_namespace_descends_into_its_pods() {
+        let mut a = app().await;
+        type_str(&mut a, ":ns");
+        a.apply_action(Action::Descend);
+        assert_eq!(a.view_name(), "ns");
+        a.settle(std::time::Duration::from_secs(5)).await;
+        a.apply_action(Action::Descend);
+        a.settle(std::time::Duration::from_secs(5)).await;
+        assert_eq!(a.view_name(), "pods");
+        assert_eq!(a.scope(), Some("catch"));
+        assert_eq!(a.table().view().len(), 5);
+        assert_eq!(a.breadcrumb(), ["east", "ns/catch", "pods"]);
+        a.apply_action(Action::Back);
+        assert_eq!(
+            a.view_name(),
+            "ns",
+            "ctrl+o returns to where enter came from"
+        );
+        assert_eq!(a.scope(), None);
+        a.apply_action(Action::Forward);
+        assert_eq!(a.view_name(), "pods");
+        assert_eq!(a.scope(), Some("catch"));
+    }
+
+    #[tokio::test]
+    async fn a_scope_with_no_pods_shows_none() {
+        let mut a = app().await;
+        type_str(&mut a, ":pods/ns/quiet");
+        a.apply_action(Action::Descend);
+        assert_eq!(a.scope(), Some("quiet"));
+        assert_eq!(a.table().view().len(), 0);
+        type_str(&mut a, ":ns/*");
+        a.apply_action(Action::Descend);
+        assert_eq!(a.scope(), None);
+        assert_eq!(a.table().view().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn gg_needs_two_presses_and_shift_g_goes_to_the_bottom() {
+        let mut a = app().await;
+        a.apply_action(Action::Bottom);
+        assert_eq!(selected(&a), 4);
+        a.apply_action(Action::Top);
+        assert_eq!(selected(&a), 4, "one `g` only arms the sequence");
+        a.apply_action(Action::Top);
+        assert_eq!(selected(&a), 0);
+        a.apply_action(Action::Top);
+        a.apply_action(Action::SelectNext);
+        a.apply_action(Action::Top);
+        assert_eq!(
+            selected(&a),
+            1,
+            "another key between the two presses disarms it"
+        );
+        a.apply_action(Action::PageDown);
+        assert!(selected(&a) > 1);
+        a.apply_action(Action::PageUp);
+        assert_eq!(selected(&a), 0);
+    }
+
+    #[tokio::test]
+    async fn colon_q_quits_and_never_ascends() {
+        let mut a = app().await;
+        type_str(&mut a, ":q");
+        a.apply_action(Action::Descend);
+        assert!(a.should_quit());
+        assert!(!a.ascended());
+    }
+
+    #[tokio::test]
+    async fn every_default_binding_reaches_its_action() {
+        let a = app().await;
+        let catalog = banken_spec::load_catalog().expect("shipped");
+        for intent in NavIntent::ALL {
+            let nav = catalog
+                .nav_keys()
+                .iter()
+                .find(|n| n.intent == *intent)
+                .unwrap_or_else(|| panic!("`{}` has no default binding", intent.label()));
+            let bound = a
+                .keymap()
+                .find_binding(&nav.keys.hotkey(), &awase::MatchContext::default())
+                .map(|b| b.action);
+            assert_eq!(bound, Some(Action::from(*intent)), "{}", intent.label());
+        }
+    }
+
+    #[tokio::test]
+    async fn every_navigation_action_has_a_help_row() {
+        let a = app().await;
+        let lines = a.help.plain_lines().join("\n");
+        for intent in NavIntent::ALL {
+            assert!(
+                lines.contains(intent.label()) && lines.contains(intent.meaning()),
+                "`{}` is missing from the help page:\n{lines}",
+                intent.label()
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3063,7 +3501,7 @@ mod prompt_tests {
         let mut a = app().await;
         assert_eq!(a.view_name(), "pods");
         type_str(&mut a, ":svc");
-        a.apply_action(Action::Confirm);
+        a.apply_action(Action::Descend);
         assert_eq!(a.view_name(), "svc");
         assert!(a.prompt().is_none(), "committing closes the prompt");
     }
@@ -3075,7 +3513,7 @@ mod prompt_tests {
     async fn an_unknown_view_is_refused_by_name_and_lists_the_alternatives() {
         let mut a = app().await;
         type_str(&mut a, ":deploys");
-        a.apply_action(Action::Confirm);
+        a.apply_action(Action::Descend);
         let Panel::Notice(msg) = &a.panel else {
             panic!("expected a notice, got {:?}", a.panel);
         };
@@ -3090,11 +3528,11 @@ mod prompt_tests {
     async fn escape_abandons_a_prompt_without_applying_it() {
         let mut a = app().await;
         type_str(&mut a, "/nginx");
-        a.apply_action(Action::Confirm);
+        a.apply_action(Action::Descend);
         assert_eq!(a.filter(), "nginx");
 
         type_str(&mut a, "/other");
-        a.apply_action(Action::Dismiss);
+        a.apply_action(Action::Ascend);
         assert!(a.prompt().is_none());
         assert_eq!(a.filter(), "nginx", "the committed filter survives");
     }
@@ -3123,11 +3561,11 @@ mod prompt_tests {
         assert!(all > 1, "the fixture must have rows to filter");
 
         type_str(&mut a, "/zzzz-matches-nothing");
-        a.apply_action(Action::Confirm);
+        a.apply_action(Action::Descend);
         assert_eq!(a.table.view().rows().len(), 0, "filtered to nothing");
 
         a.type_char('/');
-        a.apply_action(Action::Confirm);
+        a.apply_action(Action::Descend);
         assert_eq!(a.filter(), "");
         assert_eq!(a.table.view().rows().len(), all, "and every row came back",);
     }

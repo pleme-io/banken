@@ -81,7 +81,7 @@ impl RowAction {
         match self {
             RowAction::ViewLogs => K8sActionSpec {
                 name: "view-logs".into(),
-                keys: ActionChord::plain(Key::L),
+                keys: ActionChord::parse("shift+l").expect("a literal chord parses"),
                 legality: ActionLegality::Observe,
                 manifest_scope: ManifestScope::Full,
             },
@@ -504,7 +504,7 @@ mod tests {
         let authored = banken_spec::load_actions().expect("authored actions load");
         let op = OperatorId::new("drzzln").expect("a literal witness is non-blank");
         for (action, key) in [
-            (RowAction::ViewLogs, "l"),
+            (RowAction::ViewLogs, "shift+l"),
             (RowAction::DeclareScale, "s"),
             // `shift+s`, not `S` — see `banken_spec::chord`.
             (RowAction::BreakGlassShell, "shift+s"),

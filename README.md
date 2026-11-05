@@ -23,6 +23,19 @@ whose first screen is invented data is not a navigator. Each row carries the
 and a name declared by two kubeconfig files is shown as ambiguous and refuses to
 be chosen, rather than being accepted and failing later.
 
+### Each cluster appears once
+
+The chooser reads two sources. The first is the target registry: one
+kubeconfig per target under `~/.kube/targets/<target>`. The second is the
+`KUBECONFIG` merge list. A registry target opens with its own file, so no
+merge can change which cluster it reaches.
+
+An ambient name that a refusal file answers (a nerai stub, whose credential
+helper is `nerai-refuse`) is not a cluster. banken hides these rows and counts
+them in the title (`· 10 refused hidden`). Set `config(:picker, {refused: :dim})`
+to show them dimmed, each with its reason. A stub that shadows a registry
+target does not make the name ambiguous, and the duplicate row does not appear.
+
 ### It is modal, and it means it
 
 The chooser opens in **NORMAL**. `j`/`k` move, `i` starts filtering, `esc`
@@ -55,17 +68,73 @@ The cheap probe runs often; the credential climb runs rarely and only against
 contexts that already answered, because it spawns your kubeconfig's exec
 credential helper.
 
+### A failed login is a panel, not a wall of JSON
+
+When the credential helper fails, banken names the failure in one line, for
+example `east: Azure login expired — run az login --scope <id>/.default`. For a
+known failure it opens a panel. The panel shows the provider, the cluster, the
+apiserver, the tenant and the scope when it knows them, every command it will
+run, and the check it runs after. Nothing runs until you press `enter`. The
+commands run in your terminal, so you see each prompt and each result. When the
+check passes, banken connects again. `esc` returns to the cluster list.
+
+The doctor knows Azure (`kubelogin`, `az`), AWS (`aws sso login`), Google Cloud
+(`gcloud auth login`) and the nerai refusal. It is the `shinsatsu` bidama, in
+blue, under `banken/bidamas/shinsatsu`. A new provider or failure is a
+declaration there.
+
 ### The wait is a place
 
 Connecting is a screen, not a blank terminal: it names the stage it is on
 (kubeconfig → configuration → credentials → first read), times the slow one, and
 `esc` cancels back to the list.
 
+## Navigation is a tree
+
+The screens form a path, the same shape as the Kubernetes API path:
+cluster › namespace › kind › object › detail. The title bar shows the path.
+
+| Keys | Action |
+|---|---|
+| `enter` / `l` / `→` | go down: scope to a namespace, open an object, confirm a session |
+| `esc` / `h` / `←` | go up: close a detail, clear the filter, drop the namespace, then return to the cluster list |
+| `j` / `k`, `gg` / `G`, `ctrl+d` / `ctrl+u` | move |
+| `/` | filter by name |
+| `:` | jump by path or name: `:pods`, `:ns/kube-system`, `:pods/ns/web`, `:ns/*`, `:..`, `:q` |
+| `ctrl+o` / `tab` | history back / forward |
+| `shift+h` / `f1` | help |
+| `q`, `:q`, `ctrl+c` | quit |
+
+`esc` never quits. Logs moved to `shift+l`, and the session recipes moved to
+`t` / `shift+t`, because the vim keys now navigate.
+
+### Configure it in blue
+
+Every navigation key comes from one authored table (`banken-spec/specs/navkeys.lisp`).
+The help page reads the same table. Change it in `~/.config/banken/banken.b`
+(or `$BANKEN_WORLD`):
+
+```blue
+use("motenashi", %i[bind config])
+
+def banken()
+  [
+    bind("ctrl+n", :select_next),
+    bind("k", :off),
+    config(:picker, {refused: :dim, targets: "/home/me/.kube/targets"})
+  ]
+end
+```
+
+A world binding replaces the default on the same chord. `bind(chord, :off)`
+turns a default off. banken refuses a bad entry alone and shows the reason; the
+other entries still apply. The world runs in a child process with a step budget.
+
 ## Usage
 
 ```
 banken                      choose a cluster, then open :pods on it
-banken --context <name>     open :pods on that cluster directly
+banken --context <name>     open :pods on that cluster or registry target directly
 banken --fixture            explore the interface on canned rows
 banken --help
 ```

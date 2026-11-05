@@ -142,7 +142,11 @@ async fn app_frame_renders_title_table_and_status_line() {
     let lines = backend.to_lines();
 
     // Title on row 0.
-    assert!(lines[0].contains(":pods"), "title bar shows the :pods view");
+    assert!(
+        lines[0].contains("cluster › pods"),
+        "the title is the breadcrumb path: {}",
+        lines[0]
+    );
     // Status line (last row) carries the source label + the key legend.
     let status = lines.last().expect("a status line");
     assert!(

@@ -65,10 +65,16 @@ fn the_keymap_is_built_from_the_authored_catalog() {
     // two vocabularies became one type — there is no second spelling to be
     // wrong about. Its disappearance is the clearest single sign the
     // projection is really gone, rather than moved somewhere else.
-    assert_eq!(act(&km, bare(Key::Escape)), Some(&Action::Dismiss));
+    assert_eq!(act(&km, bare(Key::Escape)), Some(&Action::Ascend));
+    assert_eq!(act(&km, bare(Key::H)), Some(&Action::Ascend));
+    assert_eq!(act(&km, bare(Key::Return)), Some(&Action::Descend));
+    assert_eq!(act(&km, bare(Key::L)), Some(&Action::Descend));
 
     // postigo, from specs/actions.lisp.
-    assert_eq!(act(&km, bare(Key::L)), Some(&Action::ObserveLogs));
+    assert_eq!(
+        act(&km, Hotkey::new(Modifiers::SHIFT, Key::L)),
+        Some(&Action::ObserveLogs)
+    );
     assert_eq!(act(&km, bare(Key::S)), Some(&Action::DeclareScale));
     assert_eq!(
         act(&km, Hotkey::new(Modifiers::SHIFT, Key::S)),
@@ -246,8 +252,8 @@ fn the_legend_states_the_authored_chords_and_their_legality_classes() {
     let legend = key_legend(&c);
     assert_eq!(
         legend,
-        "l:OBSERVE  d:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  \
-         g:OBSERVE  shift+g:BREAK-GLASS  h:help  o:sort  q:quit",
+        "shift+l:OBSERVE  d:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  \
+         t:OBSERVE  shift+t:BREAK-GLASS  shift+h:help  escape:up  o:sort  q:quit",
         "the legend is derived from the authored chords + typed legality \
          classes — INCLUDING the bancada chords, whose class is derived from \
          their panes rather than authored"
@@ -259,7 +265,7 @@ fn the_legend_states_the_authored_chords_and_their_legality_classes() {
     );
 
     // And it MOVES with the authored source.
-    let rebound = banken_spec::CANONICAL_ACTIONS_LISP.replace(":keys \"l\"", ":keys \"v\"");
+    let rebound = banken_spec::CANONICAL_ACTIONS_LISP.replace(":keys \"shift+l\"", ":keys \"v\"");
     assert!(rebound.contains(":keys \"v\""), "substitution landed");
     let actions = banken_spec::loader::load_all::<banken_spec::types::K8sActionSpec>(&rebound)
         .expect("compiles");
@@ -275,7 +281,7 @@ fn the_legend_states_the_authored_chords_and_their_legality_classes() {
     .expect("resolves");
     let moved_legend = key_legend(&moved);
     assert!(moved_legend.starts_with("v:OBSERVE"), "got: {moved_legend}");
-    assert!(!moved_legend.contains("l:OBSERVE"));
+    assert!(!moved_legend.contains("shift+l:OBSERVE"));
 }
 
 // ── the table is derived ────────────────────────────────────────────────

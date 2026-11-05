@@ -77,6 +77,7 @@ use egaku::{FuzzyPicker, PickerEffect, PickerEvent, PickerItem};
 use egaku_term::crossterm::style::Color;
 use egaku_term::{__re::KeyMap, AsyncApp, Buffer, Result as TermResult, Style};
 
+use crate::estate::RefusedRows;
 use crate::live::{ContextChoice, ContextError, enumerate_contexts, kubeconfig_current_context};
 
 /// What a keystroke does on the picker screen.
@@ -149,6 +150,9 @@ impl std::error::Error for PickerError {}
 /// The cluster-chooser screen.
 pub struct ContextPicker {
     picker: FuzzyPicker<ContextChoice>,
+    all: Vec<ContextChoice>,
+    refused_rows: RefusedRows,
+    hidden: usize,
     /// How many contexts exist in total. `FuzzyPicker` exposes only the
     /// *visible* count, and "3 contexts" and "3 of 18" are different claims —
     /// the second is the one that tells an operator their query is hiding
@@ -242,31 +246,13 @@ impl ContextPicker {
     /// [`Self::try_new`].
     #[must_use]
     pub fn with_contexts(catalog: &Catalog, contexts: Vec<ContextChoice>) -> Self {
-        let total = contexts.len();
-        let items = contexts
-            .into_iter()
-            .map(|c| {
-                // The fuzzy match runs over the label, so putting the server
-                // in it means `banken` + "eks.amazonaws" narrows by *estate*,
-                // not only by whatever the context happened to be named.
-                let mut label = c.name.clone();
-                if let Some(server) = &c.server {
-                    label.push(' ');
-                    label.push_str(server);
-                }
-                PickerItem::new(c, label)
-            })
-            .collect();
-
-        let mut picker = FuzzyPicker::new(items);
-        // The picker is the whole screen, so it is open from the first frame.
-        // (`FuzzyPicker` starts `Closed`, where every event but `Open` is
-        // inert — a closed picker would eat every keystroke silently.)
-        let _opened = picker.on_event(PickerEvent::Open);
-
+        let (picker, total, hidden) = Self::chooser(&contexts, RefusedRows::default());
         let (keys, advertised) = keymap_from_catalog(catalog);
         Self {
             picker,
+            all: contexts,
+            refused_rows: RefusedRows::default(),
+            hidden,
             total,
             keys,
             advertised,
@@ -280,6 +266,57 @@ impl ContextPicker {
             chosen: None,
             quit: false,
         }
+    }
+
+    fn chooser(
+        contexts: &[ContextChoice],
+        mode: RefusedRows,
+    ) -> (FuzzyPicker<ContextChoice>, usize, usize) {
+        let shown: Vec<&ContextChoice> = contexts
+            .iter()
+            .filter(|c| mode == RefusedRows::Dim || !c.is_refused())
+            .collect();
+        let hidden = contexts.len() - shown.len();
+        let total = shown.len();
+        let items = shown
+            .into_iter()
+            .map(|c| {
+                let mut label = c.name.clone();
+                if let Some(server) = &c.server {
+                    label.push(' ');
+                    label.push_str(server);
+                }
+                PickerItem::new(c.clone(), label)
+            })
+            .collect();
+        let mut picker = FuzzyPicker::new(items);
+        let _opened = picker.on_event(PickerEvent::Open);
+        (picker, total, hidden)
+    }
+
+    #[must_use]
+    pub fn refused_rows(mut self, mode: RefusedRows) -> Self {
+        let (picker, total, hidden) = Self::chooser(&self.all, mode);
+        self.picker = picker;
+        self.total = total;
+        self.hidden = hidden;
+        self.refused_rows = mode;
+        self
+    }
+
+    #[must_use]
+    pub fn hidden(&self) -> usize {
+        self.hidden
+    }
+
+    #[must_use]
+    pub fn shown_names(&self) -> Vec<String> {
+        self.picker
+            .view()
+            .rows
+            .iter()
+            .map(|r| r.key.name.clone())
+            .collect()
     }
 
     /// The context the operator committed to, if they committed to one.
@@ -445,6 +482,10 @@ impl ContextPicker {
                 // — `resolve_context` refuses it moments later anyway. Better
                 // to say so on the row the operator is looking at.
                 match self.picker.selected_item() {
+                    Some(item) if item.key.is_refused() => {
+                        self.refusal = Some(refused_note(&item.key));
+                        true
+                    }
                     Some(item) if item.key.is_ambiguous() => {
                         self.refusal = Some(ambiguity_refusal(&item.key));
                         true
@@ -586,7 +627,12 @@ impl ContextPicker {
             width,
             Style::default().fg(Color::Cyan).bold(),
         );
-        let count = matched_label(view.rows.len(), self.total);
+        let mut count = matched_label(view.rows.len(), self.total);
+        if self.hidden > 0 {
+            count.push_str("· ");
+            count.push_str(&self.hidden.to_string());
+            count.push_str(" refused hidden ");
+        }
         let count_w = u16::try_from(count.chars().count()).unwrap_or(0);
         if count_w < width {
             buf.set_stringn(
@@ -767,7 +813,11 @@ impl ContextPicker {
 
         // The name. Red when ambiguous — the row is not choosable, and the
         // colour is the first thing that says so.
-        let name_style = if ctx.is_ambiguous() && !selected {
+        let name_style = if selected {
+            base
+        } else if ctx.is_refused() {
+            base.fg(Color::DarkGrey)
+        } else if ctx.is_ambiguous() {
             base.fg(Color::Red)
         } else {
             base
@@ -784,8 +834,17 @@ impl ContextPicker {
         };
         let pad = name_column_pad(&ctx.name);
         x = buf.set_stringn(x, y, &pad, width.saturating_sub(x), base);
+        if let Some(reason) = &ctx.refused {
+            let mut note = String::from("refused: ");
+            note.push_str(reason);
+            buf.set_stringn(x, y, &note, width.saturating_sub(x), detail_style);
+            return;
+        }
         let server = ctx.server.as_deref().unwrap_or("<no server declared>");
         x = buf.set_stringn(x, y, server, width.saturating_sub(x), detail_style);
+        if ctx.is_target() {
+            x = buf.set_stringn(x, y, "  target", width.saturating_sub(x), detail_style);
+        }
 
         // Annotations, in descending order of how much the operator needs
         // them before pressing enter.
@@ -892,7 +951,7 @@ fn matched_label(shown: usize, total: usize) -> String {
     let mut s = String::new();
     if shown == total {
         s.push_str(&total.to_string());
-        s.push_str(" contexts ");
+        s.push_str(" clusters ");
     } else {
         s.push_str(&shown.to_string());
         s.push_str(" of ");
@@ -909,6 +968,14 @@ fn name_column_pad(name: &str) -> String {
     const NAME_COL: usize = 32;
     let used = name.chars().count();
     " ".repeat(NAME_COL.saturating_sub(used).max(1))
+}
+
+fn refused_note(ctx: &ContextChoice) -> String {
+    let mut s = String::from("`");
+    s.push_str(&ctx.name);
+    s.push_str("` is refused: ");
+    s.push_str(ctx.refused.as_deref().unwrap_or_default());
+    s
 }
 
 /// The inline row marker for an ambiguous context.
@@ -1103,9 +1170,18 @@ fn picker_action(intent: NavIntent) -> Option<PickerAction> {
     match intent {
         NavIntent::SelectNext => Some(PickerAction::Down),
         NavIntent::SelectPrev => Some(PickerAction::Up),
-        NavIntent::Confirm => Some(PickerAction::Accept),
-        NavIntent::Dismiss => Some(PickerAction::Escape),
-        NavIntent::Quit | NavIntent::ToggleSort | NavIntent::Help => None,
+        NavIntent::Descend => Some(PickerAction::Accept),
+        NavIntent::Ascend => Some(PickerAction::Escape),
+        NavIntent::Quit
+        | NavIntent::ToggleSort
+        | NavIntent::Help
+        | NavIntent::Top
+        | NavIntent::Bottom
+        | NavIntent::PageDown
+        | NavIntent::PageUp
+        | NavIntent::Back
+        | NavIntent::Forward
+        | NavIntent::Filter => None,
     }
 }
 
@@ -1210,22 +1286,66 @@ mod tests {
     use std::path::PathBuf;
 
     fn ctx(name: &str, server: &str) -> ContextChoice {
-        ContextChoice {
-            name: name.into(),
-            server: Some(server.into()),
-            files: vec![PathBuf::from("/home/op/.kube/config")],
-        }
+        ContextChoice::ambient(
+            name,
+            Some(server),
+            vec![PathBuf::from("/home/op/.kube/config")],
+        )
     }
 
     fn ambiguous(name: &str) -> ContextChoice {
-        ContextChoice {
-            name: name.into(),
-            server: Some("https://127.0.0.1:6443".into()),
-            files: vec![
+        ContextChoice::ambient(
+            name,
+            Some("https://127.0.0.1:6443"),
+            vec![
                 PathBuf::from("/home/op/.kube/configs/local"),
                 PathBuf::from("/home/op/.kube/config"),
             ],
-        }
+        )
+    }
+
+    fn refused(name: &str, reason: &str) -> ContextChoice {
+        let mut c = ctx(name, "https://x.refused.invalid");
+        c.refused = Some(reason.into());
+        c
+    }
+
+    #[test]
+    fn refused_rows_are_hidden_by_default_and_counted() {
+        let mut p = picker(vec![
+            ctx("alpha-eks", "https://alpha.eks.amazonaws.com"),
+            refused("oldbox", "oldbox is retired: gone"),
+        ]);
+        assert_eq!(p.shown_names(), ["alpha-eks"]);
+        assert_eq!(p.hidden(), 1);
+        let frame = render_frame(&p, 100, 10);
+        assert!(frame.contains("1 refused hidden"), "{frame}");
+        p = p.refused_rows(RefusedRows::Dim);
+        assert_eq!(p.shown_names(), ["alpha-eks", "oldbox"]);
+        assert_eq!(p.hidden(), 0);
+    }
+
+    #[test]
+    fn a_dimmed_refused_row_shows_its_reason_and_cannot_be_chosen() {
+        let mut p = picker(vec![refused("oldbox", "oldbox is retired: gone")])
+            .refused_rows(RefusedRows::Dim);
+        let frame = render_frame(&p, 100, 10);
+        assert!(
+            frame.contains("refused: oldbox is retired: gone"),
+            "{frame}"
+        );
+        let _ = p.dispatch(PickerAction::Accept);
+        assert!(p.chosen().is_none());
+        assert_eq!(
+            p.refusal(),
+            Some("`oldbox` is refused: oldbox is retired: gone")
+        );
+    }
+
+    fn render_frame(p: &ContextPicker, w: u16, h: u16) -> String {
+        let mut backend = TestBackend::new(w, h);
+        backend.draw(|buf| p.render(buf));
+        backend.to_lines().join("\n")
     }
 
     fn picker(contexts: Vec<ContextChoice>) -> ContextPicker {
@@ -1929,11 +2049,11 @@ mod stance_config_tests {
     #[test]
     fn the_builder_overrides_the_prescribed_stance() {
         let catalog = banken_spec::load_catalog().expect("the shipped vocabulary must load");
-        let ctxs = vec![ContextChoice {
-            name: "alpha-eks".into(),
-            server: Some("https://k8s.example.invalid:6443".into()),
-            files: vec![std::path::PathBuf::from("/home/op/.kube/config")],
-        }];
+        let ctxs = vec![ContextChoice::ambient(
+            "alpha-eks",
+            Some("https://k8s.example.invalid:6443"),
+            vec![std::path::PathBuf::from("/home/op/.kube/config")],
+        )];
 
         let p = ContextPicker::with_contexts(&catalog, ctxs.clone());
         assert_eq!(p.stance_badge(), "NORMAL", "the prescribed default");

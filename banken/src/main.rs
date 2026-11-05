@@ -42,6 +42,16 @@ const FIXTURE_CLUSTER: &str = "fixture";
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
+    if args.first().map(String::as_str) == Some(banken::world::SERVE_ARG) {
+        let file = args
+            .iter()
+            .skip_while(|a| *a != "--file")
+            .nth(1)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        std::process::exit(banken::world::serve(&file));
+    }
+
     let (invocation, options) = match parse_launch(&args) {
         Ok(parsed) => parsed,
         Err(e) => {
@@ -111,7 +121,7 @@ async fn run_pick(
     strategy: banken::absorb::ListStrategy,
     options: &Options,
 ) -> Result<(), String> {
-    let catalog = banken_spec::load_catalog().map_err(|e| e.to_string())?;
+    let (catalog, world_refusals) = catalog()?;
 
     // ── The watchdog's rounds, started ONCE and outliving every picker entry ──
     //
@@ -145,20 +155,28 @@ async fn run_pick(
         )
     });
 
-    let mut notice: Option<String> = None;
+    let mut notice: Option<String> =
+        (!world_refusals.is_empty()).then(|| world_refusals.join("  ·  "));
+    let mut retry: Option<banken::live::ContextChoice> = None;
     loop {
-        let mut picker = banken::picker::ContextPicker::try_new(&catalog)
-            .map_err(|e| e.to_string())?
-            .opening_in(opening_stance())
-            .with_ronda(ronda.clone());
-        if let Some(n) = notice.take() {
-            picker = picker.with_notice(n);
-        }
-        egaku_term::run_async(&mut picker)
-            .await
-            .map_err(|e| e.to_string())?;
-        let Some(choice) = picker.chosen().cloned() else {
-            return Ok(());
+        let choice = if let Some(c) = retry.take() {
+            c
+        } else {
+            let mut picker = banken::picker::ContextPicker::try_new(&catalog)
+                .map_err(|e| e.to_string())?
+                .opening_in(opening_stance())
+                .refused_rows(refused_rows())
+                .with_ronda(ronda.clone());
+            if let Some(n) = notice.take() {
+                picker = picker.with_notice(n);
+            }
+            egaku_term::run_async(&mut picker)
+                .await
+                .map_err(|e| e.to_string())?;
+            let Some(choice) = picker.chosen().cloned() else {
+                return Ok(());
+            };
+            choice
         };
         match run_live_from(
             operator.clone(),
@@ -173,9 +191,68 @@ async fn run_pick(
             // The operator changed their mind mid-connect. Back to the list
             // with NO notice: a cancel is a decision, and captioning it with
             // an error would read as though something had gone wrong.
-            Ok(Landed::Cancelled) => notice = None,
-            // Back to the list with the reason, rather than out to a prompt.
-            Err(e) => notice = Some(e),
+            Ok(Landed::Cancelled | Landed::Ascended) => notice = None,
+            Err(e) => match banken::live::diagnosis_for(&choice.name, &e) {
+                Some(d) if !d.steps.is_empty() || !d.verify.is_empty() => {
+                    match run_doctor(d).await? {
+                        Healed::Retry => {
+                            retry = Some(choice);
+                            notice = None;
+                        }
+                        Healed::Back => notice = None,
+                        Healed::Quit => return Ok(()),
+                    }
+                }
+                Some(d) if !d.is_refusal() => notice = Some(d.headline()),
+                Some(_) | None => notice = Some(e),
+            },
+        }
+    }
+}
+
+#[cfg(feature = "live")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Healed {
+    Retry,
+    Back,
+    Quit,
+}
+
+#[cfg(feature = "live")]
+async fn run_doctor(diagnosis: banken::doctor::Diagnosis) -> Result<Healed, String> {
+    use banken::doctor_screen::{Choice, DoctorScreen, run_step, verify_quietly};
+    let mut ran = Vec::new();
+    let mut verified = None;
+    loop {
+        let mut screen =
+            DoctorScreen::new(diagnosis.clone()).with_results(ran.clone(), verified.clone());
+        egaku_term::run_async(&mut screen)
+            .await
+            .map_err(|e| e.to_string())?;
+        match screen.choice() {
+            Some(Choice::Run) => {
+                ran.clear();
+                for step in &diagnosis.steps {
+                    let r = run_step(step);
+                    let ok = r.ok();
+                    ran.push(r);
+                    if !ok {
+                        break;
+                    }
+                }
+                verified = (ran.iter().all(banken::doctor_screen::Ran::ok)
+                    && !diagnosis.verify.is_empty())
+                .then(|| verify_quietly(&diagnosis.verify));
+            }
+            Some(Choice::Verify) => verified = Some(verify_quietly(&diagnosis.verify)),
+            Some(Choice::Back) | None => return Ok(Healed::Back),
+            Some(Choice::Quit) => return Ok(Healed::Quit),
+        }
+        if verified
+            .as_ref()
+            .is_some_and(banken::doctor_screen::Ran::ok)
+        {
+            return Ok(Healed::Retry);
         }
     }
 }
@@ -191,6 +268,7 @@ async fn run_pick(
 enum Landed {
     Opened,
     Cancelled,
+    Ascended,
 }
 
 /// Without the `live` feature there are no clusters to choose between, so the
@@ -266,11 +344,12 @@ async fn run_fixture(operator: OperatorId, options: &Options) -> Result<(), Stri
         None,
     )
     .await?;
-    let mut app = BankenApp::<FixtureClusterEnv, _>::try_new(
+    let mut app = BankenApp::<FixtureClusterEnv, _>::with_catalog(
         env,
         session_env(),
         operator,
         "source: fixture (no cluster read)",
+        &catalog()?.0,
     )
     .map_err(|e| e.to_string())?
     .with_cluster(FIXTURE_CLUSTER)
@@ -338,7 +417,29 @@ async fn run_live(
     strategy: banken::absorb::ListStrategy,
     options: &Options,
 ) -> Result<Landed, String> {
-    run_live_from(operator, context, None, strategy, options).await
+    loop {
+        match run_live_from(operator.clone(), context, None, strategy, options).await {
+            Ok(Landed::Ascended) => {
+                run_pick(operator, strategy, options).await?;
+                return Ok(Landed::Opened);
+            }
+            Ok(landed) => return Ok(landed),
+            Err(e) => match banken::live::diagnosis_for(context, &e) {
+                Some(d) if !d.steps.is_empty() || !d.verify.is_empty() => {
+                    match run_doctor(d).await? {
+                        Healed::Retry => {}
+                        Healed::Back => {
+                            run_pick(operator, strategy, options).await?;
+                            return Ok(Landed::Opened);
+                        }
+                        Healed::Quit => return Ok(Landed::Cancelled),
+                    }
+                }
+                Some(d) if !d.is_refusal() => return Err(d.headline()),
+                Some(_) | None => return Err(e),
+            },
+        }
+    }
 }
 
 /// Run the navigator over the live kube source, against the **named**
@@ -429,11 +530,12 @@ async fn run_live_from(
             Some(permits.clone()),
         )
         .await?;
-        let app = BankenApp::<banken::live::KubeClusterEnv, _>::try_new(
+        let app = BankenApp::<banken::live::KubeClusterEnv, _>::with_catalog(
             shared,
             session_env(),
             operator,
             label,
+            &catalog()?.0,
         )
         .map_err(|e| e.to_string())?
         .with_cluster(cluster.clone())
@@ -469,6 +571,9 @@ async fn run_live_from(
     egaku_term::run_async(&mut app)
         .await
         .map_err(|e| e.to_string())?;
+    if app.ascended() {
+        return Ok(Landed::Ascended);
+    }
 
     // ── The receipt, on the way OUT ──
     //
@@ -520,6 +625,28 @@ fn ronda_cadence() -> banken::ronda::Cadence {
             climb: c.ronda_climb(),
         },
     )
+}
+
+fn world() -> &'static banken::world::Overlay {
+    static WORLD: std::sync::OnceLock<banken::world::Overlay> = std::sync::OnceLock::new();
+    WORLD.get_or_init(|| {
+        let w = banken::world::current();
+        #[cfg(feature = "live")]
+        if let Some(dir) = &w.targets_dir {
+            banken::live::set_targets_dir(dir.clone());
+        }
+        w
+    })
+}
+
+fn catalog() -> Result<(banken_spec::Catalog, Vec<String>), String> {
+    let base = banken_spec::load_catalog().map_err(|e| e.to_string())?;
+    Ok(world().catalog(&base))
+}
+
+#[cfg(feature = "live")]
+fn refused_rows() -> banken::estate::RefusedRows {
+    world().refused_rows.unwrap_or_default()
 }
 
 /// The fixture source's refresh period, read from the AUTHORED config.
@@ -739,8 +866,8 @@ fn print_usage() {
     // did — `--help` advertised `S` for a chord the runtime bound as
     // `shift+s`. There is now one derivation, in `banken_spec::help`, and
     // this is one of its two renderers.
-    match banken_spec::load_catalog() {
-        Ok(catalog) => {
+    match catalog() {
+        Ok((catalog, _)) => {
             let page = banken_spec::help::HelpPage::build(
                 &catalog,
                 banken_spec::help::Wiring {

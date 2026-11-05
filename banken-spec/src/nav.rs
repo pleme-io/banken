@@ -61,19 +61,27 @@ closed_catalog! {
         SelectPrev => "select-prev",
         /// Cycle the sort direction on the active column.
         ToggleSort => "toggle-sort",
-        /// Dismiss the action-result overlay.
-        Dismiss => "dismiss",
-        /// Confirm the previewed action in the current overlay.
-        ///
-        /// Today the app has exactly one confirmable overlay — a
-        /// [`crate::bancada::SessionPlan`] awaiting the operator's go-ahead —
-        /// and everywhere else this is a no-op. It is authored as an
-        /// *intent* rather than as a `(defk8saction)` for the same reason
-        /// every other nav key is: confirming a preview mutates local UI
-        /// state, and the thing it then performs carries its own DERIVED
-        /// `postigo` class. Typing the confirm key itself as `Observe` would
-        /// misdescribe the BREAK-GLASS case.
-        Confirm => "confirm",
+        /// Rise one level up the path: close a detail, clear a filter, drop
+        /// a namespace scope, and at the top return to the cluster chooser.
+        /// On a confirmable overlay it dismisses without acting.
+        Ascend => "ascend",
+        /// Go one level down the path: confirm a previewed session, scope to
+        /// the selected namespace, or open the selected object's detail.
+        Descend => "descend",
+        /// Move to the first row. A sequence: its chord pressed twice (`gg`).
+        Top => "top",
+        /// Move to the last row.
+        Bottom => "bottom",
+        /// Move half a page down.
+        PageDown => "page-down",
+        /// Move half a page up.
+        PageUp => "page-up",
+        /// Return to the previous location in the history.
+        Back => "back",
+        /// Return to the next location in the history.
+        Forward => "forward",
+        /// Open the `/` filter prompt.
+        Filter => "filter",
         /// Open the help page — the authored vocabulary, rendered.
         ///
         /// An *intent*, not a `(defk8saction)`, for the usual reason: it
@@ -85,6 +93,30 @@ closed_catalog! {
         Help => "help",
         /// Quit banken.
         Quit => "quit",
+    }
+}
+
+impl NavIntent {
+    #[must_use]
+    pub fn meaning(self) -> &'static str {
+        match self {
+            Self::SelectNext => "move one row down",
+            Self::SelectPrev => "move one row up",
+            Self::ToggleSort => "reverse the sort",
+            Self::Ascend => {
+                "go up one level: close, clear the filter, drop the scope, then the cluster list"
+            }
+            Self::Descend => "go down one level: confirm, scope to a namespace, open an object",
+            Self::Top => "first row (press twice: gg)",
+            Self::Bottom => "last row",
+            Self::PageDown => "half a page down",
+            Self::PageUp => "half a page up",
+            Self::Back => "previous place in the history",
+            Self::Forward => "next place in the history",
+            Self::Filter => "filter the rows by name",
+            Self::Help => "this page",
+            Self::Quit => "quit banken",
+        }
     }
 }
 
@@ -135,7 +167,7 @@ mod tests {
 
     #[test]
     fn every_intent_has_a_label_and_a_wire_name_that_agree() {
-        assert_eq!(NavIntent::ALL.len(), 7);
+        assert_eq!(NavIntent::ALL.len(), 14);
         for i in NavIntent::ALL {
             let wire = serde_json::to_string(i).expect("serializes");
             let mut expected = String::from("\"");

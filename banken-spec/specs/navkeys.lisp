@@ -26,40 +26,41 @@
 ;; Cycle the sort direction on the active column.
 (defnavkey :name "toggle-sort"       :keys "o"      :intent toggle-sort)
 
-;; Dismiss the postigo action-result overlay.
-(defnavkey :name "dismiss-overlay"   :keys "escape" :intent dismiss)
+;; The tree. banken's screens are a path, the same shape as the Kubernetes API
+;; path: cluster / kind / namespace / object / detail. `descend` goes one level
+;; down and `ascend` one level up. `ascend` at the top lands on the cluster
+;; chooser. It never quits: quitting stays on `q`, `:q` and ctrl+c.
+;;
+;; `descend` on a session preview confirms it. A bancada is NEVER opened by the
+;; chord that resolves it: the operator sees the resolved argv, the cluster and
+;; the DERIVED postigo class first, and then presses enter.
+(defnavkey :name "descend-enter"     :keys "return" :intent descend)
+(defnavkey :name "descend-vi"        :keys "l"      :intent descend)
+(defnavkey :name "descend-arrow"     :keys "right"  :intent descend)
+(defnavkey :name "ascend-escape"     :keys "escape" :intent ascend)
+(defnavkey :name "ascend-vi"         :keys "h"      :intent ascend)
+(defnavkey :name "ascend-arrow"      :keys "left"   :intent ascend)
 
-;; Confirm the previewed action. Today that is exactly one thing: opening the
-;; `(defbancada)` session the `g` / `shift+g` overlay is previewing. A
-;; bancada is NEVER opened by the chord that resolves it — the operator sees
-;; the fully-resolved argv, the cluster it names, and the DERIVED postigo
-;; class first, and then decides. That gap is the whole point for a
-;; BREAK-GLASS recipe. Note awase spells this `return`; egaku-term delivers
-;; it as `enter`, and `banken::keys::chord_to_combo` carries that one
-;; MEASURED translation.
-(defnavkey :name "confirm-preview"   :keys "return" :intent confirm)
+;; vim motions over the rows. `top` is a sequence: `g` twice.
+(defnavkey :name "top-vi"            :keys "g"        :intent top)
+(defnavkey :name "bottom-vi"         :keys "shift+g"  :intent bottom)
+(defnavkey :name "page-down-vi"      :keys "ctrl+d"   :intent page-down)
+(defnavkey :name "page-up-vi"        :keys "ctrl+u"   :intent page-up)
+(defnavkey :name "page-down-key"     :keys "pagedown" :intent page-down)
+(defnavkey :name "page-up-key"       :keys "pageup"   :intent page-up)
 
-;; Help — the authored vocabulary, rendered back to the operator.
-;;
-;; TWO chords, one intent, the same shape as `down`/`j`: `h` is the one an
-;; operator reaches for, `f1` is the one that works on any keyboard layout.
-;;
-;; `?` — the k9s/vim idiom, and what was authored first — is NOT here, and the
-;; reason is measured rather than aesthetic. `awase 0.1.6` (what banken pins)
-;; has no `?` in `Key::from_name`, so `(defnavkey :keys "?")` fails to compile
-;; the catalog outright: `invalid hotkey: unknown key: ?`. Worse, egaku-term's
-;; `to_hotkey` resolves a delivered `Char('?')` through that same function, so
-;; even a version that PARSED `?` would be delivering it as `Key::Slash` with
-;; no modifier — awase models one `Slash` key and cannot distinguish the
-;; shifted glyph — making `?` and `/` literally the same chord and burning the
-;; k9s filter key to buy the k9s help key.
-;;
-;; `pending-banken: help-question-chord` — `?` becomes authorable when awase
-;; models a shifted glyph distinctly from its unshifted key. Until then the
-;; status-line legend carries `h:help`, so the chord is discoverable rather
-;; than merely documented.
-(defnavkey :name "help"              :keys "h"      :intent help)
-(defnavkey :name "help-f1"           :keys "f1"     :intent help)
+;; History: ctrl+o goes back, tab goes forward. A terminal sends ctrl+i as tab,
+;; so `tab` IS vim's ctrl+i.
+(defnavkey :name "back-vi"           :keys "ctrl+o" :intent back)
+(defnavkey :name "forward-vi"        :keys "tab"    :intent forward)
+
+;; The `/` filter. `:` stays structural: awase names no shifted glyph, so `:`
+;; has no chord (the same reason `?` cannot be the help key).
+(defnavkey :name "filter"            :keys "slash"  :intent filter)
+
+;; Help. `h` ascends now, so help moved to `shift+h` beside `f1`.
+(defnavkey :name "help"              :keys "shift+h" :intent help)
+(defnavkey :name "help-f1"           :keys "f1"      :intent help)
 
 ;; Quit.
 (defnavkey :name "quit"              :keys "q"      :intent quit)
