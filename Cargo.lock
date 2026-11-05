@@ -338,14 +338,18 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-bidama"
-version = "0.0.152"
+version = "0.0.153"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be97d488968980716ed0b73494280c686e212c00ede9efd93cb601a2ae699b46"
 dependencies = [
  "blue-lang-waku",
 ]
 
 [[package]]
 name = "blue-lang-check"
-version = "0.0.152"
+version = "0.0.153"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8582b00d68563b70d0282d7a538cde9e5574b7e420b162d60e571f6a22e9ae4"
 dependencies = [
  "blue-lang-syntax",
  "tatara-lisp 0.4.13",
@@ -353,7 +357,9 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-fmt"
-version = "0.0.152"
+version = "0.0.153"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fc668ebb867d8008971fdfb632eea1e54f17f948ed1025e51d1db2815e089ad"
 dependencies = [
  "blue-lang-syntax",
  "tatara-lisp 0.4.13",
@@ -362,7 +368,9 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-host"
-version = "0.0.152"
+version = "0.0.153"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3139124dcf098ca8f7671b8f098e3f4752eb1acc26d0e6ef32fd3e3ec5773aa"
 dependencies = [
  "blue-lang-host-macros",
  "blue-lang-pkg",
@@ -378,7 +386,9 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-host-macros"
-version = "0.0.152"
+version = "0.0.153"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3de86fb1c5c903dc0573be74512e5aa70f0f7cd4260c6819c139fbf6abf9fd8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -387,7 +397,9 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-mondou"
-version = "0.0.152"
+version = "0.0.153"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8b35c0454af3e7d06b539c3b85b31bb53719539c2593afb3d41ab429ca04ae4"
 dependencies = [
  "blake3",
  "blue-lang-check",
@@ -401,7 +413,9 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-pkg"
-version = "0.0.152"
+version = "0.0.153"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "888fc4624d0d4eb7a138a91cae9db750689a453686080c335ac1f94c690b5f7f"
 dependencies = [
  "blake3",
  "blue-lang-bidama",
@@ -421,7 +435,9 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-proc"
-version = "0.0.152"
+version = "0.0.153"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8758306061357d49b1de940c792b9faecfcd18e1168329f1d19603c28671d72f"
 dependencies = [
  "blake3",
  "blue-lang-waku",
@@ -434,7 +450,9 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-runtime"
-version = "0.0.152"
+version = "0.0.153"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4d25e6303c4948139b6c6f5508fd7ad0296b59da8415b9a9decdfe8c16cb74f"
 dependencies = [
  "blake3",
  "blue-lang-check",
@@ -457,14 +475,18 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-syntax"
-version = "0.0.152"
+version = "0.0.153"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7fc8a961aba52165d7e3466836509858b3959e5cc4c51f0e62ecc3e3a30d64e"
 dependencies = [
  "tatara-lisp 0.4.13",
 ]
 
 [[package]]
 name = "blue-lang-waku"
-version = "0.0.152"
+version = "0.0.153"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "298ee083481e97d4775c2bce8d0453f897fcea0d441e16d8be1e666de43ba68c"
 dependencies = [
  "blue-lang-syntax",
  "serde",

@@ -35,10 +35,3 @@ lto = true
 opt-level = 3
 strip = true
 
-
-[patch.crates-io]
-blue-lang-host = { path = "/Users/luis.d/code/github/pleme-io/blue/crates/blue-lang-host" }
-blue-lang-host-macros = { path = "/Users/luis.d/code/github/pleme-io/blue/crates/blue-lang-host-macros" }
-blue-lang-pkg = { path = "/Users/luis.d/code/github/pleme-io/blue/crates/blue-lang-pkg" }
-blue-lang-runtime = { path = "/Users/luis.d/code/github/pleme-io/blue/crates/blue-lang-runtime" }
-blue-lang-waku = { path = "/Users/luis.d/code/github/pleme-io/blue/crates/blue-lang-waku" }

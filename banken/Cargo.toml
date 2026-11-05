@@ -72,7 +72,7 @@ izumi-mcp = { version = "0.1.24", optional = true }
 # pleme-io crate is the crate2nix-vs-fetchgit drift class this crate already
 # paid for once.
 unsoku = "0.1"
-blue-lang-host = "0.0.152"
+blue-lang-host = "0.0.153"
 
 # The fleet's established lock-free read-hot-path primitive (20 crates declare
 # it). The render path loads the absorbed snapshot every frame; `ArcSwap` makes
