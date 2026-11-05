@@ -72,7 +72,7 @@ izumi-mcp = { version = "0.1.24", optional = true }
 # pleme-io crate is the crate2nix-vs-fetchgit drift class this crate already
 # paid for once.
 unsoku = "0.1"
-blue-lang-host = "0.0.151"
+blue-lang-host = "0.0.152"
 
 # The fleet's established lock-free read-hot-path primitive (20 crates declare
 # it). The render path loads the absorbed snapshot every frame; `ArcSwap` makes
@@ -213,6 +213,13 @@ octocrab = { version = "0.47", optional = true }
 # make impossible, so it may not be a build option.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = { workspace = true }
+similar = "2"
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "native-tokio", "ring", "tls12"], optional = true }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"], optional = true }
+http-body-util = { version = "0.1", optional = true }
+bytes = { version = "1", optional = true }
+secrecy = { version = "0.10", optional = true }
 
 # kotae (答え) — the typed answer a machine gives a machine.
 #
@@ -263,7 +270,7 @@ okiba = "0.3"
 default = ["live", "tear", "mcp", "gitops"]
 # Compile the KubeClusterEnv live-read backend. Heavy dep tree (kube +
 # k8s-openapi + rustls).
-live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow", "dep:rustls", "dep:futures", "dep:http", "dep:chrono"]
+live = ["dep:kube", "dep:k8s-openapi", "dep:anyhow", "dep:rustls", "dep:futures", "dep:http", "dep:chrono", "dep:hyper-rustls", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "dep:secrecy"]
 # Compile the TearSessionEnv adapter — the live `(defbancada)` handoff over a
 # running `tear-daemon`. Off by default: the plan is produced and previewed
 # without it, and the dep tree is heavy.

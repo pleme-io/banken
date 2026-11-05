@@ -237,6 +237,65 @@ impl ClusterEnv for FixtureClusterEnv {
 
     // ── BREAK-GLASS — records the witnessed action ──
 
+    fn posture(&self) -> banken_spec::env::Posture {
+        banken_spec::env::Posture::Mutate
+    }
+
+    fn inspect(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
+    ) -> Result<banken_spec::env::Inspection, SpecError> {
+        let row = self.get_resource(kind, name, ns)?;
+        let mut facts = vec![
+            ("kind".to_owned(), kind.label().to_owned()),
+            ("name".to_owned(), row.name.clone()),
+            (
+                "namespace".to_owned(),
+                row.namespace.clone().unwrap_or_default(),
+            ),
+        ];
+        facts.extend(row.cells.iter().cloned());
+        Ok(banken_spec::env::Inspection {
+            facts,
+            owners: vec!["ReplicaSet catch/catch-rs".to_owned()],
+            conditions: vec!["Ready=True".to_owned()],
+            events: Vec::new(),
+        })
+    }
+
+    fn manifest(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
+    ) -> Result<String, SpecError> {
+        let row = self.get_resource(kind, name, ns)?;
+        let mut s = String::from("apiVersion: v1\nkind: Pod\nmetadata:\n  name: ");
+        s.push_str(&row.name);
+        s.push_str("\n  namespace: ");
+        s.push_str(row.namespace.as_deref().unwrap_or("default"));
+        s.push('\n');
+        Ok(s)
+    }
+
+    fn preview_change(
+        &self,
+        _kind: ResourceKind,
+        _name: &str,
+        _ns: Option<&str>,
+        manifest: &str,
+    ) -> Result<String, SpecError> {
+        if manifest.contains("invalid") {
+            return Err(SpecError::Interp {
+                phase: "preview".into(),
+                message: "the apiserver refused the manifest: invalid field".into(),
+            });
+        }
+        Ok(manifest.to_owned())
+    }
+
     fn break_glass(&self, action: WitnessedAction) -> Result<GlassRecord, SpecError> {
         Ok(GlassRecord {
             action,

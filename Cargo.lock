@@ -237,6 +237,8 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
+ "hyper-rustls",
+ "hyper-util",
  "ishou-tokens",
  "izumi",
  "izumi-armazem",
@@ -250,8 +252,11 @@ dependencies = [
  "rmcp",
  "rustls",
  "schemars 1.2.2",
+ "secrecy",
  "serde",
  "serde_json",
+ "serde_yaml",
+ "similar",
  "tear-client",
  "tear-types",
  "tokio",
@@ -333,18 +338,14 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-bidama"
-version = "0.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dadc936c7a8bda31c4e361f71f6fc780f99a618960c7b4e2508731e12ce3b11"
+version = "0.0.152"
 dependencies = [
  "blue-lang-waku",
 ]
 
 [[package]]
 name = "blue-lang-check"
-version = "0.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5fce4813019e583045489cbcdd53547da32fb89cae38646cecd98972112b30a"
+version = "0.0.152"
 dependencies = [
  "blue-lang-syntax",
  "tatara-lisp 0.4.13",
@@ -352,9 +353,7 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-fmt"
-version = "0.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c647197fe302d256cc02658f4c14c93bade61fa61aa7dc272964b27b36ad805"
+version = "0.0.152"
 dependencies = [
  "blue-lang-syntax",
  "tatara-lisp 0.4.13",
@@ -363,9 +362,7 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-host"
-version = "0.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ffc49e16698fe1f4fa6ea2164ec8c9ee24a4c8d49eac1686e4cdded34a067f0"
+version = "0.0.152"
 dependencies = [
  "blue-lang-host-macros",
  "blue-lang-pkg",
@@ -381,9 +378,7 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-host-macros"
-version = "0.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a35a4c6a17e835c2fc5c60307ab9d1dd9747af5efcf598b510adc702014bc4f"
+version = "0.0.152"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -392,9 +387,7 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-mondou"
-version = "0.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9aeda1fc6a7aea52ad913101fa6a4a3d96d860de26416d107a0f8592452f86b7"
+version = "0.0.152"
 dependencies = [
  "blake3",
  "blue-lang-check",
@@ -408,9 +401,7 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-pkg"
-version = "0.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e150a62708cdcb950c2dac72861484eceb3b0bb0e1484d9031d559cfa2373368"
+version = "0.0.152"
 dependencies = [
  "blake3",
  "blue-lang-bidama",
@@ -430,9 +421,7 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-proc"
-version = "0.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9873e201017da11d7a73c0bbd75839c8ea6ac6337960ba9b92736138076315a5"
+version = "0.0.152"
 dependencies = [
  "blake3",
  "blue-lang-waku",
@@ -445,9 +434,7 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-runtime"
-version = "0.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0091985143fbf7fc96dbf63209903b495f3f4ee7199e71f8c2dfcbd44e64b83"
+version = "0.0.152"
 dependencies = [
  "blake3",
  "blue-lang-check",
@@ -470,18 +457,14 @@ dependencies = [
 
 [[package]]
 name = "blue-lang-syntax"
-version = "0.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77add8e11947ca169daf7ecbd9e93eb2ee51cd720f55d2f1a063a694c3161491"
+version = "0.0.152"
 dependencies = [
  "tatara-lisp 0.4.13",
 ]
 
 [[package]]
 name = "blue-lang-waku"
-version = "0.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56f7a3da54897f5dc5f4c13dca350a844d58509bfc199efb0b2ec2bf0a24de44"
+version = "0.0.152"
 dependencies = [
  "blue-lang-syntax",
  "serde",
@@ -3129,6 +3112,12 @@ checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "rand_core 0.6.4",
 ]
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "simple_asn1"

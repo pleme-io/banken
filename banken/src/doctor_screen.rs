@@ -1,61 +1,87 @@
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use egaku_term::crossterm::style::Color;
 use egaku_term::{__re::KeyMap, AsyncApp, Buffer, Result as TermResult, Style};
 
+use crate::aad::{DeviceCode, Poll, Transport};
 use crate::doctor::Diagnosis;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoctorAction {
     Run,
-    Verify,
+    Retry,
     Back,
     Abort,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Choice {
-    Run,
-    Verify,
+    Healed,
     Back,
     Quit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Ran {
-    pub argv: Vec<String>,
-    pub outcome: Result<i32, String>,
+pub enum Native {
+    AadDevice { tenant: String, server_id: String },
+    None { why: String },
 }
 
-impl Ran {
+impl Native {
     #[must_use]
-    pub fn ok(&self) -> bool {
-        matches!(self.outcome, Ok(0))
+    pub fn of(d: &Diagnosis) -> Self {
+        match (d.provider.as_str(), d.fact("server id")) {
+            ("azure", Some(sid)) => Self::AadDevice {
+                tenant: d.fact("tenant").unwrap_or("organizations").to_owned(),
+                server_id: sid.to_owned(),
+            },
+            ("azure", None) => Self::None {
+                why: "the kubeconfig names no --server-id, so banken cannot ask for the AKS scope"
+                    .into(),
+            },
+            ("nerai", _) => Self::None {
+                why: "the registry refuses this name on purpose; open its target instead".into(),
+            },
+            (_, _) => {
+                let mut why = String::from("banken has no native ");
+                why.push_str(&d.label);
+                why.push_str(
+                    " sign-in yet, and it runs no command for you; sign in with your own tools, then press r",
+                );
+                Self::None { why }
+            }
+        }
     }
 
     #[must_use]
-    pub fn line(&self) -> String {
-        let mut s = String::from(if self.ok() { "✅ " } else { "❌ " });
-        s.push_str(&self.argv.join(" "));
-        match &self.outcome {
-            Ok(0) => {}
-            Ok(code) => {
-                s.push_str("  (exit ");
-                s.push_str(&code.to_string());
-                s.push(')');
-            }
-            Err(why) => {
-                s.push_str("  (");
-                s.push_str(why);
-                s.push(')');
-            }
+    pub fn requests(&self) -> Vec<crate::aad::Request> {
+        match self {
+            Self::AadDevice { tenant, server_id } => vec![
+                crate::aad::device_request(tenant, server_id),
+                crate::aad::token_request(tenant, ""),
+            ],
+            Self::None { .. } => Vec::new(),
         }
-        s
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Phase {
+    Ready,
+    Waiting {
+        code: DeviceCode,
+        started: Instant,
+        next: Instant,
+    },
+    Failed(String),
 }
 
 pub struct DoctorScreen {
     diagnosis: Diagnosis,
-    ran: Vec<Ran>,
-    verified: Option<Ran>,
+    native: Native,
+    phase: Phase,
+    transport: Arc<dyn Transport>,
     keys: awase::KeyMode<DoctorAction>,
     choice: Option<Choice>,
 }
@@ -63,20 +89,19 @@ pub struct DoctorScreen {
 impl DoctorScreen {
     #[must_use]
     pub fn new(diagnosis: Diagnosis) -> Self {
-        Self {
-            diagnosis,
-            ran: Vec::new(),
-            verified: None,
-            keys: doctor_keymap(),
-            choice: None,
-        }
+        Self::with_transport(diagnosis, Arc::new(crate::aad::Https))
     }
 
     #[must_use]
-    pub fn with_results(mut self, ran: Vec<Ran>, verified: Option<Ran>) -> Self {
-        self.ran = ran;
-        self.verified = verified;
-        self
+    pub fn with_transport(diagnosis: Diagnosis, transport: Arc<dyn Transport>) -> Self {
+        Self {
+            native: Native::of(&diagnosis),
+            diagnosis,
+            phase: Phase::Ready,
+            transport,
+            keys: doctor_keymap(),
+            choice: None,
+        }
     }
 
     #[must_use]
@@ -85,37 +110,91 @@ impl DoctorScreen {
     }
 
     #[must_use]
-    pub fn diagnosis(&self) -> &Diagnosis {
-        &self.diagnosis
+    pub fn native(&self) -> &Native {
+        &self.native
+    }
+
+    #[must_use]
+    pub fn is_waiting(&self) -> bool {
+        matches!(self.phase, Phase::Waiting { .. })
+    }
+
+    pub fn tick(&mut self) {
+        self.tick_at(Instant::now());
+    }
+
+    pub fn tick_at(&mut self, now: Instant) {
+        let Native::AadDevice { tenant, server_id } = &self.native else {
+            return;
+        };
+        let Phase::Waiting { code, next, .. } = &self.phase else {
+            return;
+        };
+        if now < *next {
+            return;
+        }
+        let interval = Duration::from_secs(code.interval.max(1));
+        match crate::aad::poll(self.transport.as_ref(), tenant, &code.device_code) {
+            Poll::Pending => {
+                if let Phase::Waiting { next, .. } = &mut self.phase {
+                    *next = now + interval;
+                }
+            }
+            Poll::SlowDown => {
+                if let Phase::Waiting { next, .. } = &mut self.phase {
+                    *next = now + interval + Duration::from_secs(5);
+                }
+            }
+            Poll::Token(token) => {
+                crate::aad::remember(server_id, token);
+                self.choice = Some(Choice::Healed);
+            }
+            Poll::Failed(why) => self.phase = Phase::Failed(why),
+        }
     }
 
     pub fn dispatch(&mut self, action: DoctorAction) {
-        self.choice = Some(match action {
-            DoctorAction::Run if self.diagnosis.steps.is_empty() => return,
-            DoctorAction::Run => Choice::Run,
-            DoctorAction::Verify if self.diagnosis.verify.is_empty() => return,
-            DoctorAction::Verify => Choice::Verify,
-            DoctorAction::Back => Choice::Back,
-            DoctorAction::Abort => Choice::Quit,
-        });
+        match action {
+            DoctorAction::Run => {
+                if self.is_waiting() {
+                    return;
+                }
+                if let Native::AadDevice { tenant, server_id } = &self.native {
+                    self.phase = match crate::aad::start(self.transport.as_ref(), tenant, server_id)
+                    {
+                        Ok(code) => {
+                            let now = Instant::now();
+                            Phase::Waiting {
+                                next: now + Duration::from_secs(code.interval.max(1)),
+                                code,
+                                started: now,
+                            }
+                        }
+                        Err(why) => Phase::Failed(why),
+                    };
+                }
+            }
+            DoctorAction::Retry => self.choice = Some(Choice::Healed),
+            DoctorAction::Back => {
+                if self.is_waiting() {
+                    self.phase = Phase::Ready;
+                } else {
+                    self.choice = Some(Choice::Back);
+                }
+            }
+            DoctorAction::Abort => self.choice = Some(Choice::Quit),
+        }
     }
 
-    #[allow(
-        clippy::many_single_char_names,
-        reason = "x/y/width are the buffer-coordinate vocabulary every draw fn in this crate shares"
-    )]
-    pub fn render(&self, buf: &mut Buffer) {
-        let width = buf.width();
-        let height = buf.height();
-        if width == 0 || height == 0 {
-            return;
-        }
+    fn lines(&self, width: u16) -> Vec<(String, Style)> {
         let d = &self.diagnosis;
-        let mut lines: Vec<(String, Style)> = Vec::new();
         let head = Style::default().fg(Color::Cyan).bold();
         let dim = Style::default().fg(Color::DarkGrey);
         let warn = Style::default().fg(Color::Yellow).bold();
+        let big = Style::default().fg(Color::Black).bg(Color::Yellow).bold();
+        let bad = Style::default().fg(Color::Red).bold();
         let plain = Style::default();
+        let mut lines: Vec<(String, Style)> = Vec::new();
         let mut title = String::from("banken 番犬  —  ");
         title.push_str(&d.label);
         title.push_str(" credential");
@@ -132,47 +211,101 @@ impl DoctorScreen {
             lines.push((s, dim));
         }
         lines.push((String::new(), plain));
-        if d.steps.is_empty() {
-            lines.push(("Nothing to run.".to_owned(), dim));
-        } else {
-            lines.push(("enter runs, in order:".to_owned(), head));
-            for (i, step) in d.steps.iter().enumerate() {
-                let done = self.ran.iter().find(|r| &r.argv == step);
-                let s = match done {
-                    Some(r) => r.line(),
-                    None => format!("{}. {}", i + 1, step.join(" ")),
-                };
-                lines.push((s, plain));
+        match &self.native {
+            Native::AadDevice { .. } => {
+                lines.push((
+                    "enter sends, from banken itself (no command runs):".to_owned(),
+                    head,
+                ));
+                for (i, r) in self.native.requests().iter().enumerate() {
+                    let mut s = format!("{}. POST ", i + 1);
+                    s.push_str(&r.url);
+                    lines.push((s, plain));
+                    for (k, v) in &r.form {
+                        let mut f = String::from("     ");
+                        f.push_str(k);
+                        f.push('=');
+                        f.push_str(if k == "device_code" {
+                            "<from step 1>"
+                        } else {
+                            v
+                        });
+                        lines.push((f, dim));
+                    }
+                }
+            }
+            Native::None { why } => {
+                for w in egaku_term::draw::wrap_text(why, width.saturating_sub(2)) {
+                    lines.push((w, warn));
+                }
+                if !d.steps.is_empty() {
+                    lines.push((String::new(), plain));
+                    lines.push((
+                        "what usually fixes it (banken does not run it):".to_owned(),
+                        dim,
+                    ));
+                    for s in &d.steps {
+                        let mut l = String::from("  ");
+                        l.push_str(&s.argv.join(" "));
+                        lines.push((l, dim));
+                    }
+                }
             }
         }
-        if !d.verify.is_empty() {
-            lines.push((String::new(), plain));
-            lines.push(("then checks with:".to_owned(), head));
-            let s = match &self.verified {
-                Some(r) => r.line(),
-                None => d.verify.join(" "),
-            };
-            lines.push((s, plain));
+        match &self.phase {
+            Phase::Ready => {}
+            Phase::Waiting { code, started, .. } => {
+                lines.push((String::new(), plain));
+                let mut u = String::from(" open  ");
+                u.push_str(&code.verification_uri);
+                u.push(' ');
+                lines.push((u, big));
+                let mut c = String::from(" code  ");
+                c.push_str(&code.user_code);
+                c.push(' ');
+                lines.push((c, big));
+                let mut w = String::from("polling every ");
+                w.push_str(&code.interval.to_string());
+                w.push_str(" s  ·  waited ");
+                w.push_str(&started.elapsed().as_secs().to_string());
+                w.push_str(" s of ");
+                w.push_str(&code.expires_in.to_string());
+                lines.push((w, warn));
+            }
+            Phase::Failed(why) => {
+                lines.push((String::new(), plain));
+                let mut s = String::from("❌ ");
+                s.push_str(why);
+                lines.push((s, bad));
+            }
         }
-        for (i, (text, style)) in lines.iter().enumerate() {
+        lines
+    }
+
+    pub fn render(&self, buf: &mut Buffer) {
+        let width = buf.width();
+        let height = buf.height();
+        if width == 0 || height == 0 {
+            return;
+        }
+        for (i, (text, style)) in self.lines(width).iter().enumerate() {
             let Ok(y) = u16::try_from(i) else { break };
             if y + 1 >= height {
                 break;
             }
             buf.set_stringn(1, y, text, width.saturating_sub(1), *style);
         }
-        let mut hint = String::new();
-        if !d.steps.is_empty() {
-            hint.push_str("enter: run  ·  ");
-        }
-        if !d.verify.is_empty() {
-            hint.push_str("v: check only  ·  ");
-        }
-        hint.push_str("esc: back to clusters  ·  ctrl+c: quit");
+        let hint = if self.is_waiting() {
+            "esc: stop waiting  ·  ctrl+c: quit"
+        } else if matches!(self.native, Native::AadDevice { .. }) {
+            "enter: sign in  ·  r: retry the connect  ·  esc: back to clusters  ·  ctrl+c: quit"
+        } else {
+            "r: retry the connect  ·  esc: back to clusters  ·  ctrl+c: quit"
+        };
         let style = Style::default().fg(Color::Black).bg(Color::DarkGrey);
         let y = height - 1;
         buf.blank(0, y, width, style);
-        buf.set_stringn(0, y, &hint, width, style);
+        buf.set_stringn(0, y, hint, width, style);
     }
 }
 
@@ -181,7 +314,7 @@ fn doctor_keymap() -> awase::KeyMode<DoctorAction> {
     let mut km: awase::KeyMode<DoctorAction> = awase::KeyMode::typed("doctor", false);
     for (hk, a) in [
         (Hotkey::new(Modifiers::NONE, Key::Return), DoctorAction::Run),
-        (Hotkey::new(Modifiers::NONE, Key::V), DoctorAction::Verify),
+        (Hotkey::new(Modifiers::NONE, Key::R), DoctorAction::Retry),
         (
             Hotkey::new(Modifiers::NONE, Key::Escape),
             DoctorAction::Back,
@@ -192,44 +325,6 @@ fn doctor_keymap() -> awase::KeyMode<DoctorAction> {
         let _prev = km.add_binding(Binding::new(hk, a));
     }
     km
-}
-
-#[must_use]
-pub fn run_step(argv: &[String]) -> Ran {
-    let outcome = match argv.split_first() {
-        None => Err("empty command".to_owned()),
-        Some((program, rest)) => {
-            println!("\n$ {}", argv.join(" "));
-            std::process::Command::new(program)
-                .args(rest)
-                .status()
-                .map(|s| s.code().unwrap_or(-1))
-                .map_err(|e| e.to_string())
-        }
-    };
-    Ran {
-        argv: argv.to_vec(),
-        outcome,
-    }
-}
-
-#[must_use]
-pub fn verify_quietly(argv: &[String]) -> Ran {
-    let outcome = match argv.split_first() {
-        None => Err("empty command".to_owned()),
-        Some((program, rest)) => std::process::Command::new(program)
-            .args(rest)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.code().unwrap_or(-1))
-            .map_err(|e| e.to_string()),
-    };
-    Ran {
-        argv: argv.to_vec(),
-        outcome,
-    }
 }
 
 impl AsyncApp for DoctorScreen {
@@ -253,6 +348,22 @@ impl AsyncApp for DoctorScreen {
         std::future::ready(Ok(()))
     }
 
+    fn wake(&self) -> impl Future<Output = ()> + Send {
+        let busy = self.is_waiting();
+        async move {
+            if busy {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+
+    fn on_wake(&mut self) -> impl Future<Output = TermResult<()>> {
+        self.tick();
+        std::future::ready(Ok(()))
+    }
+
     fn draw(&self, frame: &mut Buffer) -> impl Future<Output = TermResult<()>> {
         self.render(frame);
         std::future::ready(Ok(()))
@@ -266,13 +377,29 @@ impl AsyncApp for DoctorScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aad::Request;
     use egaku_term::TestBackend;
+    use std::sync::Mutex;
 
-    fn grant_revoked() -> Diagnosis {
+    type Answers = Vec<(u16, String)>;
+
+    struct Recorded {
+        answers: Mutex<Answers>,
+        sent: Mutex<Vec<Request>>,
+    }
+
+    impl Transport for Recorded {
+        fn post_form(&self, request: &Request) -> Result<(u16, String), String> {
+            self.sent.lock().unwrap().push(request.clone());
+            Ok(self.answers.lock().unwrap().remove(0))
+        }
+    }
+
+    fn diagnosis(program: &str, args: &[&str], message: &str) -> Diagnosis {
         crate::doctor::diagnose(&crate::doctor::Facts {
-            program: "kubelogin".into(),
-            args: vec!["get-token".into(), "--server-id".into(), "sid".into()],
-            message: "AADSTS50173: grant revoked".into(),
+            program: program.into(),
+            args: args.iter().map(|a| (*a).to_owned()).collect(),
+            message: message.into(),
             cluster: Some("east-staging".into()),
             server: Some("https://east.example".into()),
             target: Some("east-staging".into()),
@@ -281,64 +408,127 @@ mod tests {
         .expect("known")
     }
 
+    fn azure() -> Diagnosis {
+        diagnosis(
+            "kubelogin",
+            &["get-token", "--server-id", "sid-native"],
+            "AADSTS50173: grant revoked",
+        )
+    }
+
+    fn recorded(answers: Answers) -> Arc<Recorded> {
+        Arc::new(Recorded {
+            answers: Mutex::new(answers),
+            sent: Mutex::new(Vec::new()),
+        })
+    }
+
     fn frame(s: &DoctorScreen) -> String {
-        let mut b = TestBackend::new(100, 24);
+        let mut b = TestBackend::new(140, 30);
         b.draw(|buf| s.render(buf));
         b.to_lines().join("\n")
     }
 
     #[test]
-    fn the_panel_shows_every_command_before_anything_runs() {
-        let s = DoctorScreen::new(grant_revoked());
+    fn the_panel_shows_every_request_before_anything_is_sent() {
+        let t = recorded(Vec::new());
+        let s = DoctorScreen::with_transport(azure(), t.clone());
         let f = frame(&s);
         for want in [
             "Azure credential",
             "Azure login expired",
-            "east-staging",
             "server id",
-            "1. az logout",
-            "2. az login --scope sid/.default",
-            "kubelogin get-token --server-id sid",
-            "enter: run",
+            "1. POST https://login.microsoftonline.com/organizations/oauth2/v2.0/devicecode",
+            "scope=sid-native/.default offline_access",
+            "client_id=04b07795-8ddb-461a-bbee-02f9e1bf7b46",
+            "device_code=<from step 1>",
+            "2. POST https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+            "no command runs",
         ] {
             assert!(f.contains(want), "`{want}` missing:\n{f}");
         }
-        assert_eq!(s.choice(), None, "nothing is chosen without a keypress");
-    }
-
-    #[test]
-    fn enter_chooses_run_and_esc_goes_back() {
-        let mut s = DoctorScreen::new(grant_revoked());
-        s.dispatch(DoctorAction::Run);
-        assert_eq!(s.choice(), Some(Choice::Run));
-        let mut s = DoctorScreen::new(grant_revoked());
-        s.dispatch(DoctorAction::Back);
-        assert_eq!(s.choice(), Some(Choice::Back));
-    }
-
-    #[test]
-    fn results_replace_the_numbered_steps() {
-        let d = grant_revoked();
-        let ran = vec![Ran {
-            argv: d.steps[0].clone(),
-            outcome: Ok(0),
-        }];
-        let verified = Ran {
-            argv: d.verify.clone(),
-            outcome: Ok(1),
-        };
-        let f = frame(&DoctorScreen::new(d).with_results(ran, Some(verified)));
-        assert!(f.contains("✅ az logout"), "{f}");
         assert!(
-            f.contains("❌ kubelogin get-token --server-id sid  (exit 1)"),
-            "{f}"
+            t.sent.lock().unwrap().is_empty(),
+            "nothing is sent without a keypress"
         );
     }
 
     #[test]
-    fn a_step_that_cannot_start_says_why() {
-        let r = verify_quietly(&["/nonexistent/banken-probe".to_owned()]);
-        assert!(!r.ok());
-        assert!(r.line().starts_with("❌ /nonexistent/banken-probe  ("));
+    fn the_native_device_flow_shows_the_code_polls_and_heals() {
+        let t = recorded(vec![
+            (
+                200,
+                r#"{"user_code":"DXQ4KP7LM","device_code":"dc","verification_uri":"https://microsoft.com/devicelogin","interval":1,"expires_in":900}"#.into(),
+            ),
+            (400, r#"{"error":"authorization_pending"}"#.into()),
+            (200, r#"{"access_token":"tok-native"}"#.into()),
+        ]);
+        let mut s = DoctorScreen::with_transport(azure(), t.clone());
+        s.dispatch(DoctorAction::Run);
+        assert!(s.is_waiting());
+        let f = frame(&s);
+        assert!(f.contains("open  https://microsoft.com/devicelogin"), "{f}");
+        assert!(f.contains("code  DXQ4KP7LM"), "{f}");
+        let later = Instant::now() + Duration::from_secs(2);
+        s.tick_at(later);
+        assert_eq!(s.choice(), None, "pending keeps waiting");
+        s.tick_at(later + Duration::from_secs(2));
+        assert_eq!(s.choice(), Some(Choice::Healed));
+        assert_eq!(
+            crate::aad::token_for("sid-native").as_deref(),
+            Some("tok-native")
+        );
+        assert_eq!(t.sent.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_refused_poll_says_why_and_stops() {
+        let t = recorded(vec![
+            (
+                200,
+                r#"{"user_code":"C","device_code":"dc","verification_uri":"https://x","interval":1,"expires_in":900}"#.into(),
+            ),
+            (400, r#"{"error":"expired_token","error_description":"AADSTS70020: expired"}"#.into()),
+        ]);
+        let mut s = DoctorScreen::with_transport(azure(), t);
+        s.dispatch(DoctorAction::Run);
+        s.tick_at(Instant::now() + Duration::from_secs(2));
+        assert!(!s.is_waiting());
+        assert!(frame(&s).contains("❌ AADSTS70020: expired"));
+    }
+
+    #[test]
+    fn a_provider_without_a_native_flow_runs_nothing_and_offers_retry() {
+        let t = recorded(Vec::new());
+        let mut s = DoctorScreen::with_transport(
+            diagnosis(
+                "aws",
+                &["--profile", "ops"],
+                "Error when retrieving token from sso",
+            ),
+            t.clone(),
+        );
+        assert!(matches!(s.native(), Native::None { .. }));
+        let f = frame(&s);
+        assert!(f.contains("banken does not run it"), "{f}");
+        s.dispatch(DoctorAction::Run);
+        assert!(t.sent.lock().unwrap().is_empty());
+        s.dispatch(DoctorAction::Retry);
+        assert_eq!(s.choice(), Some(Choice::Healed));
+    }
+
+    #[test]
+    fn esc_stops_waiting_first_then_goes_back() {
+        let t = recorded(vec![(
+            200,
+            r#"{"user_code":"C","device_code":"dc","verification_uri":"https://x","interval":5,"expires_in":900}"#.into(),
+        )]);
+        let mut s = DoctorScreen::with_transport(azure(), t);
+        s.dispatch(DoctorAction::Run);
+        s.dispatch(DoctorAction::Back);
+        assert!(!s.is_waiting());
+        assert_eq!(s.choice(), None);
+        s.dispatch(DoctorAction::Back);
+        assert_eq!(s.choice(), Some(Choice::Back));
     }
 }

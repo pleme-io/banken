@@ -1,3 +1,0 @@
-package("shinsatsu", "0.1.0")
-needs("moji", "^0.1")
-needs("retsu", "^0.1")

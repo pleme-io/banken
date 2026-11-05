@@ -22,6 +22,29 @@ skip-platform-mediated: pure-binary-no-cluster-runtime
      Kept out of the body deliberately: a cleared waiver is deleted,
      not annotated. -->
 
+## Repo law (operator, 2026-11-05)
+
+1. **No subprocess, ever.** banken speaks every backend on the wire: the
+   Kubernetes API, the cloud APIs, and the auth flows (AAD device code, AWS
+   SSO-OIDC, GCP OAuth) natively. It never runs kubectl, az, aws, gcloud or
+   kubelogin, and never goes through a shell. A kubeconfig exec plugin banken
+   does not resolve natively is a typed refusal on that entry alone. The gate is
+   `banken/tests/no_subprocess.rs`
+   (`banken_spawns_no_process_outside_the_external_editor_seam`).
+2. **The editor is embedded.** `e` opens an in-process, blue-powered escriba
+   pane (`config(:edit, {editor: :embedded})`, the default). `$VISUAL` /
+   `$EDITOR` is the opt-in `:external`, spawned as one direct argv call in
+   `banken/src/edit.rs`: the only spawn the gate allows.
+3. **Blue first, banken composes.** Every capability another tool could use is a
+   bidama in `pleme-io/blue/bidamas`: the provider contract, each cloud
+   provider, the doctor (`shinsatsu`), the edit → diff → apply loop, the tree
+   and path model, the binding table. banken only composes them.
+4. **One experience everywhere.** The tree, `i`, `e`, `dd` and the doctor work
+   the same over Kubernetes and every cloud (`docs/PROVIDERS.md`).
+
+Where the code does not meet the law yet is a `pending-banken:` row below,
+never a silent gap.
+
 One-sentence purpose: an **observe-first, GitOps-native cluster-navigator TUI** —
 keep k9s's fast keyboard navigation + health surfaces, structurally refuse its
 imperative-mutation console.
@@ -151,25 +174,25 @@ both read `Estate`, so the list and the verdict cannot disagree.
 with its own file only (`config_for_resolved(resolved.context, resolved.file)`).
 An ambiguous name still cannot be chosen or connected. A refused name now has
 no path past `resolve`, where before it read as an ambiguity.
-`pending-banken: bancada-target-kubeconfig`: a bancada pane on a registry
-target still passes `--context <ctx>` without `--kubeconfig <file>`, so the
-ambient refusal answers it. It fails loud, not wrong.
+A bancada pane passes the connection's own file (`--kubeconfig`); see the
+2026-11-05 section.
 
-**The credential doctor.** `banken/bidamas/shinsatsu/shinsatsu.b` is blue. It
+**The credential doctor.** `shinsatsu` is a bidama in `pleme-io/blue/bidamas`
+(moved there 2026-11-05; banken loads it through `blue_lang_host::Standard`). It
 declares providers (Azure, AWS, Google Cloud, nerai), their failure classes,
 and for each class a title, a diagnosis, remediation steps (typed argv) and a
 verify step (the kubeconfig's own exec helper). `banken/src/doctor.rs` embeds
 it through `blue_lang_host::Embedded` and speaks JSON with it. The climb note,
 the picker notice and `--context` errors all show `Diagnosis::headline`.
 `banken/src/doctor_screen.rs` shows every command before it runs; `enter`
-runs them in the terminal, then the verify step; a pass reconnects.
+runs them as child processes inside the panel, shows a device flow's URL and
+code (`shinsatsu::prompt_of`), the output and the wait, then the verify step;
+a pass reconnects. `esc` stops a running command.
 `every_failure_class_is_reachable_by_its_own_marker` and
 `every_failure_class_has_a_diagnosis_and_a_remediation` fail when a class has
-no test row, no marker or no remediation. Blue's `json_stringify` writes a
-list of two-element lists as an object, so every list the doctor returns holds
-records (`{argv:}`, `{label:, value:}`).
-`pending-banken: shinsatsu-to-blue-bidamas`: the bidama is general. Its
-destination is `pleme-io/blue/bidamas/shinsatsu`, consumed by banken and mado.
+no test row, no marker or no remediation. The doctor speaks JSON through
+blue's `json_read` / `json_write`; `json_write` (added to blue 2026-11-05)
+keeps a list of pairs an array, which `json_stringify` does not.
 
 **The tree.** The screens are a path: cluster › namespace › kind › object ›
 detail. `NavIntent` gained `ascend`, `descend`, `top`, `bottom`, `page-down`,
@@ -194,6 +217,50 @@ shown in the picker notice. The help page and the legend read the overlaid
 catalog, so they cannot drift from the keymap. `motenashi::off` refuses an
 entry the world did not declare, which is why a default is turned off with
 `bind(chord, :off)`.
+
+## Verbs, the edit loop and recipes on targets (2026-11-05)
+
+- `i` inspect (OBSERVE) calls `ClusterEnv::inspect`: facts, labels, the owner
+  chain (walked with `kube::discovery::pinned_kind`), conditions and events.
+- `dd` delete and `e` edit are BREAK-GLASS `(defk8saction)`s. `break_glass`
+  carries a `GlassAct` (`Record`, `Delete`, `Apply`); the ledger records first,
+  then the act runs. `ClusterEnv::posture` answers `ReadOnly` for a registry
+  target its refusal file shadows (the module only shadows live targets that
+  are read-only), and `ReadOnly` refuses both verbs before any prompt and again
+  inside `break_glass`. The trait's default posture is `ReadOnly`.
+- `banken/src/edit.rs` is the edit loop: `manifest` (managedFields removed),
+  `$VISUAL`/`$EDITOR`, `preview_change` (server-side apply, dry run), a unified
+  diff, a confirm, then `apply_with(... GlassAct::Apply)`. An error reopens the
+  editor with `# banken:` lines on top and the edit kept.
+- The `Arc<T>` forward of `ClusterEnv` must forward every method. A default
+  method it does not forward silently answers the default for the shared env;
+  the verb tests caught exactly that.
+- Recipes: `(:optional (:flag "--kubeconfig" :field kubeconfig))` emits both
+  words when the connection read one file (a registry target, or the file
+  that declares an ambient context) and nothing otherwise.
+  `pending-banken: bancada-target-kubeconfig` is CLOSED.
+- Other clouds: `docs/PROVIDERS.md` holds the destination and the provider
+  contract. Only Kubernetes is built.
+- Native auth: kubelogin is resolved in-process (`banken/src/aad.rs`: AAD v2
+  device code, a token held per server id, set as the bearer on the kube
+  `Config`), so kubelogin never runs. The doctor panel sends the two requests
+  itself and shows every field first. The blue world reads in process (no
+  `banken blue-world` child). Removed spawn sites: the doctor's `az login` /
+  `aws sso login` / `gcloud auth login` runner, its credential-helper check, and
+  the blue-world self-spawn.
+- `pending-banken: native-aws-gcp-auth`: kube-rs still runs `aws eks get-token`
+  and `gke-gcloud-auth-plugin` as exec plugins, inside kube-rs, which the source
+  gate cannot see. The destination is SSO-OIDC + GetRoleCredentials + SigV4
+  presign and the GCP ADC refresh, as blue bidamas over a host HTTPS word.
+- `pending-banken: msal-cache`: an AAD token lives only for the process; the
+  MSAL cache is not read or written.
+- `pending-banken: embedded-escriba`: the default editor is the escriba pane,
+  not built yet, so `e` refuses with the opt-in named.
+- `pending-banken: bancada-kubectl`: session recipes stage `kubectl` in tear
+  panes. tear spawns them, not banken, and the law still says no.
+- `pending-banken: blue-composition`: the tree/path model, the edit loop, the
+  binding table and the provider contract are Rust or tatara-lisp here, not
+  bidamas yet.
 
 ## Freshness reaches the operator's eye (2026-08-09)
 

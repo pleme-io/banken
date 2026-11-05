@@ -252,7 +252,7 @@ fn the_legend_states_the_authored_chords_and_their_legality_classes() {
     let legend = key_legend(&c);
     assert_eq!(
         legend,
-        "shift+l:OBSERVE  d:OBSERVE  s:DECLARE  shift+s:BREAK-GLASS  \
+        "shift+l:OBSERVE  i:OBSERVE  d:BREAK-GLASS  e:BREAK-GLASS  s:DECLARE  shift+s:BREAK-GLASS  \
          t:OBSERVE  shift+t:BREAK-GLASS  shift+h:help  escape:up  o:sort  q:quit",
         "the legend is derived from the authored chords + typed legality \
          classes — INCLUDING the bancada chords, whose class is derived from \

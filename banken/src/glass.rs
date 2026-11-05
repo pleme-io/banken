@@ -394,6 +394,7 @@ mod tests {
             selector: selector.to_owned(),
             witness: OperatorId::new("drzzln").expect("non-blank"),
             runbook: RunbookRef("clusters/alpha/RUNBOOK.md".into()),
+            act: banken_spec::env::GlassAct::Record,
         }
     }
 

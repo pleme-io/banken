@@ -124,6 +124,8 @@ pub mod picker;
 /// namespace.
 pub mod permit;
 
+#[cfg(feature = "live")]
+pub mod aad;
 /// declare — a DECLARE becomes a branch, a full manifest, and a pull request.
 ///
 /// The delivery half of the postigo gate's git-mutating class: banken writes
@@ -131,7 +133,9 @@ pub mod permit;
 /// revertable by construction rather than by policy.
 pub mod declare;
 pub mod doctor;
+#[cfg(feature = "live")]
 pub mod doctor_screen;
+pub mod edit;
 pub mod estate;
 
 /// palette — the fleet's colours, for the places that genuinely need RGB.

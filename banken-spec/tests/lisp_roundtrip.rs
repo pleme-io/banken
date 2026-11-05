@@ -40,7 +40,11 @@ fn authored_views_compile_into_typed_values() {
 #[test]
 fn authored_actions_compile_into_typed_values() {
     let actions = load_actions().expect("canonical actions must compile");
-    assert_eq!(actions.len(), 4, "scale + view-logs + describe + shell");
+    assert_eq!(
+        actions.len(),
+        6,
+        "scale + view-logs + inspect + delete + edit + shell"
+    );
 
     // Every action has the mandatory Full manifest scope.
     for a in &actions {
@@ -67,8 +71,12 @@ fn authored_actions_compile_into_typed_values() {
         .expect("shell action");
     assert_eq!(shell.legality.class(), LegalityClass::BreakGlass);
 
-    // view-logs + describe are OBSERVE.
-    for name in ["view-logs", "describe"] {
+    for name in ["delete", "edit"] {
+        let a = actions.iter().find(|a| a.name == name).unwrap();
+        assert_eq!(a.legality.class(), LegalityClass::BreakGlass, "{name}");
+    }
+
+    for name in ["view-logs", "inspect"] {
         let a = actions.iter().find(|a| a.name == name).unwrap();
         assert_eq!(a.legality.class(), LegalityClass::Observe);
     }

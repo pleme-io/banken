@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn an_unwired_action_is_marked_rather_than_advertised() {
         let catalog = crate::load_catalog().expect("resolves");
-        let unbound = vec![String::from("describe")];
+        let unbound = vec![String::from("inspect")];
         let p = HelpPage::build(
             &catalog,
             Wiring {
@@ -544,8 +544,8 @@ mod tests {
             .section_for(HelpTopic::Actions)
             .entries
             .iter()
-            .find(|e| e.subject == "describe")
-            .expect("`describe` is an authored action");
+            .find(|e| e.subject == "inspect")
+            .expect("`inspect` is an authored action");
         assert!(
             entry.detail.contains("not wired"),
             "an undispatchable chord must be marked: {:?}",

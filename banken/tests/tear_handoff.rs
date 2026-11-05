@@ -45,6 +45,7 @@ fn ctx() -> BancadaContext {
             current: Vec::new(),
         },
         container: Some("catch".into()),
+        kubeconfig: None,
     }
 }
 

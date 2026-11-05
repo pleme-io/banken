@@ -40,6 +40,10 @@ const ALLOWED_METHODS: &[&str] = &[
     "declare",
     // BREAK-GLASS — the one witnessed live-effect arm
     "break_glass",
+    "posture",
+    "inspect",
+    "manifest",
+    "preview_change",
 ];
 
 /// Mutating verbs that must NEVER appear as a `ClusterEnv` method name.

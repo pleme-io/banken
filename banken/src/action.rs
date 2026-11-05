@@ -31,7 +31,7 @@ use awase::Key;
 use banken_spec::bancada::{BancadaContext, BancadaSpec, PlannedPane, SessionEnv, SessionPlan};
 use banken_spec::chord::ActionChord;
 use banken_spec::env::ClusterEnv;
-use banken_spec::interp::{Outcome, Selection, apply};
+use banken_spec::interp::{Outcome, Selection};
 use banken_spec::types::{
     ActionLegality, DeclareTarget, K8sActionSpec, ManifestScope, OperatorId, RunbookRef,
 };
@@ -45,15 +45,9 @@ use crate::table::PodTable;
 pub enum RowAction {
     /// `l` → OBSERVE the logs.
     ViewLogs,
-    /// `d` → OBSERVE the selected object's fields.
-    ///
-    /// **This is what `d` means over a pod, and the answer is a READ.** vim's
-    /// `d` is delete; a row is not a buffer you own but a projection of remote
-    /// state, and deleting one is an unwitnessed live mutation — which
-    /// [`ClusterEnv`] has no method for. So vim's verb has no path here, the
-    /// authored vocabulary already claimed `d` for `describe`, and the legal
-    /// reading wins. See `pending-banken: vim-on-the-pods-table`.
-    Describe,
+    Inspect,
+    Delete,
+    Edit,
     /// `s` → DECLARE a scale change (full-manifest `GitOps` preview).
     DeclareScale,
     /// `S` → BREAK-GLASS shell (witnessed, RUNBOOK-logged).
@@ -66,9 +60,9 @@ impl RowAction {
     #[must_use]
     pub fn class_label(self) -> &'static str {
         match self {
-            RowAction::ViewLogs | RowAction::Describe => "OBSERVE",
+            RowAction::ViewLogs | RowAction::Inspect => "OBSERVE",
             RowAction::DeclareScale => "DECLARE",
-            RowAction::BreakGlassShell => "BREAK-GLASS",
+            RowAction::BreakGlassShell | RowAction::Delete | RowAction::Edit => "BREAK-GLASS",
         }
     }
 
@@ -77,17 +71,18 @@ impl RowAction {
     /// same legality) — the app could equally `banken_spec::load_actions()`
     /// and match by key; the typed constructors keep the demo self-contained
     /// and are asserted equivalent by a test.
-    fn spec(self, operator: &OperatorId) -> K8sActionSpec {
+    #[must_use]
+    pub fn spec(self, operator: &OperatorId) -> K8sActionSpec {
         match self {
             RowAction::ViewLogs => K8sActionSpec {
                 name: "view-logs".into(),
-                keys: ActionChord::parse("shift+l").expect("a literal chord parses"),
+                keys: ActionChord::shifted(Key::L),
                 legality: ActionLegality::Observe,
                 manifest_scope: ManifestScope::Full,
             },
-            RowAction::Describe => K8sActionSpec {
-                name: "describe".into(),
-                keys: ActionChord::plain(Key::D),
+            RowAction::Inspect => K8sActionSpec {
+                name: "inspect".into(),
+                keys: ActionChord::plain(Key::I),
                 legality: ActionLegality::Observe,
                 manifest_scope: ManifestScope::Full,
             },
@@ -98,6 +93,24 @@ impl RowAction {
                     target: DeclareTarget::FluxHelmValues {
                         release_path: "apps/catch/release.yaml".into(),
                     },
+                },
+                manifest_scope: ManifestScope::Full,
+            },
+            RowAction::Delete => K8sActionSpec {
+                name: "delete".into(),
+                keys: ActionChord::plain(Key::D),
+                legality: ActionLegality::BreakGlass {
+                    witness: operator.clone(),
+                    runbook: RunbookRef("clusters/bravo/RUNBOOK.md".into()),
+                },
+                manifest_scope: ManifestScope::Full,
+            },
+            RowAction::Edit => K8sActionSpec {
+                name: "edit".into(),
+                keys: ActionChord::plain(Key::E),
+                legality: ActionLegality::BreakGlass {
+                    witness: operator.clone(),
+                    runbook: RunbookRef("clusters/bravo/RUNBOOK.md".into()),
                 },
                 manifest_scope: ManifestScope::Full,
             },
@@ -224,12 +237,27 @@ pub fn dispatch<E: ClusterEnv>(
     if action == RowAction::ViewLogs {
         return observe_logs(&sel, env);
     }
-    if action == RowAction::Describe {
-        return observe_describe(&sel, env);
+    if action == RowAction::Inspect {
+        return observe_inspect(&sel, env);
+    }
+    if action == RowAction::Edit {
+        return ActionResult::Error("edit opens an editor outside the table".into());
     }
 
     let spec = action.spec(operator);
-    match apply(&spec, &sel, env) {
+    let act = if action == RowAction::Delete {
+        if env.posture() == banken_spec::env::Posture::ReadOnly {
+            return ActionResult::Error(read_only_refusal(&sel));
+        }
+        banken_spec::env::GlassAct::Delete {
+            kind: sel.kind,
+            name: sel.name.clone(),
+            namespace: sel.namespace.clone(),
+        }
+    } else {
+        banken_spec::env::GlassAct::Record
+    };
+    match banken_spec::interp::apply_with(&spec, &sel, env, act) {
         Ok(Outcome::Observed(rows)) => ActionResult::Observed {
             title: "observed".into(),
             lines: rows.into_iter().map(|r| r.name).collect(),
@@ -315,6 +343,7 @@ pub fn resolve_bancada(
     table: &PodTable,
     spec: &BancadaSpec,
     cluster: &str,
+    kubeconfig: Option<&str>,
 ) -> Result<PendingBancada, ActionResult> {
     let Some(selection) = current_selection(table) else {
         return Err(ActionResult::Error("no row selected".into()));
@@ -334,6 +363,7 @@ pub fn resolve_bancada(
         // container)` therefore refuses BY NAME rather than guessing the
         // first container. `pending-banken: bancada-container-selection`.
         container: None,
+        kubeconfig: kubeconfig.map(str::to_owned),
     };
     match banken_spec::bancada::plan(spec, &ctx) {
         Ok(plan) => Ok(PendingBancada {
@@ -450,15 +480,31 @@ fn observe_logs<E: ClusterEnv>(sel: &Selection, env: &E) -> ActionResult {
 /// path the NO-SHELL rule keeps clear. `pending-banken: describe-fidelity`
 /// records the gap honestly: this shows what banken observed, not everything
 /// `kubectl describe` would print.
+#[must_use]
+pub fn read_only_refusal(sel: &Selection) -> String {
+    let mut m = String::from("refused: this cluster is read-only, so banken will not change ");
+    m.push_str(&sel.describe());
+    m.push_str(". Use a mutate target, or DECLARE the change through git.");
+    m
+}
+
+fn observe_inspect<E: ClusterEnv>(sel: &Selection, env: &E) -> ActionResult {
+    if let Ok(found) = env.inspect(sel.kind, &sel.name, sel.namespace.as_deref()) {
+        let mut title = String::from("inspect: ");
+        title.push_str(&sel.name);
+        return ActionResult::Observed {
+            title,
+            lines: found.lines(),
+        };
+    }
+    observe_describe(sel, env)
+}
+
 fn observe_describe<E: ClusterEnv>(sel: &Selection, env: &E) -> ActionResult {
-    match env.get_resource(
-        banken_spec::types::ResourceKind::Pod,
-        &sel.name,
-        sel.namespace.as_deref(),
-    ) {
+    match env.get_resource(sel.kind, &sel.name, sel.namespace.as_deref()) {
         Ok(row) => ActionResult::Observed {
             title: {
-                let mut t = String::from("describe: ");
+                let mut t = String::from("inspect: ");
                 t.push_str(&row.name);
                 t
             },

@@ -23,11 +23,31 @@
   :legality (:class observe)
   :manifest-scope full)
 
-;; OBSERVE — describe.
+;; OBSERVE — inspect: facts, owner chain, conditions and events.
 (defk8saction
-  :name "describe"
-  :keys "d"
+  :name "inspect"
+  :keys "i"
   :legality (:class observe)
+  :manifest-scope full)
+
+;; `d` pressed twice (`dd`). A live delete of someone else's object: witnessed
+;; and recorded before it runs, refused on a read-only target.
+(defk8saction
+  :name "delete"
+  :keys "d"
+  :legality (:class break-glass
+             :witness "drzzln"
+             :runbook "clusters/bravo/RUNBOOK.md")
+  :manifest-scope full)
+
+;; `e` opens the live manifest in $VISUAL / $EDITOR, shows the server's
+;; dry-run diff, and applies only after a confirm.
+(defk8saction
+  :name "edit"
+  :keys "e"
+  :legality (:class break-glass
+             :witness "drzzln"
+             :runbook "clusters/bravo/RUNBOOK.md")
   :manifest-scope full)
 
 ;; BREAK-GLASS — exec is a witnessed, RUNBOOK-logged escape hatch,

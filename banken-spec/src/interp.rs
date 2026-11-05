@@ -15,7 +15,7 @@
 use serde::Serialize;
 
 use crate::{
-    env::{ClusterEnv, DeclareChange, Row, WitnessedAction},
+    env::{ClusterEnv, DeclareChange, GlassAct, Row, WitnessedAction},
     error::SpecError,
     types::{ActionLegality, DeclareTarget, K8sActionSpec, ManifestScope, ResourceKind},
 };
@@ -166,6 +166,21 @@ pub fn apply<E: ClusterEnv>(
     sel: &Selection,
     env: &E,
 ) -> Result<Outcome, SpecError> {
+    apply_with(action, sel, env, GlassAct::Record)
+}
+
+/// [`apply`] carrying the live act a BREAK-GLASS action performs once it is
+/// witnessed. The act is ignored for OBSERVE and DECLARE: the class decides.
+///
+/// # Errors
+///
+/// As [`apply`].
+pub fn apply_with<E: ClusterEnv>(
+    action: &K8sActionSpec,
+    sel: &Selection,
+    env: &E,
+    act: GlassAct,
+) -> Result<Outcome, SpecError> {
     match &action.legality {
         ActionLegality::Observe => {
             // Dispatch to a read method. The canonical OBSERVE action
@@ -185,6 +200,7 @@ pub fn apply<E: ClusterEnv>(
                 selector: sel.describe(),
                 witness: witness.clone(),
                 runbook: runbook.clone(),
+                act,
             })?;
             Ok(Outcome::GlassLogged(record))
         }

@@ -50,7 +50,8 @@
   :panes ((:role logs
            :placement root
            :command (:program "kubectl"
-                     :args ((:literal "--context") (:context cluster)
+                     :args ((:optional (:flag "--kubeconfig" :field kubeconfig))
+                            (:literal "--context") (:context cluster)
                             (:literal "-n")        (:context namespace)
                             (:literal "logs")
                             (:literal "--follow")
@@ -69,7 +70,8 @@
           (:role events
            :placement right
            :command (:program "kubectl"
-                     :args ((:literal "--context") (:context cluster)
+                     :args ((:optional (:flag "--kubeconfig" :field kubeconfig))
+                            (:literal "--context") (:context cluster)
                             (:literal "-n")        (:context namespace)
                             (:literal "get") (:literal "events")
                             (:literal "--watch"))
@@ -77,7 +79,8 @@
           (:role describe
            :placement below
            :command (:program "kubectl"
-                     :args ((:literal "--context") (:context cluster)
+                     :args ((:optional (:flag "--kubeconfig" :field kubeconfig))
+                            (:literal "--context") (:context cluster)
                             (:literal "-n")        (:context namespace)
                             (:literal "describe")
                             (:context resource-kind)
@@ -109,7 +112,8 @@
   :panes ((:role logs
            :placement root
            :command (:program "kubectl"
-                     :args ((:literal "--context") (:context cluster)
+                     :args ((:optional (:flag "--kubeconfig" :field kubeconfig))
+                            (:literal "--context") (:context cluster)
                             (:literal "-n")        (:context namespace)
                             (:literal "logs")
                             (:literal "--follow")
@@ -118,7 +122,8 @@
           (:role shell
            :placement below
            :command (:program "kubectl"
-                     :args ((:literal "--context") (:context cluster)
+                     :args ((:optional (:flag "--kubeconfig" :field kubeconfig))
+                            (:literal "--context") (:context cluster)
                             (:literal "-n")        (:context namespace)
                             (:literal "exec") (:literal "-it")
                             (:context resource-name)

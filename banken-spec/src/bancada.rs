@@ -238,6 +238,9 @@ closed_catalog! {
         ResourceName => "resource-name",
         /// The container inside the selected pod, when one is selected.
         Container => "container",
+        /// The one kubeconfig file the connection read: a registry target's
+        /// own file, or the file that declares an ambient context.
+        Kubeconfig => "kubeconfig",
     }
 }
 
@@ -255,6 +258,16 @@ pub enum CommandArg {
     Literal(String),
     /// A reference resolved from the [`BancadaContext`].
     Context(ContextField),
+    /// A flag and its context value, both left out when the context does not
+    /// carry the value: `--kubeconfig <file>` on a connection that read one
+    /// file, nothing on one that reads the merge list.
+    Optional(OptionalFlag),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct OptionalFlag {
+    pub flag: String,
+    pub field: ContextField,
 }
 
 /// A command pre-staged into a pane — a typed argv, never a shell string.
@@ -423,6 +436,7 @@ pub struct BancadaContext {
     pub selection: Selection,
     /// The selected container inside the pod, when one is selected.
     pub container: Option<String>,
+    pub kubeconfig: Option<String>,
 }
 
 /// One pane of a resolved plan: the role, where it goes, and the fully
@@ -552,6 +566,7 @@ impl SessionPlan {
                 selector: self.session_name.clone(),
                 witness: witness.clone(),
                 runbook: runbook.clone(),
+                act: crate::env::GlassAct::Record,
             }),
             ActionLegality::Observe | ActionLegality::Declare { .. } => None,
         }
@@ -582,6 +597,12 @@ pub fn plan(spec: &BancadaSpec, ctx: &BancadaContext) -> Result<SessionPlan, Spe
             match arg {
                 CommandArg::Literal(s) => argv.push(s.clone()),
                 CommandArg::Context(field) => argv.push(resolve_field(spec, ctx, *field)?),
+                CommandArg::Optional(o) => {
+                    if let Ok(v) = resolve_field(spec, ctx, o.field) {
+                        argv.push(o.flag.clone());
+                        argv.push(v);
+                    }
+                }
             }
         }
         panes.push(PlannedPane {
@@ -614,6 +635,7 @@ fn resolve_field(
         ContextField::ResourceKind => Some(ctx.selection.kind.label().to_owned()),
         ContextField::ResourceName => Some(ctx.selection.name.clone()).filter(|n| !n.is_empty()),
         ContextField::Container => ctx.container.clone().filter(|c| !c.is_empty()),
+        ContextField::Kubeconfig => ctx.kubeconfig.clone().filter(|c| !c.is_empty()),
     };
     value.ok_or_else(|| SpecError::UnresolvedContextField {
         bancada: spec.name.clone(),
@@ -837,6 +859,7 @@ mod tests {
             cluster: "alpha-eks".into(),
             selection: selection(),
             container: Some("catch".into()),
+            kubeconfig: None,
         }
     }
 

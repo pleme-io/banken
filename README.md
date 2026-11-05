@@ -71,17 +71,21 @@ credential helper.
 ### A failed login is a panel, not a wall of JSON
 
 When the credential helper fails, banken names the failure in one line, for
-example `east: Azure login expired — run az login --scope <id>/.default`. For a
-known failure it opens a panel. The panel shows the provider, the cluster, the
-apiserver, the tenant and the scope when it knows them, every command it will
-run, and the check it runs after. Nothing runs until you press `enter`. The
-commands run in your terminal, so you see each prompt and each result. When the
-check passes, banken connects again. `esc` returns to the cluster list.
+example `east: Azure login expired — run az login --use-device-code --scope <id>/.default`.
+For a known failure it opens a panel. The panel shows the provider, the cluster,
+the apiserver, the tenant and the scope when it knows them, every command it
+will run, and the check it runs after. Nothing runs until you press `enter`.
 
-The doctor knows Azure (`kubelogin`, `az`), AWS (`aws sso login`), Google Cloud
-(`gcloud auth login`) and the nerai refusal. It is the `shinsatsu` bidama, in
-blue, under `banken/bidamas/shinsatsu`. A new provider or failure is a
-declaration there.
+The commands run inside the panel. A device flow (`az login --use-device-code`,
+`aws sso login --use-device-code`) shows its URL and code in large type, and a
+browser flow (`gcloud auth login`) shows its URL. The panel shows the command's
+own output and the time it has waited. When the steps pass, the panel runs the
+kubeconfig's own credential helper as the check, and banken connects again.
+`esc` stops a running command; a second `esc` returns to the cluster list.
+
+The doctor is the `shinsatsu` bidama in blue's standard distribution
+(`pleme-io/blue/bidamas/shinsatsu`), so other tools use the same one. A new
+provider or failure is a declaration there.
 
 ### The wait is a place
 
@@ -107,6 +111,25 @@ cluster › namespace › kind › object › detail. The title bar shows the pa
 
 `esc` never quits. Logs moved to `shift+l`, and the session recipes moved to
 `t` / `shift+t`, because the vim keys now navigate.
+
+### Verbs on an object
+
+| Keys | Class | Action |
+|---|---|---|
+| `i` | OBSERVE | inspect: facts, labels, owner chain, conditions and events |
+| `e` | BREAK-GLASS | edit: banken suspends, opens `$VISUAL` / `$EDITOR` on the live YAML (no `managedFields`), shows the server's dry-run diff, and applies only after you confirm. A refused or invalid manifest reopens the editor with the error on top, and your edit stays |
+| `dd` | BREAK-GLASS | delete: a prompt names the cluster, the namespace and the object first |
+
+On a read-only registry target (a production target its refusal file guards),
+banken refuses `e` and `dd` before any prompt. Every change is witnessed and
+recorded in the break-glass ledger before it runs. Describe moved from `d` to
+`i` because `dd` is the vim delete.
+
+Session recipes pass the connection's own kubeconfig file (`--kubeconfig`), so
+a pane on a registry target reaches the target, not the ambient refusal.
+
+The design for other clouds (AWS, Azure, Google Cloud) on one provider contract
+is in [docs/PROVIDERS.md](./docs/PROVIDERS.md).
 
 ### Configure it in blue
 

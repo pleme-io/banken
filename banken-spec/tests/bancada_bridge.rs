@@ -33,6 +33,7 @@ fn ctx() -> BancadaContext {
             current: Vec::new(),
         },
         container: Some("catch".into()),
+        kubeconfig: None,
     }
 }
 
@@ -276,4 +277,32 @@ fn the_shipped_bancadas_join_the_resolved_catalog() {
         total,
         "actions, nav keys and bancadas share ONE chord namespace",
     );
+}
+
+#[test]
+fn a_known_kubeconfig_file_reaches_every_kubectl_pane() {
+    let bancadas = load_bancadas().expect("authored bancadas compile");
+    let triage = bancadas
+        .iter()
+        .find(|b| b.name == "pod-triage")
+        .expect("pod-triage");
+    let mut c = ctx();
+    c.kubeconfig = Some("/k/targets/east".into());
+    let p = plan(triage, &c).expect("plans");
+    for pane in p.panes() {
+        let at = pane
+            .argv
+            .iter()
+            .position(|a| a == "--kubeconfig")
+            .unwrap_or_else(|| panic!("{:?} lacks --kubeconfig", pane.argv));
+        assert_eq!(pane.argv[at + 1], "/k/targets/east");
+    }
+    let without = plan(triage, &ctx()).expect("plans");
+    for pane in without.panes() {
+        assert!(
+            !pane.argv.iter().any(|a| a == "--kubeconfig"),
+            "{:?}",
+            pane.argv
+        );
+    }
 }

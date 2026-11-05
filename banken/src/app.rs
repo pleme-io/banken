@@ -83,7 +83,7 @@ pub enum Action {
     /// projection of remote state, deleting one is an unwitnessed live
     /// mutation, and `ClusterEnv` has no method for that. The authored
     /// vocabulary claimed `d` for `describe`; the legal reading wins.
-    ObserveDescribe,
+    ObserveInspect,
     /// DECLARE a scale change on the selected pod (`s`).
     DeclareScale,
     /// BREAK-GLASS shell into the selected pod (`shift+s`).
@@ -104,6 +104,8 @@ pub enum Action {
     Help,
     /// Go one level up the path (`esc` / `h`).
     Ascend,
+    Delete,
+    Edit,
     Top,
     Bottom,
     PageDown,
@@ -145,7 +147,7 @@ impl Action {
         matches!(
             self,
             Action::ObserveLogs
-                | Action::ObserveDescribe
+                | Action::ObserveInspect
                 | Action::DeclareScale
                 | Action::BreakGlass
                 // A bancada resolves a whole recipe against the cluster. A
@@ -196,6 +198,45 @@ enum Panel {
         /// First visible line index.
         scroll: usize,
     },
+    Confirm(PendingDelete),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingDelete {
+    pub cluster: String,
+    pub kind: banken_spec::types::ResourceKind,
+    pub namespace: Option<String>,
+    pub name: String,
+}
+
+impl PendingDelete {
+    #[must_use]
+    pub fn question(&self) -> String {
+        let mut s = String::from("delete ");
+        s.push_str(self.kind.label());
+        s.push(' ');
+        if let Some(ns) = &self.namespace {
+            s.push_str(ns);
+            s.push('/');
+        }
+        s.push_str(&self.name);
+        s.push_str(" on ");
+        s.push_str(if self.cluster.is_empty() {
+            "<unknown cluster>"
+        } else {
+            &self.cluster
+        });
+        s.push_str("?  enter: delete (BREAK-GLASS, witnessed)  ·  esc: keep it");
+        s
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditTarget {
+    pub cluster: String,
+    pub kind: banken_spec::types::ResourceKind,
+    pub namespace: Option<String>,
+    pub name: String,
 }
 
 pub struct Vista {
@@ -316,7 +357,9 @@ pub struct BankenApp<E: ClusterEnv, S: SessionEnv> {
     filter: String,
     scope: Option<String>,
     ascended: bool,
-    pending_top: bool,
+    armed: Option<Action>,
+    edit: Option<EditTarget>,
+    kubeconfig: Option<String>,
     history: Vec<Location>,
     future: Vec<Location>,
     page: std::sync::atomic::AtomicU16,
@@ -482,7 +525,9 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             filter: String::new(),
             scope: None,
             ascended: false,
-            pending_top: false,
+            armed: None,
+            edit: None,
+            kubeconfig: None,
             history: Vec::new(),
             future: Vec::new(),
             page: std::sync::atomic::AtomicU16::new(10),
@@ -498,6 +543,12 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     #[must_use]
     pub fn with_cluster(mut self, cluster: impl Into<String>) -> Self {
         self.cluster = cluster.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_kubeconfig(mut self, file: Option<String>) -> Self {
+        self.kubeconfig = file;
         self
     }
 
@@ -592,6 +643,10 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                 path.push(self.detail_label());
             }
             Panel::Help { .. } => path.push("help".to_owned()),
+            Panel::Confirm(p) => {
+                path.push(p.name.clone());
+                path.push("delete?".to_owned());
+            }
             Panel::Table | Panel::Notice(_) => {}
         }
         path
@@ -611,7 +666,9 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                 ActionResult::BancadaPlan { .. } | ActionResult::BancadaOpened { .. },
             ) => "bancada".to_owned(),
             Panel::ActionOverlay(ActionResult::Error(_)) => "error".to_owned(),
-            Panel::Table | Panel::Notice(_) | Panel::Help { .. } => String::new(),
+            Panel::Table | Panel::Notice(_) | Panel::Help { .. } | Panel::Confirm(_) => {
+                String::new()
+            }
         }
     }
 
@@ -644,6 +701,91 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         }
     }
 
+    fn target(&self) -> Option<(banken_spec::types::ResourceKind, Option<String>, String)> {
+        let row = self.table.view().selected_row()?;
+        Some((self.table.kind(), row.namespace.clone(), row.name.clone()))
+    }
+
+    fn arm_delete(&mut self) {
+        let Some((kind, namespace, name)) = self.target() else {
+            return;
+        };
+        if self.env.posture() == banken_spec::env::Posture::ReadOnly {
+            let mut m = String::from("refused: ");
+            m.push_str(if self.cluster.is_empty() {
+                "this cluster"
+            } else {
+                &self.cluster
+            });
+            m.push_str(" is read-only, so banken will not delete ");
+            m.push_str(&name);
+            self.panel = Panel::Notice(m);
+            return;
+        }
+        self.panel = Panel::Confirm(PendingDelete {
+            cluster: self.cluster.clone(),
+            kind,
+            namespace,
+            name,
+        });
+    }
+
+    fn request_edit(&mut self) {
+        let Some((kind, namespace, name)) = self.target() else {
+            return;
+        };
+        if self.env.posture() == banken_spec::env::Posture::ReadOnly {
+            let mut m = String::from("refused: ");
+            m.push_str(if self.cluster.is_empty() {
+                "this cluster"
+            } else {
+                &self.cluster
+            });
+            m.push_str(" is read-only, so banken will not edit ");
+            m.push_str(&name);
+            self.panel = Panel::Notice(m);
+            return;
+        }
+        self.edit = Some(EditTarget {
+            cluster: self.cluster.clone(),
+            kind,
+            namespace,
+            name,
+        });
+        self.done = true;
+    }
+
+    pub fn take_edit(&mut self) -> Option<EditTarget> {
+        let edit = self.edit.take();
+        if edit.is_some() {
+            self.done = false;
+        }
+        edit
+    }
+
+    pub fn show(&mut self, result: ActionResult) {
+        self.panel = Panel::ActionOverlay(result);
+        self.refresh_current_view();
+    }
+
+    #[must_use]
+    pub fn pending_delete(&self) -> Option<&PendingDelete> {
+        match &self.panel {
+            Panel::Confirm(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn env(&self) -> &E {
+        &self.env
+    }
+
+    #[must_use]
+    pub fn operator(&self) -> &OperatorId {
+        &self.operator
+    }
+
     fn ascend(&mut self) {
         if !matches!(self.panel, Panel::Table) {
             self.panel = Panel::Table;
@@ -671,7 +813,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             let _ = self.switch_view(VIEW_NAME);
             return;
         }
-        let r = dispatch(&self.table, RowAction::Describe, &self.operator, &self.env);
+        let r = dispatch(&self.table, RowAction::Inspect, &self.operator, &self.env);
         self.panel = Panel::ActionOverlay(r);
     }
 
@@ -1145,7 +1287,9 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             return;
         }
 
-        let top_armed = std::mem::take(&mut self.pending_top);
+        let armed = self.armed.take();
+        let top_armed = armed == Some(Action::Top);
+        let delete_armed = armed == Some(Action::Delete);
         // Any navigation/action dismisses a stale overlay first, except the
         // explicit Dismiss/Quit which are handled below.
         // While help is up it OWNS the navigation keys: `j`/`k` scroll the
@@ -1209,8 +1353,8 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                 let r = dispatch(&self.table, RowAction::ViewLogs, &self.operator, &self.env);
                 self.panel = Panel::ActionOverlay(r);
             }
-            Action::ObserveDescribe => {
-                let r = dispatch(&self.table, RowAction::Describe, &self.operator, &self.env);
+            Action::ObserveInspect => {
+                let r = dispatch(&self.table, RowAction::Inspect, &self.operator, &self.env);
                 self.panel = Panel::ActionOverlay(r);
             }
             Action::DeclareScale => {
@@ -1236,7 +1380,12 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                 // keymap (both come from the same filtered iteration), but
                 // reporting it beats an index panic in the operator's TUI.
                 self.panel = match self.bancadas.get(i) {
-                    Some(spec) => match resolve_bancada(&self.table, spec, &self.cluster) {
+                    Some(spec) => match resolve_bancada(
+                        &self.table,
+                        spec,
+                        &self.cluster,
+                        self.kubeconfig.as_deref(),
+                    ) {
                         // Resolving touches nothing. The operator sees the
                         // fully-resolved argv, the cluster it names and the
                         // DERIVED class, and `enter` is what opens it.
@@ -1254,7 +1403,11 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                 // The ONLY confirmable screen. Anywhere else `enter` is a
                 // deliberate no-op — pressing it on the table is not a
                 // mistake worth an error panel.
-                if let Panel::BancadaPreview(pending) = &self.panel {
+                if let Panel::Confirm(_) = &self.panel {
+                    let r = dispatch(&self.table, RowAction::Delete, &self.operator, &self.env);
+                    self.panel = Panel::ActionOverlay(r);
+                    self.refresh_current_view();
+                } else if let Panel::BancadaPreview(pending) = &self.panel {
                     // *** RE-GRIP AT THE ACT. ***
                     //
                     // The plan is exactly what was previewed — that is what
@@ -1284,12 +1437,20 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
                 }
             }
             Action::Ascend => self.ascend(),
+            Action::Delete => {
+                if delete_armed {
+                    self.arm_delete();
+                } else {
+                    self.armed = Some(Action::Delete);
+                }
+            }
+            Action::Edit => self.request_edit(),
             Action::Top => {
                 if top_armed {
                     let n = self.table.view().selected_index();
                     self.rows_by(n, false);
                 } else {
-                    self.pending_top = true;
+                    self.armed = Some(Action::Top);
                 }
             }
             Action::Bottom => {
@@ -1317,7 +1478,11 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
     pub fn pending_bancada(&self) -> Option<&PendingBancada> {
         match &self.panel {
             Panel::BancadaPreview(p) => Some(p),
-            Panel::Table | Panel::ActionOverlay(_) | Panel::Help { .. } | Panel::Notice(_) => None,
+            Panel::Table
+            | Panel::ActionOverlay(_)
+            | Panel::Help { .. }
+            | Panel::Notice(_)
+            | Panel::Confirm(_) => None,
         }
     }
 
@@ -1333,7 +1498,7 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
         match &self.panel {
             Panel::ActionOverlay(r) => Some(r.clone()),
             Panel::BancadaPreview(p) => Some(preview_bancada(p)),
-            Panel::Table | Panel::Help { .. } | Panel::Notice(_) => None,
+            Panel::Table | Panel::Help { .. } | Panel::Notice(_) | Panel::Confirm(_) => None,
         }
     }
 
@@ -1379,6 +1544,12 @@ impl<E: ClusterEnv, S: SessionEnv> BankenApp<E, S> {
             Panel::ActionOverlay(result) => draw_overlay(buf, width, height, result, false),
             // One line, bottom of the screen — the weight the mistake
             // deserves. A mistyped view name is not worth a full overlay.
+            Panel::Confirm(p) => {
+                let y = height.saturating_sub(1);
+                let style = Style::default().fg(Color::White).bg(Color::Red);
+                buf.blank(0, y, width, style);
+                buf.set_stringn(0, y, &p.question(), width, style);
+            }
             Panel::Notice(msg) => {
                 let y = height.saturating_sub(1);
                 let style = Style::default().fg(Color::Black).bg(Color::Yellow);
@@ -1748,7 +1919,9 @@ impl From<NavIntent> for Action {
 /// than a chord that silently does nothing.
 const DISPATCHABLE_ACTIONS: &[(&str, Action)] = &[
     ("view-logs", Action::ObserveLogs),
-    ("describe", Action::ObserveDescribe),
+    ("inspect", Action::ObserveInspect),
+    ("delete", Action::Delete),
+    ("edit", Action::Edit),
     ("scale", Action::DeclareScale),
     ("shell", Action::BreakGlass),
 ];
@@ -3289,7 +3462,7 @@ mod tree_tests {
         type_str(&mut a, ":ns/catch");
         a.apply_action(Action::Descend);
         assert_eq!(a.scope(), Some("catch"));
-        a.apply_action(Action::ObserveDescribe);
+        a.apply_action(Action::ObserveInspect);
         assert!(a.overlay().is_some());
         assert_eq!(
             a.breadcrumb(),
@@ -3299,7 +3472,7 @@ mod tree_tests {
                 "pods",
                 "/web",
                 "catch-web-5f2d",
-                "describe"
+                "inspect"
             ]
         );
 
@@ -3384,6 +3557,75 @@ mod tree_tests {
         assert!(selected(&a) > 1);
         a.apply_action(Action::PageUp);
         assert_eq!(selected(&a), 0);
+    }
+
+    #[tokio::test]
+    async fn dd_asks_first_and_names_the_cluster_namespace_and_object() {
+        let mut a = app().await;
+        a.apply_action(Action::Delete);
+        assert!(
+            a.pending_delete().is_none(),
+            "one `d` only arms the sequence"
+        );
+        a.apply_action(Action::Delete);
+        let p = a.pending_delete().expect("`dd` asks first").clone();
+        assert_eq!(p.cluster, "east");
+        assert_eq!(p.namespace.as_deref(), Some("catch"));
+        let q = p.question();
+        assert!(
+            q.contains("east") && q.contains("catch/") && q.contains(&p.name),
+            "{q}"
+        );
+        a.apply_action(Action::Ascend);
+        assert!(a.pending_delete().is_none(), "esc keeps the object");
+        assert!(a.overlay().is_none());
+        a.apply_action(Action::Delete);
+        a.apply_action(Action::Delete);
+        a.apply_action(Action::Descend);
+        match a.overlay() {
+            Some(ActionResult::BreakGlassRecord { selector, .. }) => {
+                assert!(selector.contains(&p.name), "{selector}");
+            }
+            other => panic!("enter must delete through the witnessed gate, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn i_inspects_and_e_hands_the_object_to_the_editor() {
+        let mut a = app().await;
+        a.apply_action(Action::ObserveInspect);
+        match a.overlay() {
+            Some(ActionResult::Observed { title, lines }) => {
+                assert!(title.starts_with("inspect: "));
+                assert!(lines.iter().any(|l| l == "OWNERS"));
+                assert!(lines.iter().any(|l| l == "CONDITIONS"));
+                assert!(lines.iter().any(|l| l == "EVENTS"));
+            }
+            other => panic!("expected an inspect view, got {other:?}"),
+        }
+        a.apply_action(Action::Edit);
+        assert!(a.should_quit(), "the TUI suspends for the editor");
+        let t = a.take_edit().expect("the edit target");
+        assert_eq!(t.cluster, "east");
+        assert!(!a.should_quit(), "taking the edit resumes the app");
+        assert!(a.take_edit().is_none());
+    }
+
+    #[tokio::test]
+    async fn the_new_verbs_share_no_chord_with_the_vim_keys() {
+        use awase::{Key, Modifiers};
+        let a = app().await;
+        let km = a.keymap();
+        let at = |m: awase::Modifiers, k: awase::Key| {
+            km.find_binding(&awase::Hotkey::new(m, k), &awase::MatchContext::default())
+                .map(|b| b.action)
+        };
+        assert_eq!(at(Modifiers::NONE, Key::D), Some(Action::Delete));
+        assert_eq!(at(Modifiers::NONE, Key::I), Some(Action::ObserveInspect));
+        assert_eq!(at(Modifiers::NONE, Key::E), Some(Action::Edit));
+        assert_eq!(at(Modifiers::NONE, Key::G), Some(Action::Top));
+        assert_eq!(at(Modifiers::NONE, Key::H), Some(Action::Ascend));
+        assert_eq!(at(Modifiers::NONE, Key::L), Some(Action::Descend));
     }
 
     #[tokio::test]

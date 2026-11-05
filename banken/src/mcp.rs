@@ -1781,6 +1781,7 @@ mod tests {
                 selector: "pod/api".into(),
                 witness: OperatorId::new("drzzln").expect("non-blank"),
                 runbook: RunbookRef("R.md".into()),
+                act: banken_spec::env::GlassAct::Record,
             })
             .expect("recorded");
         let s = server.banken_glass_ledger(Parameters(Empty {})).await;

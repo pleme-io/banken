@@ -22,6 +22,67 @@ impl ExecSpec {
     pub fn is_refuser(&self) -> bool {
         self.program() == REFUSER
     }
+
+    #[must_use]
+    pub fn plugin(&self) -> Plugin {
+        let flag = |name: &str| {
+            self.args
+                .iter()
+                .position(|a| a == name)
+                .and_then(|i| self.args.get(i + 1))
+                .cloned()
+        };
+        match self.program() {
+            REFUSER => Plugin::Nerai,
+            "kubelogin" => match flag("--server-id") {
+                Some(server_id) => Plugin::Kubelogin {
+                    server_id,
+                    tenant: flag("--tenant-id"),
+                },
+                None => Plugin::Unknown {
+                    program: "kubelogin".into(),
+                    why: "kubelogin names no --server-id, so no AKS scope can be asked for".into(),
+                },
+            },
+            "aws" | "aws-iam-authenticator" => Plugin::AwsEks,
+            "gke-gcloud-auth-plugin" => Plugin::Gke,
+            other => Plugin::Unknown {
+                program: other.to_owned(),
+                why: "banken resolves kubelogin, aws, gke-gcloud-auth-plugin and nerai-refuse, and runs no other credential plugin".into(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Plugin {
+    Nerai,
+    Kubelogin {
+        server_id: String,
+        tenant: Option<String>,
+    },
+    AwsEks,
+    Gke,
+    Unknown {
+        program: String,
+        why: String,
+    },
+}
+
+impl Plugin {
+    #[must_use]
+    pub fn refusal(&self) -> Option<String> {
+        match self {
+            Self::Unknown { program, why } => {
+                let mut s = String::from("credential plugin `");
+                s.push_str(program);
+                s.push_str("` refused: ");
+                s.push_str(why);
+                Some(s)
+            }
+            Self::Nerai | Self::Kubelogin { .. } | Self::AwsEks | Self::Gke => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +141,7 @@ pub struct ContextChoice {
     pub origin: Origin,
     pub refused: Option<String>,
     pub exec: Option<ExecSpec>,
+    pub read_only: bool,
 }
 
 impl ContextChoice {
@@ -93,6 +155,7 @@ impl ContextChoice {
             origin: Origin::Ambient,
             refused: None,
             exec: None,
+            read_only: false,
         }
     }
 
@@ -124,6 +187,7 @@ pub struct ResolvedContext {
     pub server: String,
     pub file: PathBuf,
     pub exec: Option<ExecSpec>,
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +274,14 @@ impl Estate {
         self.targets.iter().find(|t| t.name == name)
     }
 
+    fn read_only(&self, target: &str) -> bool {
+        self.files.iter().any(|f| {
+            f.contexts
+                .iter()
+                .any(|d| d.stub().and_then(|s| s.target).as_deref() == Some(target))
+        })
+    }
+
     fn live_target(&self, name: &str) -> Option<(&Target, &Declaration)> {
         let t = self.target(name)?;
         t.sole.as_ref().ok().map(|d| (t, d))
@@ -247,6 +319,7 @@ impl Estate {
                 origin: Origin::Ambient,
                 refused: Some(stub.reason),
                 exec: first.exec.clone(),
+                read_only: true,
             });
         }
         let real: Vec<&(&Path, &Declaration)> =
@@ -257,8 +330,9 @@ impl Estate {
             server: first.server.clone(),
             files: real.iter().map(|(f, _)| f.to_path_buf()).collect(),
             origin: Origin::Ambient,
-            refused: None,
+            refused: first.exec.as_ref().and_then(|e| e.plugin().refusal()),
             exec: first.exec.clone(),
+            read_only: false,
         })
     }
 
@@ -273,8 +347,9 @@ impl Estate {
                     server: d.server.clone(),
                     files: vec![t.file.clone()],
                     origin: Origin::Target,
-                    refused: None,
+                    refused: d.exec.as_ref().and_then(|e| e.plugin().refusal()),
                     exec: d.exec.clone(),
+                    read_only: self.read_only(&t.name),
                 },
                 Err(why) => ContextChoice {
                     name: t.name.clone(),
@@ -284,6 +359,7 @@ impl Estate {
                     origin: Origin::Target,
                     refused: Some(why.clone()),
                     exec: None,
+                    read_only: true,
                 },
             });
         }
@@ -327,6 +403,18 @@ impl Estate {
     /// The name is refused by the ambient file, declared by more than one
     /// file, or declared nowhere.
     pub fn resolve(&self, name: &str) -> Result<ResolvedContext, ContextError> {
+        let r = self.resolve_declared(name)?;
+        match r.exec.as_ref().and_then(|e| e.plugin().refusal()) {
+            Some(reason) => Err(ContextError::Refused {
+                name: name.to_owned(),
+                reason,
+                target: None,
+            }),
+            None => Ok(r),
+        }
+    }
+
+    fn resolve_declared(&self, name: &str) -> Result<ResolvedContext, ContextError> {
         if let Some(t) = self.target(name) {
             return match &t.sole {
                 Ok(d) => Ok(ResolvedContext {
@@ -338,6 +426,7 @@ impl Estate {
                         .unwrap_or_else(|| "<no server declared>".to_owned()),
                     file: t.file.clone(),
                     exec: d.exec.clone(),
+                    read_only: self.read_only(name),
                 }),
                 Err(why) => Err(ContextError::Refused {
                     name: name.to_owned(),
@@ -386,6 +475,7 @@ impl Estate {
                 .unwrap_or_else(|| "<no server declared>".to_owned()),
             file: first_file.to_path_buf(),
             exec: first.exec.clone(),
+            read_only: false,
         })
     }
 }
@@ -495,6 +585,17 @@ mod tests {
     }
 
     #[test]
+    fn a_target_its_stub_shadows_is_read_only_and_others_mutate() {
+        let e = workstation();
+        assert!(e.resolve("shop-prod").expect("resolves").read_only);
+        assert!(!e.resolve("cicd").expect("resolves").read_only);
+        assert!(!e.resolve("engenho").expect("resolves").read_only);
+        let rows = e.choices();
+        assert!(rows.iter().any(|c| c.name == "shop-prod" && c.read_only));
+        assert!(rows.iter().any(|c| c.name == "cicd" && !c.read_only));
+    }
+
+    #[test]
     fn a_stub_shadowing_a_registry_target_is_not_an_ambiguity() {
         let e = workstation();
         assert!(e.choices().iter().all(|c| !c.is_ambiguous()));
@@ -564,6 +665,49 @@ mod tests {
         let r = e.resolve("x").expect("the real one wins the merge");
         assert_eq!(r.server, "https://x");
         assert!(e.choices()[0].is_choosable());
+    }
+
+    #[test]
+    fn an_unknown_credential_plugin_is_refused_on_its_entry_alone() {
+        let mut e = workstation();
+        e.files[1].contexts[0].exec = Some(ExecSpec {
+            command: "/usr/local/bin/mystery-auth".into(),
+            args: Vec::new(),
+        });
+        let rows = e.choices();
+        let row = rows.iter().find(|c| c.name == "engenho").expect("listed");
+        assert!(
+            row.refused
+                .as_deref()
+                .is_some_and(|r| r.contains("`mystery-auth` refused")),
+            "{row:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|c| c.name == "shop-prod" && c.is_choosable())
+        );
+        assert!(matches!(
+            e.resolve("engenho"),
+            Err(ContextError::Refused { .. })
+        ));
+    }
+
+    #[test]
+    fn the_known_plugins_resolve_from_their_arguments() {
+        let spec = |command: &str, args: &[&str]| ExecSpec {
+            command: command.into(),
+            args: args.iter().map(|a| (*a).to_owned()).collect(),
+        };
+        assert_eq!(
+            spec("kubelogin", &["--login", "azurecli", "--server-id", "sid"]).plugin(),
+            Plugin::Kubelogin {
+                server_id: "sid".into(),
+                tenant: None
+            }
+        );
+        assert_eq!(spec("aws", &["eks", "get-token"]).plugin(), Plugin::AwsEks);
+        assert_eq!(spec("/x/gke-gcloud-auth-plugin", &[]).plugin(), Plugin::Gke);
+        assert!(spec("kubelogin", &[]).plugin().refusal().is_some());
     }
 
     #[test]

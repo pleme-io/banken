@@ -42,16 +42,6 @@ const FIXTURE_CLUSTER: &str = "fixture";
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    if args.first().map(String::as_str) == Some(banken::world::SERVE_ARG) {
-        let file = args
-            .iter()
-            .skip_while(|a| *a != "--file")
-            .nth(1)
-            .map(std::path::PathBuf::from)
-            .unwrap_or_default();
-        std::process::exit(banken::world::serve(&file));
-    }
-
     let (invocation, options) = match parse_launch(&args) {
         Ok(parsed) => parsed,
         Err(e) => {
@@ -220,41 +210,16 @@ enum Healed {
 
 #[cfg(feature = "live")]
 async fn run_doctor(diagnosis: banken::doctor::Diagnosis) -> Result<Healed, String> {
-    use banken::doctor_screen::{Choice, DoctorScreen, run_step, verify_quietly};
-    let mut ran = Vec::new();
-    let mut verified = None;
-    loop {
-        let mut screen =
-            DoctorScreen::new(diagnosis.clone()).with_results(ran.clone(), verified.clone());
-        egaku_term::run_async(&mut screen)
-            .await
-            .map_err(|e| e.to_string())?;
-        match screen.choice() {
-            Some(Choice::Run) => {
-                ran.clear();
-                for step in &diagnosis.steps {
-                    let r = run_step(step);
-                    let ok = r.ok();
-                    ran.push(r);
-                    if !ok {
-                        break;
-                    }
-                }
-                verified = (ran.iter().all(banken::doctor_screen::Ran::ok)
-                    && !diagnosis.verify.is_empty())
-                .then(|| verify_quietly(&diagnosis.verify));
-            }
-            Some(Choice::Verify) => verified = Some(verify_quietly(&diagnosis.verify)),
-            Some(Choice::Back) | None => return Ok(Healed::Back),
-            Some(Choice::Quit) => return Ok(Healed::Quit),
-        }
-        if verified
-            .as_ref()
-            .is_some_and(banken::doctor_screen::Ran::ok)
-        {
-            return Ok(Healed::Retry);
-        }
-    }
+    use banken::doctor_screen::{Choice, DoctorScreen};
+    let mut screen = DoctorScreen::new(diagnosis);
+    egaku_term::run_async(&mut screen)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(match screen.choice() {
+        Some(Choice::Healed) => Healed::Retry,
+        Some(Choice::Back) | None => Healed::Back,
+        Some(Choice::Quit) => Healed::Quit,
+    })
 }
 
 /// Whether a live run reached the navigator.
@@ -354,9 +319,32 @@ async fn run_fixture(operator: OperatorId, options: &Options) -> Result<(), Stri
     .map_err(|e| e.to_string())?
     .with_cluster(FIXTURE_CLUSTER)
     .with_estoque(estoque.rows.clone());
-    egaku_term::run_async(&mut app)
-        .await
-        .map_err(|e| e.to_string())
+    drive(&mut app).await
+}
+
+async fn drive<E, S>(app: &mut BankenApp<E, S>) -> Result<(), String>
+where
+    E: banken_spec::env::ClusterEnv + Send + Sync,
+    S: banken_spec::bancada::SessionEnv + Send + Sync,
+{
+    loop {
+        egaku_term::run_async(app)
+            .await
+            .map_err(|e| e.to_string())?;
+        let Some(target) = app.take_edit() else {
+            return Ok(());
+        };
+        let operator = app.operator().clone();
+        let result = match world().editor.unwrap_or_default() {
+            banken::edit::EditorChoice::External => {
+                banken::edit::run(app.env(), &operator, &target, &mut banken::edit::Terminal)
+            }
+            banken::edit::EditorChoice::Embedded => {
+                banken::edit::run(app.env(), &operator, &target, &mut banken::edit::Unbuilt)
+            }
+        };
+        app.show(result);
+    }
 }
 
 fn settings() -> banken_config::BankenConfig {
@@ -503,6 +491,7 @@ async fn run_live_from(
         let cluster = env.context_name().unwrap_or_default();
         let label = banken::absorb::live_source_label(&cluster, env.server(), strategy);
         let receipt = env.server().map(str::to_owned);
+        let kubeconfig = env.kubeconfig_file();
         // The WATCH producer, not the poll. This is the whole M0 payoff:
         // against alpha-eks (191 pods) the poll moved 3,580,862 B every
         // second — 96 GiB per 8-hour day — where a watch over the same 30 s
@@ -539,6 +528,7 @@ async fn run_live_from(
         )
         .map_err(|e| e.to_string())?
         .with_cluster(cluster.clone())
+        .with_kubeconfig(kubeconfig)
         .with_permits(permits)
         .with_estoque(estoque.rows.clone());
         let absorber = (zeladores, socket, estoque);
@@ -568,9 +558,7 @@ async fn run_live_from(
             m
         })??;
 
-    egaku_term::run_async(&mut app)
-        .await
-        .map_err(|e| e.to_string())?;
+    drive(&mut app).await?;
     if app.ascended() {
         return Ok(Landed::Ascended);
     }

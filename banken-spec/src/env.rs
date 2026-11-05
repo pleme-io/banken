@@ -525,6 +525,88 @@ pub struct WitnessedAction {
     pub witness: OperatorId,
     /// The RUNBOOK the action is logged to.
     pub runbook: RunbookRef,
+    pub act: GlassAct,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum GlassAct {
+    #[default]
+    Record,
+    Delete {
+        kind: ResourceKind,
+        name: String,
+        namespace: Option<String>,
+    },
+    Apply {
+        kind: ResourceKind,
+        name: String,
+        namespace: Option<String>,
+        manifest: String,
+    },
+}
+
+impl GlassAct {
+    #[must_use]
+    pub fn verb(&self) -> &'static str {
+        match self {
+            Self::Record => "record",
+            Self::Delete { .. } => "delete",
+            Self::Apply { .. } => "apply",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Posture {
+    #[default]
+    ReadOnly,
+    Mutate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Inspection {
+    pub facts: Vec<(String, String)>,
+    pub owners: Vec<String>,
+    pub conditions: Vec<String>,
+    pub events: Vec<String>,
+}
+
+impl Inspection {
+    #[must_use]
+    pub fn lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for (k, v) in &self.facts {
+            let mut l = format!("{k:<12}");
+            l.push_str(v);
+            out.push(l);
+        }
+        for (title, rows, none) in [
+            ("OWNERS", &self.owners, "no owner"),
+            ("CONDITIONS", &self.conditions, "no conditions reported"),
+            ("EVENTS", &self.events, "no events"),
+        ] {
+            out.push(String::new());
+            out.push(title.to_owned());
+            if rows.is_empty() {
+                let mut l = String::from("  ");
+                l.push_str(none);
+                out.push(l);
+            }
+            for r in rows {
+                let mut l = String::from("  ");
+                l.push_str(r);
+                out.push(l);
+            }
+        }
+        out
+    }
+}
+
+fn unwired(phase: &str) -> SpecError {
+    SpecError::Interp {
+        phase: phase.into(),
+        message: "this source does not answer it".into(),
+    }
 }
 
 /// A durable record of a break-glass action.
@@ -640,6 +722,47 @@ pub trait ClusterEnv {
     /// A `SpecError::Interp { phase: "break-glass" }` on failure.
     fn break_glass(&self, action: WitnessedAction) -> Result<GlassRecord, SpecError>;
 
+    fn posture(&self) -> Posture {
+        Posture::ReadOnly
+    }
+
+    /// # Errors
+    ///
+    /// A source that does not answer it, or a failed read.
+    fn inspect(
+        &self,
+        _kind: ResourceKind,
+        _name: &str,
+        _ns: Option<&str>,
+    ) -> Result<Inspection, SpecError> {
+        Err(unwired("inspect"))
+    }
+
+    /// # Errors
+    ///
+    /// A source that does not answer it, or a failed read.
+    fn manifest(
+        &self,
+        _kind: ResourceKind,
+        _name: &str,
+        _ns: Option<&str>,
+    ) -> Result<String, SpecError> {
+        Err(unwired("manifest"))
+    }
+
+    /// # Errors
+    ///
+    /// A source that does not answer it, or a failed read.
+    fn preview_change(
+        &self,
+        _kind: ResourceKind,
+        _name: &str,
+        _ns: Option<&str>,
+        _manifest: &str,
+    ) -> Result<String, SpecError> {
+        Err(unwired("preview"))
+    }
+
     // *** THERE IS NO `fn scale/delete/edit/kubectl_apply`.            ***
     // *** An UNWITNESSED live cluster mutation is not expressible —    ***
     // *** calling one is E0599 (a compile error), not a Result::Err.   ***
@@ -701,6 +824,38 @@ impl<T: ClusterEnv + ?Sized> ClusterEnv for std::sync::Arc<T> {
 
     fn break_glass(&self, action: WitnessedAction) -> Result<GlassRecord, SpecError> {
         (**self).break_glass(action)
+    }
+
+    fn posture(&self) -> Posture {
+        (**self).posture()
+    }
+
+    fn inspect(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
+    ) -> Result<Inspection, SpecError> {
+        (**self).inspect(kind, name, ns)
+    }
+
+    fn manifest(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
+    ) -> Result<String, SpecError> {
+        (**self).manifest(kind, name, ns)
+    }
+
+    fn preview_change(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
+        manifest: &str,
+    ) -> Result<String, SpecError> {
+        (**self).preview_change(kind, name, ns, manifest)
     }
 }
 

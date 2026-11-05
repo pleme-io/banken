@@ -127,6 +127,41 @@ pub fn kubeconfig_current_context() -> Option<String> {
 /// `install_default` returns `Err` only when a provider is *already*
 /// installed, which is the desired end state, so it is deliberately discarded
 /// rather than propagated.
+/// # Errors
+///
+/// The plugin is refused, or banken holds no native token for it yet.
+pub fn native_auth(
+    config: &mut Config,
+    exec: Option<&crate::estate::ExecSpec>,
+) -> Result<(), String> {
+    let Some(exec) = exec else {
+        return Ok(());
+    };
+    let plugin = exec.plugin();
+    if let Some(refusal) = plugin.refusal() {
+        return Err(refusal);
+    }
+    match plugin {
+        crate::estate::Plugin::Kubelogin { server_id, .. } => {
+            let token = crate::aad::token_for(&server_id).ok_or_else(|| {
+                let mut m = String::from(
+                    "Azure login needed: banken holds no token for the AKS server id ",
+                );
+                m.push_str(&server_id);
+                m.push_str(" (AzureCLICredential is not used; banken signs in natively)");
+                m
+            })?;
+            config.auth_info.exec = None;
+            config.auth_info.token = Some(secrecy::SecretString::from(token));
+            Ok(())
+        }
+        crate::estate::Plugin::Nerai => Err("refused by the target registry".into()),
+        crate::estate::Plugin::AwsEks
+        | crate::estate::Plugin::Gke
+        | crate::estate::Plugin::Unknown { .. } => Ok(()),
+    }
+}
+
 fn ensure_crypto_provider() {
     let _already_installed = rustls::crypto::ring::default_provider().install_default();
 }
@@ -395,6 +430,8 @@ pub struct KubeClusterEnv {
     /// `None` on the [`Self::connect`] path, which never resolves a named
     /// context and so cannot claim one. See [`Self::server`].
     server: Option<String>,
+    posture: banken_spec::env::Posture,
+    kubeconfig: Option<PathBuf>,
 }
 
 impl KubeClusterEnv {
@@ -430,6 +467,8 @@ impl KubeClusterEnv {
             // probably-the-same-thing guess this constructor already carries on
             // `context_name`. `None` is the honest value.
             server: None,
+            posture: banken_spec::env::Posture::ReadOnly,
+            kubeconfig: None,
         })
     }
 
@@ -500,7 +539,7 @@ impl KubeClusterEnv {
             message: e.to_string(),
         })?;
         reporter.reached(Stage::Configuration);
-        let config = config_for_resolved(&resolved.context, &resolved.file)
+        let mut config = config_for_resolved(&resolved.context, &resolved.file)
             .await
             .map_err(|e| SpecError::Interp {
                 phase: "connect".into(),
@@ -512,6 +551,10 @@ impl KubeClusterEnv {
                     m
                 },
             })?;
+        native_auth(&mut config, resolved.exec.as_ref()).map_err(|message| SpecError::Interp {
+            phase: "connect".into(),
+            message,
+        })?;
         // THE slow one — this is where the `exec` credential helper runs, with
         // a blocking `cmd.output()` on an AWS SSO round-trip for an EKS
         // context. Announced BEFORE the call, which is the only useful moment:
@@ -526,6 +569,12 @@ impl KubeClusterEnv {
             handle: tokio::runtime::Handle::current(),
             context_name: Some(resolved.context.clone()),
             server: Some(resolved.server),
+            kubeconfig: Some(resolved.file.clone()),
+            posture: if resolved.read_only {
+                banken_spec::env::Posture::ReadOnly
+            } else {
+                banken_spec::env::Posture::Mutate
+            },
         })
     }
 
@@ -570,12 +619,24 @@ impl KubeClusterEnv {
                 return Standing::stopped(Rung::Network, e.to_string());
             }
         };
-        let config = match config_for_resolved(&resolved.context, &resolved.file).await {
+        let mut config = match config_for_resolved(&resolved.context, &resolved.file).await {
             Ok(c) => c,
             Err(e) => {
                 return Standing::stopped(Rung::Network, Self::error_chain(&e));
             }
         };
+        if let Err(raw) = native_auth(&mut config, resolved.exec.as_ref()) {
+            let facts = crate::doctor::facts_for(
+                resolved.exec.as_ref(),
+                &raw,
+                context,
+                Some(&resolved.server),
+                None,
+            );
+            let mut m = String::from("credentials: ");
+            m.push_str(&crate::doctor::legible(&raw, &facts));
+            return Standing::stopped(Rung::Network, m);
+        }
         // This is the line that spawns the credential helper.
         let client = match Client::try_from(config) {
             Ok(c) => c,
@@ -655,6 +716,11 @@ impl KubeClusterEnv {
     #[must_use]
     pub fn server(&self) -> Option<&str> {
         self.server.as_deref()
+    }
+
+    #[must_use]
+    pub fn kubeconfig_file(&self) -> Option<String> {
+        self.kubeconfig.as_ref().map(|p| p.display().to_string())
     }
 
     /// The kubeconfig context this env is reading, when it is known.
@@ -1295,7 +1361,266 @@ impl KubeClusterEnv {
     }
 }
 
+fn gvk_of(kind: ResourceKind) -> (kube::api::GroupVersionKind, bool) {
+    let (group, version, k, cluster) = match kind {
+        ResourceKind::Pod => ("", "v1", "Pod", false),
+        ResourceKind::Service => ("", "v1", "Service", false),
+        ResourceKind::ConfigMap => ("", "v1", "ConfigMap", false),
+        ResourceKind::Endpoints => ("", "v1", "Endpoints", false),
+        ResourceKind::Namespace => ("", "v1", "Namespace", true),
+        ResourceKind::Node => ("", "v1", "Node", true),
+        ResourceKind::Deployment => ("apps", "v1", "Deployment", false),
+        ResourceKind::ReplicaSet => ("apps", "v1", "ReplicaSet", false),
+        ResourceKind::Event => ("", "v1", "Event", false),
+    };
+    (kube::api::GroupVersionKind::gvk(group, version, k), cluster)
+}
+
+fn interp_err(phase: &str, e: impl std::fmt::Display) -> SpecError {
+    SpecError::Interp {
+        phase: phase.into(),
+        message: e.to_string(),
+    }
+}
+
+#[must_use]
+pub fn stripped_yaml(mut value: serde_json::Value) -> String {
+    if let Some(meta) = value
+        .get_mut("metadata")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        meta.remove("managedFields");
+    }
+    serde_yaml::to_string(&value).unwrap_or_default()
+}
+
+fn text_at<'a>(v: &'a serde_json::Value, path: &[&str]) -> Option<&'a str> {
+    path.iter()
+        .try_fold(v, |acc, k| acc.get(*k))
+        .and_then(serde_json::Value::as_str)
+}
+
+#[must_use]
+pub fn inspection_of(
+    kind: ResourceKind,
+    obj: &serde_json::Value,
+    owners: Vec<String>,
+    events: Vec<String>,
+) -> banken_spec::env::Inspection {
+    let mut facts = vec![("kind".to_owned(), kind.label().to_owned())];
+    for (label, path) in [
+        ("name", &["metadata", "name"][..]),
+        ("namespace", &["metadata", "namespace"][..]),
+        ("uid", &["metadata", "uid"][..]),
+        ("created", &["metadata", "creationTimestamp"][..]),
+        ("node", &["spec", "nodeName"][..]),
+        ("phase", &["status", "phase"][..]),
+    ] {
+        if let Some(v) = text_at(obj, path) {
+            facts.push((label.to_owned(), v.to_owned()));
+        }
+    }
+    if let Some(labels) = obj
+        .pointer("/metadata/labels")
+        .and_then(serde_json::Value::as_object)
+    {
+        let joined: Vec<String> = labels
+            .iter()
+            .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or_default()))
+            .collect();
+        facts.push(("labels".to_owned(), joined.join(", ")));
+    }
+    let conditions = obj
+        .pointer("/status/conditions")
+        .and_then(serde_json::Value::as_array)
+        .map(|cs| {
+            cs.iter()
+                .map(|c| {
+                    let mut l = String::new();
+                    l.push_str(text_at(c, &["type"]).unwrap_or("?"));
+                    l.push('=');
+                    l.push_str(text_at(c, &["status"]).unwrap_or("?"));
+                    if let Some(r) = text_at(c, &["reason"]) {
+                        l.push_str("  ");
+                        l.push_str(r);
+                    }
+                    if let Some(m) = text_at(c, &["message"]) {
+                        l.push_str(": ");
+                        l.push_str(m);
+                    }
+                    l
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    banken_spec::env::Inspection {
+        facts,
+        owners,
+        conditions,
+        events,
+    }
+}
+
+impl KubeClusterEnv {
+    fn dynamic(&self, kind: ResourceKind, ns: Option<&str>) -> Api<kube::api::DynamicObject> {
+        let (gvk, cluster) = gvk_of(kind);
+        let plural = if kind == ResourceKind::Endpoints {
+            "endpoints".to_owned()
+        } else {
+            let mut p = gvk.kind.to_lowercase();
+            p.push('s');
+            p
+        };
+        let ar = kube::api::ApiResource::from_gvk_with_plural(&gvk, &plural);
+        match (cluster, ns) {
+            (false, Some(n)) => Api::namespaced_with(self.client.clone(), n, &ar),
+            _ => Api::all_with(self.client.clone(), &ar),
+        }
+    }
+
+    async fn object(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
+    ) -> Result<kube::api::DynamicObject, SpecError> {
+        self.dynamic(kind, ns)
+            .get(name)
+            .await
+            .map_err(|e| interp_err("get", Self::error_chain(&e)))
+    }
+
+    async fn owner_chain(&self, start: &kube::api::DynamicObject, ns: Option<&str>) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut refs = start.metadata.owner_references.clone().unwrap_or_default();
+        while let Some(r) = refs.first().cloned() {
+            if out.len() >= 6 {
+                break;
+            }
+            let mut line = r.kind.clone();
+            line.push(' ');
+            line.push_str(&r.name);
+            out.push(line);
+            let (group, version) = r
+                .api_version
+                .split_once('/')
+                .unwrap_or(("", r.api_version.as_str()));
+            let gvk = kube::api::GroupVersionKind::gvk(group, version, &r.kind);
+            let Ok((ar, caps)) = kube::discovery::pinned_kind(&self.client, &gvk).await else {
+                break;
+            };
+            let api: Api<kube::api::DynamicObject> = match (caps.scope, ns) {
+                (kube::discovery::Scope::Namespaced, Some(n)) => {
+                    Api::namespaced_with(self.client.clone(), n, &ar)
+                }
+                _ => Api::all_with(self.client.clone(), &ar),
+            };
+            let Ok(owner) = api.get(&r.name).await else {
+                break;
+            };
+            refs = owner.metadata.owner_references.clone().unwrap_or_default();
+        }
+        out
+    }
+
+    async fn events_of(&self, uid: &str, ns: Option<&str>) -> Vec<String> {
+        let api: Api<k8s_openapi::api::core::v1::Event> = match ns {
+            Some(n) => Api::namespaced(self.client.clone(), n),
+            None => Api::all(self.client.clone()),
+        };
+        let mut field = String::from("involvedObject.uid=");
+        field.push_str(uid);
+        api.list(&ListParams::default().fields(&field))
+            .await
+            .map(|l| {
+                l.items
+                    .into_iter()
+                    .rev()
+                    .take(20)
+                    .map(|e| {
+                        let mut s = String::new();
+                        s.push_str(e.type_.as_deref().unwrap_or("?"));
+                        s.push(' ');
+                        s.push_str(e.reason.as_deref().unwrap_or(""));
+                        s.push_str(": ");
+                        s.push_str(e.message.as_deref().unwrap_or(""));
+                        s
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    async fn applied(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
+        manifest: &str,
+        dry_run: bool,
+    ) -> Result<String, SpecError> {
+        let body: serde_json::Value =
+            serde_yaml::from_str(manifest).map_err(|e| interp_err("parse", e))?;
+        let mut params = kube::api::PatchParams::apply("banken");
+        if dry_run {
+            params = params.dry_run();
+        }
+        let out = self
+            .dynamic(kind, ns)
+            .patch(name, &params, &kube::api::Patch::Apply(&body))
+            .await
+            .map_err(|e| interp_err("apply", Self::error_chain(&e)))?;
+        Ok(stripped_yaml(
+            serde_json::to_value(&out).map_err(|e| interp_err("apply", e))?,
+        ))
+    }
+}
+
 impl ClusterEnv for KubeClusterEnv {
+    fn posture(&self) -> banken_spec::env::Posture {
+        self.posture
+    }
+
+    fn inspect(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
+    ) -> Result<banken_spec::env::Inspection, SpecError> {
+        self.block(async {
+            let obj = self.object(kind, name, ns).await?;
+            let owners = self.owner_chain(&obj, ns).await;
+            let uid = obj.metadata.uid.clone().unwrap_or_default();
+            let events = self.events_of(&uid, ns).await;
+            let value = serde_json::to_value(&obj).map_err(|e| interp_err("inspect", e))?;
+            Ok(inspection_of(kind, &value, owners, events))
+        })
+    }
+
+    fn manifest(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
+    ) -> Result<String, SpecError> {
+        self.block(async {
+            let obj = self.object(kind, name, ns).await?;
+            Ok(stripped_yaml(
+                serde_json::to_value(&obj).map_err(|e| interp_err("manifest", e))?,
+            ))
+        })
+    }
+
+    fn preview_change(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        ns: Option<&str>,
+        manifest: &str,
+    ) -> Result<String, SpecError> {
+        self.block(self.applied(kind, name, ns, manifest, true))
+    }
+
     /// A REAL re-read, at the instant of the act.
     ///
     /// This is the only method on the live backend that runs on the operator's
@@ -1533,8 +1858,40 @@ impl ClusterEnv for KubeClusterEnv {
                       action it cannot record"
                 .into(),
         })?;
+        if action.act != banken_spec::env::GlassAct::Record
+            && self.posture == banken_spec::env::Posture::ReadOnly
+        {
+            return Err(interp_err(
+                "break-glass",
+                "this cluster is read-only: banken refuses a live change here",
+            ));
+        }
         let cluster = self.context_name().unwrap_or_default();
         let witnessed = crate::glass::GlassLedger::at(path, cluster).record(&action)?;
+        match &action.act {
+            banken_spec::env::GlassAct::Record => {}
+            banken_spec::env::GlassAct::Delete {
+                kind,
+                name,
+                namespace,
+            } => {
+                self.block(async {
+                    self.dynamic(*kind, namespace.as_deref())
+                        .delete(name, &kube::api::DeleteParams::default())
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| interp_err("delete", Self::error_chain(&e)))
+                })?;
+            }
+            banken_spec::env::GlassAct::Apply {
+                kind,
+                name,
+                namespace,
+                manifest,
+            } => {
+                self.block(self.applied(*kind, name, namespace.as_deref(), manifest, false))?;
+            }
+        }
         Ok(witnessed.record().clone())
     }
 

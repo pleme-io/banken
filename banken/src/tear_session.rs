@@ -466,6 +466,7 @@ mod tests {
                 current: Vec::new(),
             },
             container: None,
+            kubeconfig: None,
         };
         plan(&spec, &ctx).expect("plans").panes()[0]
             .as_observed()

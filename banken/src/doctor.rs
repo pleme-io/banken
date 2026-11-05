@@ -1,15 +1,7 @@
-use blue_lang_host::{Canonical, Embedded, Entry, Program};
+use blue_lang_host::{Canonical, Entry, Program, Standard};
 use serde::{Deserialize, Serialize};
 
-const SHINSATSU: Embedded<'static> = Embedded {
-    name: "shinsatsu",
-    files: &[(
-        "shinsatsu.b",
-        include_str!("../bidamas/shinsatsu/shinsatsu.b"),
-    )],
-};
-
-const ENTRY: &str = "use(\"shinsatsu\", %i[classes_json diagnose_json incomplete_json])\n\ndef classes()\n  classes_json()\nend\n\ndef diagnosed(text)\n  diagnose_json(text)\nend\n\ndef incomplete()\n  incomplete_json()\nend\n";
+const ENTRY: &str = "use(\"shinsatsu\", %i[classes_json diagnose_json incomplete_json prompt_json])\n\ndef classes()\n  classes_json\nend\n\ndef diagnosed(text)\n  diagnose_json(text)\nend\n\ndef incomplete()\n  incomplete_json\nend\n\ndef prompt(text)\n  prompt_json(text)\nend\n";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Facts {
@@ -38,8 +30,7 @@ pub struct Diagnosis {
     pub title: String,
     pub diagnosis: String,
     pub facts: Vec<Fact>,
-    #[serde(deserialize_with = "argvs")]
-    pub steps: Vec<Vec<String>>,
+    pub steps: Vec<Step>,
     pub verify: Vec<String>,
 }
 
@@ -59,7 +50,7 @@ impl Diagnosis {
         s.push_str(&self.title);
         if let Some(step) = self.steps.last() {
             s.push_str(" — run `");
-            s.push_str(&step.join(" "));
+            s.push_str(&step.argv.join(" "));
             s.push('`');
         }
         s
@@ -74,21 +65,36 @@ impl Diagnosis {
     }
 }
 
-#[derive(Deserialize)]
-struct Step {
-    argv: Vec<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Flow {
+    Plain,
+    Device,
+    Browser,
 }
 
-fn argvs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Vec<String>>, D::Error> {
-    Ok(Vec::<Step>::deserialize(d)?
-        .into_iter()
-        .map(|s| s.argv)
-        .collect())
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Step {
+    pub argv: Vec<String>,
+    pub flow: Flow,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct Prompt {
+    pub url: Option<String>,
+    pub code: Option<String>,
+}
+
+/// # Errors
+///
+/// The doctor failed to load or to answer.
+pub fn prompt_of(text: &str) -> Result<Prompt, String> {
+    serde_json::from_str(&call("prompt", Some(text.to_owned()))?).map_err(|e| e.to_string())
 }
 
 fn call(function: &str, arg: Option<String>) -> Result<String, String> {
     let mut program = Program::<()>::builder(Entry::anonymous(ENTRY))
-        .loader(&SHINSATSU)
+        .loader(&Standard)
         .canonical(Canonical::AsWritten)
         .load(&mut ())
         .map_err(|e| e.to_string())?;
@@ -197,20 +203,29 @@ mod tests {
         assert_eq!(
             d.steps,
             vec![
-                vec!["az".to_owned(), "logout".to_owned()],
-                vec![
-                    "az".to_owned(),
-                    "login".to_owned(),
-                    "--scope".to_owned(),
-                    scope.clone(),
-                ],
+                Step {
+                    argv: vec!["az".to_owned(), "logout".to_owned()],
+                    flow: Flow::Plain,
+                },
+                Step {
+                    argv: vec![
+                        "az".to_owned(),
+                        "login".to_owned(),
+                        "--use-device-code".to_owned(),
+                        "--scope".to_owned(),
+                        scope.clone(),
+                    ],
+                    flow: Flow::Device,
+                },
             ]
         );
         assert_eq!(d.verify[0], "kubelogin");
         let line = d.headline();
         assert_eq!(
             line,
-            format!("east-staging: Azure login expired — run `az login --scope {scope}`")
+            format!(
+                "east-staging: Azure login expired — run `az login --use-device-code --scope {scope}`"
+            )
         );
         assert!(!line.contains('{'), "no escaped JSON reaches the status");
     }
@@ -221,8 +236,8 @@ mod tests {
         f.args.extend(["--tenant-id".into(), "t-123".into()]);
         let d = diagnose(&f).expect("answers").expect("known");
         assert_eq!(
-            d.steps[1][..4],
-            ["az", "login", "--tenant", "t-123"].map(str::to_owned)
+            d.steps[1].argv[..5],
+            ["az", "login", "--use-device-code", "--tenant", "t-123"].map(str::to_owned)
         );
         assert_eq!(d.fact("tenant"), Some("t-123"));
     }
@@ -246,10 +261,31 @@ mod tests {
         .expect("answers")
         .expect("known");
         assert_eq!(d.class, "sso_expired");
+        assert_eq!(d.steps.len(), 1);
+        assert_eq!(d.steps[0].flow, Flow::Device);
         assert_eq!(
-            d.steps,
-            vec![vec!["aws", "sso", "login", "--profile", "ops"]]
+            d.steps[0].argv,
+            [
+                "aws",
+                "sso",
+                "login",
+                "--use-device-code",
+                "--profile",
+                "ops"
+            ]
+            .map(str::to_owned)
         );
+    }
+
+    #[test]
+    fn a_device_flow_prints_the_url_and_the_code_the_panel_shows() {
+        let p = prompt_of(
+            "To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code DXQ4KP7LM to authenticate.",
+        )
+        .expect("answers");
+        assert_eq!(p.url.as_deref(), Some("https://microsoft.com/devicelogin"));
+        assert_eq!(p.code.as_deref(), Some("DXQ4KP7LM"));
+        assert_eq!(prompt_of("waiting").expect("answers"), Prompt::default());
     }
 
     #[test]

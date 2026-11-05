@@ -1,13 +1,10 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use blue_lang_host::Capability;
-use blue_lang_host::world::{self, Load, Refusal, Spec};
+use blue_lang_host::world::{self, Load, Spec};
 use serde_json::Value;
 
 use crate::estate::RefusedRows;
-
-pub const SERVE_ARG: &str = "blue-world";
 
 const SPEC: Spec<'static> = Spec {
     call: "banken",
@@ -21,6 +18,7 @@ pub struct Overlay {
     pub binds: Vec<(String, String)>,
     pub offs: Vec<String>,
     pub refused_rows: Option<RefusedRows>,
+    pub editor: Option<crate::edit::EditorChoice>,
     pub targets_dir: Option<PathBuf>,
     pub refusals: Vec<String>,
 }
@@ -41,22 +39,14 @@ pub fn world_file() -> Option<PathBuf> {
 }
 
 #[must_use]
-pub fn serve(file: &Path) -> i32 {
-    world::serve::<()>(file, &SPEC, world::DEFAULT_MEMORY_MB)
-}
-
-#[must_use]
 pub fn read(file: &Path) -> Load {
     if !file.exists() {
         return Load::Absent;
     }
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(e) => return Load::Refused(Refusal::new("spawn", e.to_string())),
-    };
-    let mut command = Command::new(exe);
-    command.args([SERVE_ARG, "--file"]).arg(file);
-    world::read(command, file, world::READ_LIMIT)
+    match world::judged::<()>(file, &SPEC) {
+        Ok(judged) => Load::Judged(judged),
+        Err(refusal) => Load::Refused(refusal),
+    }
 }
 
 fn word(v: &Value) -> Option<String> {
@@ -85,6 +75,13 @@ fn read_config(name: &str, value: &Value, overlay: &mut Overlay) {
                 }
                 _ => overlay.refusals.push(format!(
                     "config picker.targets: {field} is not an absolute path"
+                )),
+            },
+            ("edit", "editor") => match word(field).as_deref() {
+                Some("embedded") => overlay.editor = Some(crate::edit::EditorChoice::Embedded),
+                Some("external") => overlay.editor = Some(crate::edit::EditorChoice::External),
+                _ => overlay.refusals.push(format!(
+                    "config edit.editor: {field} is not embedded or external"
                 )),
             },
             _ => overlay
