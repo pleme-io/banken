@@ -213,6 +213,23 @@ pub fn resolve_context(name: &str) -> Result<ResolvedContext, ContextError> {
     read_estate()?.resolve(name)
 }
 
+/// [`resolve_context`] within one kubeconfig file alone: the file
+/// `--sole-context-of` names, whether or not `KUBECONFIG` lists it.
+///
+/// # Errors
+///
+/// As [`resolve_context`], over that one file.
+pub fn resolve_context_in(
+    name: &str,
+    file: &std::path::Path,
+) -> Result<ResolvedContext, ContextError> {
+    crate::estate::Estate {
+        files: read_files(vec![file.to_path_buf()])?,
+        targets: read_targets(&targets_dir()),
+    }
+    .resolve(name)
+}
+
 /// # Errors
 ///
 /// [`ContextError::Unreadable`] when a kubeconfig file that exists cannot be
@@ -380,8 +397,12 @@ pub fn sole_context_of(path: &std::path::Path) -> Result<String, String> {
 }
 
 fn read_unmerged() -> Result<Vec<crate::estate::FileDeclarations>, ContextError> {
+    read_files(kubeconfig_files())
+}
+
+fn read_files(files: Vec<PathBuf>) -> Result<Vec<crate::estate::FileDeclarations>, ContextError> {
     let mut out = Vec::new();
-    for file in kubeconfig_files() {
+    for file in files {
         let kc = match Kubeconfig::read_from(&file) {
             Ok(kc) => kc,
             Err(_) if !file.exists() => continue,
@@ -527,14 +548,39 @@ impl KubeClusterEnv {
         context: &str,
         reporter: &crate::antessala::StageReporter,
     ) -> Result<Self, SpecError> {
-        use crate::antessala::Stage;
-
-        reporter.reached(Stage::Kubeconfig);
-        ensure_crypto_provider();
+        reporter.reached(crate::antessala::Stage::Kubeconfig);
         // Resolve BEFORE connecting. An ambiguous name has no path past this
         // line, so "banken read the wrong cluster and looked fine doing it"
         // has no code path rather than a warning nobody reads.
-        let resolved = resolve_context(context).map_err(|e| SpecError::Interp {
+        Self::connect_resolved(context, resolve_context(context), reporter).await
+    }
+
+    /// [`Self::connect_with_context`] with the context resolved in `file`
+    /// alone: `banken mcp --sole-context-of <file>` connects to the cluster
+    /// that file names, not to a same-named context the default kubeconfig
+    /// may lack.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::connect_with_context`].
+    pub async fn connect_with_context_in(
+        context: &str,
+        file: &std::path::Path,
+    ) -> Result<Self, SpecError> {
+        let (reporter, _watch) = crate::antessala::channel();
+        reporter.reached(crate::antessala::Stage::Kubeconfig);
+        Self::connect_resolved(context, resolve_context_in(context, file), &reporter).await
+    }
+
+    async fn connect_resolved(
+        context: &str,
+        resolved: Result<ResolvedContext, ContextError>,
+        reporter: &crate::antessala::StageReporter,
+    ) -> Result<Self, SpecError> {
+        use crate::antessala::Stage;
+
+        ensure_crypto_provider();
+        let resolved = resolved.map_err(|e| SpecError::Interp {
             phase: "connect".into(),
             message: e.to_string(),
         })?;
@@ -2146,6 +2192,44 @@ mod tests {
         s.push_str("\n    user: u\n");
         std::fs::write(&path, s).expect("write fixture kubeconfig");
         path
+    }
+
+    /// `--sole-context-of <file>` resolves inside that file even when the
+    /// merge list (`KUBECONFIG`, else `~/.kube/config`) does not carry it:
+    /// on 2026-11-06 the engenho kubeconfig named `engenho-ryn-…`, the merge
+    /// list did not, and `banken mcp` died before its MCP handshake.
+    #[test]
+    fn a_sole_context_resolves_in_its_own_file_not_the_merge_list() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = Scratch::new("sole");
+        let own = write_kubeconfig(
+            dir.path(),
+            "engenho",
+            "engenho-ryn-x",
+            "https://127.0.0.1:6443",
+        );
+        let other = write_kubeconfig(
+            dir.path(),
+            "config",
+            "elsewhere",
+            "https://remote.example:6443",
+        );
+        // SAFETY: serialized by ENV_LOCK; restored below.
+        unsafe { std::env::set_var("KUBECONFIG", &other) };
+        let merged = resolve_context("engenho-ryn-x");
+        let in_file = resolve_context_in(&sole_context_of(&own).expect("one context"), &own);
+        unsafe { std::env::remove_var("KUBECONFIG") };
+        assert!(
+            matches!(merged, Err(ContextError::NotFound { .. })),
+            "the merge list lacks it: {merged:?}"
+        );
+        let r = in_file.expect("resolved in its own file");
+        assert_eq!(
+            (r.context.as_str(), r.file.as_path()),
+            ("engenho-ryn-x", own.as_path())
+        );
     }
 
     /// **THE gate.** Two files in the merge list declaring one context name is

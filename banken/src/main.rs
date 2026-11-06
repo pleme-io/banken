@@ -735,9 +735,12 @@ async fn run_mcp(source: banken::cli::McpSource, options: &Options) -> Result<()
         )
         .map_err(|e| e.to_string())?,
         McpSource::SoleContextOf(path) => {
-            let name = banken::live::sole_context_of(std::path::Path::new(&path))?;
-            BankenMcp::over_kube(Arc::new(connect(name).await?), ronda, plano)
-                .map_err(|e| e.to_string())?
+            let file = std::path::Path::new(&path);
+            let name = banken::live::sole_context_of(file)?;
+            let env = banken::live::KubeClusterEnv::connect_with_context_in(&name, file)
+                .await
+                .map_err(|e| format!("live connect failed (VPN/kubeconfig?): {e}"))?;
+            BankenMcp::over_kube(Arc::new(env), ronda, plano).map_err(|e| e.to_string())?
         }
         McpSource::Live(context) => {
             BankenMcp::over_kube(Arc::new(connect(context).await?), ronda, plano)
