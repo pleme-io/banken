@@ -14,7 +14,7 @@
 //! Third-use test: the lane is the multi-instance unit (four breathe
 //! dimensions + presence + detections + the composed verdict = seven lane
 //! shapes today), and [`WardScope`] admits the fleet / namespace / node
-//! wards §V's drill-flow implies. The form earns its keep on lanes alone.
+//! wards the drill-flow implies. The form earns its keep on lanes alone.
 //!
 //! # A ward is NOT a second view — the correspondence is checked
 //!

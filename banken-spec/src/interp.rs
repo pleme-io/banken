@@ -103,7 +103,7 @@ pub enum Outcome {
 /// Serializes the *whole* selection spec via `serde_yaml` (typed
 /// emission, no `format!()`). Returns `SpecError::NoLoweringTarget` when
 /// a `FluxHelmValues` target has no owning `release_path` — the
-/// §IX C-declare-coverage gap surfaced as a typed error, not a silent
+/// C-declare-coverage gap surfaced as a typed error, not a silent
 /// wrong `Ok`.
 ///
 /// # Errors

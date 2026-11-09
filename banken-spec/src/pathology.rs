@@ -3,11 +3,11 @@
 //!
 //! # What this domain is
 //!
-//! Popeye lane consumes a *taxonomy*: the fleet
-//! agentic-observability doctrine's symptom→cause rules (§II/§III) plus
+//! Popeye lane consumes a *taxonomy*: the fleet's
+//! observability symptom→cause rules plus
 //! autorevivy's 35-class detection stream, rendered as a read-only linter
 //! whose every remedy routes through
-//! `postigo` DECLARE. That taxonomy was authored **prose** in the theory doc
+//! `postigo` DECLARE. That taxonomy was authored only as **prose**
 //! and **hardcoded nowhere** in banken — a rule was a sentence, not a value.
 //! `(defpathology …)` makes each rule a typed value: what was observed, what
 //! the load-bearing cause is, which typed evidence signals must be abnormal
@@ -15,14 +15,13 @@
 //!
 //! Third-use test: passed by a wide margin. autorevivy's `MaintenanceJob`
 //! taxonomy is 35 classes (verified), the
-//! agentic-observability doctrine names more, and three ship authored here
+//! observability symptom rules name more, and three ship authored here
 //! on day one.
 //!
 //! # The BROKEN-METRIC guard is STRUCTURAL, not a catalog row
 //!
 //! The marquee invariant — *no workload shows GREEN unless
-//! `up==1 && count(core_metric)>0`* (agentic-observability
-//! §II.9) — is **not** implemented as a pathology, deliberately. A rule in a
+//! `up==1 && count(core_metric)>0`* — is **not** implemented as a pathology, deliberately. A rule in a
 //! catalog can be omitted, mis-authored, or filtered out by a ward's
 //! `:pathologies` list, and then the guard silently stops guarding. Instead
 //! [`WardVerdict::evaluate`] applies it as an unconditional structural cap:
@@ -150,7 +149,7 @@ pub enum Remedy {
     /// Fix it through the witnessed BREAK-GLASS arm (wedged-GitOps only).
     BreakGlass,
     /// banken cannot fix it — say why rather than pretending a rail exists.
-    /// This is the honest arm for the §IX C-declare-coverage gap (a bare
+    /// This is the honest arm for the C-declare-coverage gap (a bare
     /// pod, an operator-created child, a chartless CRD).
     NoRemedy {
         /// Why no rail applies.
@@ -334,7 +333,7 @@ impl WardVerdict {
             folded = folded.worse_of(p.severity.verdict());
         }
 
-        // *** THE BROKEN-METRIC GUARD (agentic-observability §II.9). ***
+        // *** THE BROKEN-METRIC GUARD. ***
         // Structural and catalog-independent: a would-be Green over an
         // absent core metric is Unknown. Deleting this line is what the
         // `a_dead_scrape_can_never_report_green` gate catches.

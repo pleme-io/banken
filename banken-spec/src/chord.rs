@@ -18,7 +18,7 @@
 //! timeout_ms: u32, action: Action }`. banken's actions are single
 //! keypresses (`s`, `l`, `shift+s`), and the type awase indexes bindings
 //! by is `Hotkey` — `KeyMode.bindings: HashMap<Hotkey, Binding>`
-//! (`awase/src/mode.rs:20`). Naming `KeyChord` in §III.a was a type error,
+//! (`awase/src/mode.rs:20`). Naming `KeyChord` there was a type error,
 //! not a deliberate design; a one-key action wrapped in a leader/follower
 //! chord would need a bogus second key and a timeout that never applies.
 //! [`ActionChord`] therefore wraps `Hotkey`, and banken keeps

@@ -1,4 +1,4 @@
-//! The §III.a substrate-invariant guard — the CI-caught floor for
+//! The substrate-invariant guard — the CI-caught floor for
 //! "an author re-adds an unwitnessed-mutate method to `ClusterEnv`".
 //!
 //! HONEST TIER: **only-mitigated → CI-caught.**

@@ -838,7 +838,7 @@ such.
    be Unknown, never Green — with catalog []`.
 2. **`Attestation::Proven`** — `OutcomeChainRef` has no `Deserialize` that
    succeeds, so `:attested (:kind proven …)` is **parse-time rejected** with an
-   error naming §IX C-controller. §V/§IX's "labelled (computed), NEVER
+   error naming C-controller. The "labelled (computed), NEVER
    (proven)" was reviewer discipline; it is now a refusal. The variant STAYS
    (★★ MODULARIZE, DON'T DELETE) — revival is making one constructor `pub`.
 3. **`Catalog`** — fields private, `resolve`/`load_catalog` the only
@@ -918,7 +918,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
       truly-unrepresentable — a `SortKey` naming a nonexistent column can be
       written, just not installed.
     - **The DRAWER did not collapse with the model, on purpose.** See
-      `pending-banken: column-render-hints` below — `status_style` (the §V
+      `pending-banken: column-render-hints` below — `status_style` (the
       pathology color axis) is app knowledge that egaku-term's lifted
       `draw::table_with` deliberately does not carry, and trading a red
       `CrashLoopBackOff` for CJK column alignment banken can never exercise is

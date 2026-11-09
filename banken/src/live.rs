@@ -1,5 +1,5 @@
 //! `KubeClusterEnv` — the live-cluster OBSERVE backend (M0
-//! destination-tier / §VII "M0 read for a bravo cluster").
+//! destination-tier / "M0 read for a bravo cluster").
 //!
 //! # Tier: PROVEN LIVE (measured 2026-07-31) — `pending-banken: live-read` CLOSED
 //!
@@ -39,7 +39,7 @@
 //!
 //! Only the OBSERVE read half (`list_resources` for pods) is implemented;
 //! DECLARE opens a branch+PR (M3) and BREAK-GLASS routes through the raw
-//! kubernetes MCP (the §IX named interim executor) — neither is a live
+//! kubernetes MCP (the named interim executor) — neither is a live
 //! mutation this backend performs, so both return a typed
 //! `SpecError::Interp` "not yet wired" rather than a silent wrong `Ok`.
 

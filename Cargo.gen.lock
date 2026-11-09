@@ -4,8 +4,8 @@
   "manifest_sha256": {
     "Cargo.toml": "c66916861f16e70540414b9029de8e4596779fd5a8cc9fcad713adbcb7e5139f",
     "banken-config/Cargo.toml": "864d4da444a3018074666a5e87010e60f7e882cdef7d9c00cc68a3ca09c11ac2",
-    "banken-spec/Cargo.toml": "407d0fce820b85fa31b54ab8c1bbbe4b270bf04e909da8922ca338dec9fbe2e3",
-    "banken/Cargo.toml": "3bb0a8060ebb8b01205c253a4612ed8748d46e378cb1451c708c7d2eb21af015"
+    "banken-spec/Cargo.toml": "c12bc58401182b853d8db44527670941a2924a224081ba3448ba9b77149cdef6",
+    "banken/Cargo.toml": "99b9c621bf256f2d288a29722bef5d625901b9a5bbf5c62a419d90d30a70de94"
   },
   "target_resolves": {
     "base": {

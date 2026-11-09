@@ -26,7 +26,7 @@
 //! default rather than an option.
 //!
 //! Third-use test: passed — `logs` and `diagnose` are already referenced by
-//! the shipped views, and §IV/§VI name the `ctx→ns→pod→container` drill as
+//! the shipped views, and name the `ctx→ns→pod→container` drill as
 //! the k9s navigation spine. Three authored instances ship here.
 
 use serde::{Deserialize, Serialize};

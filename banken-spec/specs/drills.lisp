@@ -36,7 +36,7 @@
 ;; cannot express.
 ;;
 ;; Referenced by no `:drill-to` yet, which is ALLOWED: the `:` command bar is
-;; a first-class peer of the ward (§V), so a command-bar-reachable drill
+;; a first-class peer of the ward, so a command-bar-reachable drill
 ;; needs no referent. `Catalog::resolve` deliberately does not require one.
 (defdrill
   :name "xray"

@@ -192,7 +192,7 @@ pub enum ActionResult {
         witnessed: bool,
     },
     /// The action could not run — a typed error surfaced (e.g. no owning
-    /// `release.yaml` for a DECLARE, the §IX coverage gap).
+    /// `release.yaml` for a DECLARE, the coverage gap).
     Error(String),
 }
 

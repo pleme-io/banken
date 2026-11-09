@@ -28,7 +28,7 @@ pub enum SpecError {
 
     /// A DECLARE action could not be lowered to a full manifest —
     /// e.g. the selection has no owning `release.yaml` (the
-    /// §IX C-declare-coverage gap). Distinct from `Interp` so
+    /// C-declare-coverage gap). Distinct from `Interp` so
     /// callers can offer break-glass or a reviewed rail instead.
     #[error("no DECLARE lowering target: {0}")]
     NoLoweringTarget(String),
