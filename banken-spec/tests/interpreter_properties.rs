@@ -1,4 +1,4 @@
-//! Interpreter properties (BANKEN.md §III.c) — the real proof of the
+//! Interpreter properties — the real proof of the
 //! postigo triplet, driven by `MockClusterEnv` with **zero live
 //! cluster**. Exactly the sui-spec `MockEnv` seam.
 

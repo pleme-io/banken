@@ -1,5 +1,5 @@
 //! The postigo action dispatch — wiring the shipped `banken_spec`
-//! citizenship primitive through the UI (BANKEN.md §III / §VI).
+//! citizenship primitive through the UI.
 //!
 //! This is where the three-class gate meets a keystroke on a selected pod
 //! row:

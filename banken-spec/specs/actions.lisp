@@ -1,4 +1,4 @@
-;; banken canonical actions — the (defk8saction) authoring surface (BANKEN.md §III.b).
+;; banken canonical actions — the (defk8saction) authoring surface.
 ;;
 ;; Each action is typed into exactly one postigo legality class, driven
 ;; into typed K8sActionSpec values by banken_spec::load_actions. A plugin

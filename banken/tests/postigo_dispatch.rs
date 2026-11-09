@@ -1,5 +1,5 @@
 //! Integration test of the postigo action dispatch through the UI
-//! (BANKEN.md §III / §VI — the citizenship payoff, wired live).
+//! (the citizenship payoff, wired live).
 //!
 //! Proves that selecting a pod row + pressing a postigo chord routes
 //! through the shipped `banken_spec::apply` gate and produces the right

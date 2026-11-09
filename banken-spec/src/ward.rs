@@ -1,8 +1,8 @@
-//! `(defward)` — the health-ward composition domain (BANKEN.md §V).
+//! `(defward)` — the health-ward composition domain.
 //!
 //! # What this domain is
 //!
-//! BANKEN.md §V makes the health `ward` banken's *first-class default
+//! The design makes the health `ward` banken's *first-class default
 //! landing*: Pulses (breathe band phases per workload), Popeye (the
 //! autorevivy detection stream as a read-only linter), the QUIET headline,
 //! and the BROKEN-METRIC guard. A `(defk8sview :kind HealthWard)` can
@@ -30,7 +30,7 @@
 //!
 //! # `Attestation::Proven` is UN-AUTHORABLE, by construction
 //!
-//! BANKEN.md §V and §IX C-controller are explicit and repeated: the QUIET
+//! The design is explicit and repeated here (C-controller): the QUIET
 //! headline is labelled **"(computed)"**, *never* "(proven)", until a fleet
 //! `PromessaController` + a real `OutcomeChain` ship — and neither exists in
 //! code (autorevivy's `attest()` is a placeholder string). A doc sentence
@@ -53,8 +53,8 @@ use crate::closed_catalog;
 closed_catalog! {
     /// A breathe band dimension a Pulses lane can render.
     ///
-    /// The four **k8s-plane** dimensions whose `BandStatus.phase` BANKEN.md
-    /// §II verifies as SHIPPED data (`MemoryBand`/`CpuBand`/`StorageBand`/
+    /// The four **k8s-plane** dimensions whose `BandStatus.phase` is
+    /// verified as SHIPPED data (`MemoryBand`/`CpuBand`/`StorageBand`/
     /// `ReplicaBand`). breathe itself declares eleven dimensions including
     /// host-plane and generic-CR ones; banken authors only the four it has
     /// evidence for, rather than mirroring a catalog it cannot read.
@@ -112,7 +112,7 @@ closed_catalog! {
 pub enum LaneSignal {
     /// One breathe band dimension's phase.
     ///
-    /// Per BANKEN.md §V a lane shows a **per-dimension phase, not one
+    /// A lane shows a **per-dimension phase, not one
     /// joined verdict** — the composed `BreathePlan` is DESIGN, so a
     /// single-verdict band lane would be an over-claim. That is why this
     /// arm carries a dimension rather than being a bare `Bands`.
@@ -169,7 +169,7 @@ closed_catalog! {
 /// headline would need.
 ///
 /// **This type cannot be deserialized.** [`Self::deserialize`] always
-/// fails, naming BANKEN.md §IX C-controller, because no fleet
+/// fails, naming C-controller, because no fleet
 /// `PromessaController` and no real `OutcomeChain` exist in code. That makes
 /// [`Attestation::Proven`] un-authorable from Lisp or YAML —
 /// **parse-time-rejected**, not a doc note asking reviewers to be careful.
@@ -184,7 +184,7 @@ pub struct OutcomeChainRef(String);
 /// the failure site teaches the ceiling rather than just refusing.
 pub const UNATTESTABLE: &str = "an attested (proven) QUIET headline is not authorable: no fleet \
      PromessaController and no real OutcomeChain exist in code (autorevivy's \
-     attest() is a placeholder). BANKEN.md §V/§IX C-controller: the headline \
+     attest() is a placeholder). C-controller: the headline \
      is labelled (computed), never (proven), until that substrate ships. \
      Author `:attested (:kind computed)`.";
 
@@ -251,7 +251,7 @@ closed_catalog! {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Attestation {
     /// Computed live from band phases + detections + the presence guard.
-    /// Advisory reading (BANKEN.md §IX C-external-world), never a theorem.
+    /// Advisory reading (C-external-world), never a theorem.
     Computed,
     /// Attested on a real `OutcomeChain` by a fleet `PromessaController`.
     ///
@@ -283,7 +283,7 @@ impl Attestation {
     }
 }
 
-/// The ward's top-level headline (BANKEN.md §V's `QUIET: 34/37` line).
+/// The ward's top-level headline (`QUIET: 34/37` line).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct HeadlineSpec {
     /// The headline's label (`"QUIET"`).
@@ -292,7 +292,7 @@ pub struct HeadlineSpec {
     pub attested: Attestation,
 }
 
-/// One authored health ward — the composition BANKEN.md §V describes.
+/// One authored health ward — the composition the design describes.
 #[derive(DeriveTataraDomain, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[tatara(keyword = "defward")]
 pub struct WardSpec {
@@ -354,7 +354,7 @@ mod tests {
         assert_eq!(back.attested.kind(), AttestationKind::Computed);
     }
 
-    /// **THE GATE.** BANKEN.md §V/§IX C-controller: the QUIET headline may
+    /// **THE GATE.** C-controller: the QUIET headline may
     /// never claim "(proven)". A doc sentence is reviewer discipline; this
     /// is a parse-time refusal, and the error names the ceiling.
     #[test]

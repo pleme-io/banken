@@ -1,4 +1,4 @@
-//! `(defdrill)` — the typed drill-path domain (BANKEN.md §IV T1 / §V / §VI).
+//! `(defdrill)` — the typed drill-path domain.
 //!
 //! # What this domain closes
 //!

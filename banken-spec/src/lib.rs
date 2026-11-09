@@ -1,7 +1,7 @@
 //! banken-spec — the `postigo` action-legality citizenship primitive.
 //!
 //! This crate is the TYPED-SPEC + INTERPRETER triplet that makes banken
-//! (the pleme-io-native k9s) a *citizen, not a clone* (BANKEN.md §III).
+//! (the pleme-io-native k9s) a *citizen, not a clone*.
 //! It copies sui-spec's verified `GcEnvironment`/`apply<E>` shape
 //! exactly — but where `GcEnvironment` **has** `delete_path` (gc.rs:148),
 //! the [`env::ClusterEnv`] trait **deliberately omits the
@@ -25,7 +25,7 @@
 //!    [`env::ClusterEnv::break_glass`]. Proven against
 //!    [`testing::MockClusterEnv`] — **zero live cluster**.
 //!
-//! ## The unrepresentability tier (never rounded up — BANKEN.md §III.d)
+//! ## The unrepresentability tier (never rounded up)
 //!
 //! - A DECLARE keystroke calling live-scale/delete: **truly-unrepresentable
 //!   within the authored `ClusterEnv` surface** — the trait has no such
@@ -67,7 +67,7 @@
 //! - **The BROKEN-METRIC guard** ([`pathology::WardVerdict`]) — a ward
 //!   verdict claiming `Green` over an absent core metric is unconstructible,
 //!   and the guard is *structural*, so no catalog row can switch it off.
-//! - **`(proven)` is un-authorable** ([`ward::Attestation`]) — BANKEN.md §IX
+//! - **`(proven)` is un-authorable** ([`ward::Attestation`])
 //!   C-controller's ceiling is a parse-time refusal, not a doc note.
 //! - **An unresolved catalog is unconstructible** ([`Catalog`]).
 //! - **A pre-warmed session cannot lie about its legality**

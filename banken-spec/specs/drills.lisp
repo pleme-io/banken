@@ -21,7 +21,7 @@
           (:level container :view "containers")
           (:level logs :view "log-pager")))
 
-;; BANKEN.md §V's drill-flow: Enter on a RED ward row walks the symptom→cause
+;; drill-flow: Enter on a RED ward row walks the symptom→cause
 ;; path to the load-bearing cause and presents the remedy as the exact
 ;; release.yaml diff a `postigo` DECLARE would commit. Referenced by both the
 ;; `ward` view and the `ward` (defward).
@@ -33,7 +33,7 @@
 
 ;; XRay — the dependency tree over owner-refs + endpoints + caixa
 ;; `:contratos`, with the declared-vs-observed overlay k9s structurally
-;; cannot express (BANKEN.md §II/§V).
+;; cannot express.
 ;;
 ;; Referenced by no `:drill-to` yet, which is ALLOWED: the `:` command bar is
 ;; a first-class peer of the ward (§V), so a command-bar-reachable drill

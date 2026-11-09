@@ -1,7 +1,7 @@
 //! The §III.a substrate-invariant guard — the CI-caught floor for
 //! "an author re-adds an unwitnessed-mutate method to `ClusterEnv`".
 //!
-//! HONEST TIER (BANKEN.md §III.d): **only-mitigated → CI-caught.**
+//! HONEST TIER: **only-mitigated → CI-caught.**
 //! Nothing in Rust's type system forbids *extending* a trait, so the
 //! re-add case cannot be truly-unrepresentable. This test is the
 //! strengthening: it scans `src/env.rs`, extracts the method names
@@ -168,7 +168,7 @@ fn cluster_env_has_no_mutating_verb_method() {
                 !m.contains(forbidden),
                 "ClusterEnv method `{m}` contains forbidden mutating verb \
                  `{forbidden}` — an unwitnessed live mutation is the exact \
-                 leak the postigo primitive forbids (BANKEN.md §III.c/§III.d).",
+                 leak the postigo primitive forbids.",
             );
         }
     }

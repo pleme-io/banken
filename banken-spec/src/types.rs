@@ -1,5 +1,4 @@
-//! The typed border of the `postigo` action-legality primitive
-//! (BANKEN.md §III.a).
+//! The typed border of the `postigo` action-legality primitive.
 //!
 //! `ActionLegality` types every action a banken row exposes into
 //! exactly one of three classes — OBSERVE / DECLARE / BREAK-GLASS.
@@ -55,7 +54,7 @@ pub struct MergeflowRef(pub String);
 /// Now the only constructor refuses a blank, so a witness that names nobody
 /// has no value. **Tier: parse-time-rejected, not truly-unrepresentable** — an
 /// author can still supply `"x"`, and no type can know whether a string names a
-/// human who consented. That ceiling is C-witness in BANKEN.md §IX and is not
+/// human who consented. That ceiling is C-witness in the design and is not
 /// closable here; what closes here is the *empty* case, which was the one
 /// reachable by accident.
 ///
@@ -107,7 +106,7 @@ impl<'de> Deserialize<'de> for OperatorId {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RunbookRef(pub String);
 
-// ── ActionLegality — the three-class gate (BANKEN.md §III.a) ───────
+// ── ActionLegality — the three-class gate ───────
 
 /// The `postigo` legality class of one action.
 ///
@@ -198,7 +197,7 @@ impl ActionLegality {
     }
 }
 
-// ── DeclareTarget — the GitOps lowering rails (BANKEN.md §III.a) ───
+// ── DeclareTarget — the GitOps lowering rails ───
 
 /// The rail a DECLARE lowers onto. Every arm is a git change a
 /// reconciler converges on.
@@ -293,7 +292,7 @@ impl DeclareTarget {
     }
 }
 
-// ── View + column model (BANKEN.md §III.a) ─────────────────────────
+// ── View + column model ─────────────────────────
 
 /// The kind of a `(defk8sview)` — what the view renders.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -378,7 +377,7 @@ pub struct SortKey {
     pub order: Ordering,
 }
 
-// ── ManifestScope — "full manifest, never a patch" (BANKEN.md §III.a)
+// ── ManifestScope — "full manifest, never a patch"
 
 /// The scope a DECLARE lowering must serialize.
 ///
@@ -472,7 +471,7 @@ impl ResourceKind {
     }
 }
 
-// ── The two authored spec borders (BANKEN.md §III.a) ───────────────
+// ── The two authored spec borders ───────────────
 
 /// A `(defk8sview)` — one navigable view (a resource table, the health
 /// ward, an `XRay` tree, a log pager).
@@ -509,7 +508,7 @@ pub struct K8sActionSpec {
     /// rather than the chord failing at keypress time. Note that awase
     /// folds case: an uppercase binding is authored as `"shift+s"`, which
     /// is also the form egaku-term actually delivers. See
-    /// [`crate::chord`] for the full correction to BANKEN.md §III.a
+    /// [`crate::chord`] for the full correction to the design
     /// (which named `KeyChord`, awase's two-step leader/follower type).
     pub keys: ActionChord,
     /// The legality class — the gate.

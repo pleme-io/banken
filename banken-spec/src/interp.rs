@@ -1,4 +1,4 @@
-//! The interpreter (BANKEN.md §III.c) — `apply<E: ClusterEnv>`
+//! The interpreter — `apply<E: ClusterEnv>`
 //! dispatching on `action.legality`, plus `lower_to_full_manifest`.
 //!
 //! - OBSERVE → a read method on the env.
@@ -155,7 +155,7 @@ pub fn lower_to_full_manifest(
 }
 
 /// Apply an action against a cluster env, dispatching on its legality
-/// class (BANKEN.md §III.c).
+/// class.
 ///
 /// # Errors
 ///

@@ -1,5 +1,5 @@
 //! The authored `(defk8sview)`/`(defk8saction)` Lisp specs round-trip
-//! into the typed border (BANKEN.md §III.b) — and the authored DECLARE
+//! into the typed border — and the authored DECLARE
 //! action drives `apply` end-to-end against the mock, proving the Lisp
 //! authoring surface and the interpreter agree.
 //!

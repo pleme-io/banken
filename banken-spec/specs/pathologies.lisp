@@ -1,7 +1,7 @@
 ;; banken pathology taxonomy — the (defpathology) authoring surface.
 ;;
 ;; Each form is one symptom→cause rule the Popeye lane runs as a READ-ONLY
-;; linter (BANKEN.md §V): banken suggests, and every remedy routes through a
+;; linter: banken suggests, and every remedy routes through a
 ;; `postigo` rail — never autorevivy's live actuator, never kubectl. That is
 ;; why `:remedy` has no `kubectl`/`apply` value to author: it reuses
 ;; DeclareTargetKind, the same five-rail catalog `(defk8saction)` uses.
@@ -10,8 +10,8 @@
 ;; the rule to fire. An empty `:evidence` is an ERROR, not a rule that
 ;; silently never fires (SpecError::PathologyWithoutEvidence).
 ;;
-;; Tier-honest scope: the autorevivy taxonomy is 35 classes (BANKEN.md §II,
-;; verified) and the agentic-observability doctrine names more. THREE ship
+;; Tier-honest scope: the autorevivy taxonomy is 35 classes (verified)
+;; and the agentic-observability doctrine names more. THREE ship
 ;; here. This file is the vocabulary and the first three instances of it —
 ;; not the taxonomy.
 ;; `pending-banken: pathology-taxonomy-backfill` (the remaining 32 need
@@ -19,7 +19,7 @@
 ;; §V's ~15% live-data-reuse note; authoring rules whose evidence nothing
 ;; supplies would be a catalog of rules that can never fire).
 
-;; ── THE MARQUEE CASE (BANKEN.md §V / agentic-observability §II.9) ──────
+;; ── THE MARQUEE CASE (agentic-observability §II.9) ──────
 ;;
 ;; `up==1` with the core metric series ABSENT is a BROKEN SCRAPE — fix the
 ;; scrape, not the workload. This rule is the DIAGNOSIS: it tells the
@@ -56,7 +56,7 @@
   ;; A band setpoint is a *Band CRD field — the BreatheBand rail.
   :remedy (:kind declare :rail breathe-band))
 
-;; ── The honest C-declare-coverage arm (BANKEN.md §IX) ──────────────────
+;; ── The honest C-declare-coverage arm ──────────────────
 ;;
 ;; Some live resources have NO owning release.yaml (a bare pod, an
 ;; operator-created child, a chartless CRD), so DECLARE has no lowering
@@ -70,4 +70,4 @@
   :severity advisory
   :evidence (detection)
   :remedy (:kind no-remedy
-           :why "no owning release.yaml exists; the only exits are a witnessed break-glass or adopting the resource into a chart (BANKEN.md §IX C-declare-coverage)"))
+           :why "no owning release.yaml exists; the only exits are a witnessed break-glass or adopting the resource into a chart (C-declare-coverage)"))

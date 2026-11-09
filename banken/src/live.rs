@@ -1,4 +1,4 @@
-//! `KubeClusterEnv` — the live-cluster OBSERVE backend (BANKEN.md §VI M0
+//! `KubeClusterEnv` — the live-cluster OBSERVE backend (M0
 //! destination-tier / §VII "M0 read for a bravo cluster").
 //!
 //! # Tier: PROVEN LIVE (measured 2026-07-31) — `pending-banken: live-read` CLOSED

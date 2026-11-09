@@ -8,7 +8,7 @@
 //! collapsed onto the matching `egaku::TableView` (see [`crate::table`]). This
 //! drawer did **not** collapse with it, and the reason is one feature:
 //! [`status_style`]. A STATUS cell reading `CrashLoopBackOff` draws red and one
-//! reading `Running` draws green — the pathology color axis (BANKEN.md §V) at
+//! reading `Running` draws green — the pathology color axis at
 //! the cell level, and the single most load-bearing glyph in a k9s-shaped
 //! table.
 //!
@@ -79,7 +79,7 @@ fn column_widths(table: &PodTable) -> Vec<u16> {
 
 /// The status-colored style for a STATUS cell value. Healthy states draw
 /// success-green; failing/pending states draw error-red / warning-yellow.
-/// This is the pathology color axis (BANKEN.md §V) at the cell level.
+/// This is the pathology color axis at the cell level.
 fn status_style(value: &str, base: Style) -> Style {
     match value {
         "Running" | "Completed" | "Succeeded" => base.fg(Color::Green),

@@ -144,7 +144,7 @@ fn authored_wards_compile_into_typed_values() {
     assert_eq!(w.headline.label, "QUIET");
 }
 
-/// **THE GATE** (BANKEN.md §V / §IX C-controller). The shipped ward claims
+/// **THE GATE** (C-controller). The shipped ward claims
 /// `(computed)`, and claiming `(proven)` is not an authoring choice that a
 /// reviewer must catch — it has no typed value.
 #[test]

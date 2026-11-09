@@ -1,5 +1,5 @@
 //! The banken app runtime — the `:pods` view model + key handling
-//! (BANKEN.md §VI M0 / Quadro T3+T4).
+//! (M0 / Quadro T3+T4).
 //!
 //! [`BankenApp`] holds the [`PodTable`] view model, the last postigo
 //! [`ActionResult`] panel, and the quit flag. It implements
@@ -33,7 +33,7 @@
 //!
 //! What is closed: the table now moves without a keystroke, absorbed off-task
 //! by [`crate::feed`] over `izumi::refresh`. What is NOT: this is a 1 Hz
-//! **poll**, which is what BANKEN.md §VI M0 specifies. A true `kube` watch
+//! **poll**, which is what M0 specifies. A true `kube` watch
 //! informer is M1 and unbuilt, so the row stays open under its own name.
 
 use std::sync::Arc;

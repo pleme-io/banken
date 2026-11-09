@@ -228,7 +228,7 @@ impl ClusterEnv for FixtureClusterEnv {
 
     fn declare(&self, _change: DeclareChange) -> Result<ChangeRef, SpecError> {
         // The fixture env is read-only for demonstration; a real DECLARE
-        // opens a branch+PR (BANKEN.md §VI M3, never direct-to-main). Here
+        // opens a branch+PR (M3, never direct-to-main). Here
         // we return a synthetic ref so the dispatch is exercisable end to
         // end without a git remote. This is honest: the fixture never
         // *commits* — it proves the postigo dispatch reaches `declare`.
@@ -300,7 +300,7 @@ impl ClusterEnv for FixtureClusterEnv {
         Ok(GlassRecord {
             action,
             // A placeholder AnomalyChain handle (labelled, never rounded up
-            // — the real chain ships later, BANKEN.md §VII).
+            // — the real chain ships later).
             record_id: "fixture-anomaly-chain-record".into(),
         })
     }

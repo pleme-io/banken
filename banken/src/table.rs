@@ -3,7 +3,7 @@
 //!
 //! # `pending-banken: promote-tableview-to-egaku` — CLOSED 2026-07-31
 //!
-//! BANKEN.md §IV/§VII/§VI named a generic `egaku::TableView<Row>` as the
+//! The design named a generic `egaku::TableView<Row>` as the
 //! load-bearing NET-NEW egaku widget banken's identity capability rides on
 //! — "land in egaku (P2), never the app, never ratatui." It landed
 //! (egaku `e602369`), lifted from the model that used to live in this file,
@@ -60,7 +60,7 @@ use egaku::{Column, SortKey, SortOrder, TableError, TableView};
 /// keeps the authored column off it.
 pub use egaku::IDENTITY_FIELD;
 
-/// The canonical `:pods` columns (BANKEN.md §III.b `(defk8sview "pods")`):
+/// The canonical `:pods` columns (`(defk8sview "pods")`):
 /// NAME / READY / STATUS / RESTARTS / AGE.
 ///
 /// **A hardcoded MIRROR of the authored view, kept only as the fallback for
@@ -120,7 +120,7 @@ pub struct PodTable {
 impl PodTable {
     /// A fresh `:pods` table over `rows`, default-sorted by STATUS desc
     /// (so unhealthy pods surface first — the k9s default and the
-    /// BANKEN.md `(defk8sview)` `:default-sort (by "STATUS" desc)`).
+    /// `(defk8sview)` `:default-sort (by "STATUS" desc)`).
     ///
     /// # Panics
     ///

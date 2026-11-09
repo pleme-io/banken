@@ -1,4 +1,4 @@
-//! Golden-frame test of the `:pods` table render (BANKEN.md §VI M0 gate,
+//! Golden-frame test of the `:pods` table render (M0 gate,
 //! fixture-tier).
 //!
 //! Asserts via `TestBackend`'s typed `to_lines()` / `cell()` accessors —
@@ -89,7 +89,7 @@ fn selected_row_carries_the_highlight_background() {
 }
 
 /// A `CrashLoopBackOff` STATUS cell renders error-red; a Running STATUS cell
-/// renders success-green — the pathology-color axis (BANKEN.md §V) at the
+/// renders success-green — the pathology-color axis at the
 /// cell level. Asserted via the typed cell fg, never a text scan.
 #[test]
 fn status_cells_are_pathology_colored() {

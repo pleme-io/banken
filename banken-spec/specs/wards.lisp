@@ -1,4 +1,4 @@
-;; banken health wards — the (defward) authoring surface (BANKEN.md §V).
+;; banken health wards — the (defward) authoring surface.
 ;;
 ;; A ward is the health LANDING: Pulses (breathe band phases per workload),
 ;; Popeye (the pathology linter, read-only), and the QUIET headline. It does
@@ -11,7 +11,7 @@
 ;; *** `:attested` may only be `computed`. ***
 ;; `(:kind proven :outcome-chain "…")` is PARSE-TIME REJECTED: no fleet
 ;; PromessaController and no real OutcomeChain exist in code (autorevivy's
-;; attest() is a placeholder), so BANKEN.md §V/§IX C-controller forbids the
+;; attest() is a placeholder), so C-controller forbids the
 ;; label. The refusal is structural — OutcomeChainRef has no Deserialize
 ;; that succeeds — not a comment asking an author to be careful.
 
@@ -23,7 +23,7 @@
   ;; The lanes, in render order. These MUST equal the `ward` view's columns
   ;; after the identity column (WORKLOAD) — MEM, CPU, STATUS.
   ;;
-  ;; Per BANKEN.md §V a band lane shows a PER-DIMENSION phase, never one
+  ;; A band lane shows a PER-DIMENSION phase, never one
   ;; joined verdict: the composed BreathePlan is DESIGN, so a single "bands
   ;; are fine" lane would be an over-claim. Hence one lane per dimension.
   :lanes ((:header "MEM" :signal (:kind band :dimension memory))

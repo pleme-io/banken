@@ -62,11 +62,11 @@ use ishou_tokens::{FleetDefaults, FleetTheme, FleetThemedConfig};
 use serde::{Deserialize, Serialize};
 use tatara_lisp::DeriveTataraDomain;
 
-/// The default refresh cadence — BANKEN.md §VI M0's 1 Hz poll.
+/// The default refresh cadence — M0's 1 Hz poll.
 ///
 /// M0/M1 are a **poll**, not a watch: the concrete `SharedInformer` that
 /// would turn engenho's `ReqwestWatcher` stream into a live cache is
-/// trait-doc-only (BANKEN.md §IX C-watch). This knob is the poll period,
+/// trait-doc-only (C-watch). This knob is the poll period,
 /// and is *not* renamed to `watch_*` until that substrate exists.
 pub const DEFAULT_REFRESH_INTERVAL_MS: u64 = 1_000;
 

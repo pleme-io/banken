@@ -830,7 +830,7 @@ such.
 
 1. **`WardVerdict`** — fields private, `evaluate` the only constructor, so a
    ward verdict claiming `Green` over an absent core metric is
-   unconstructible. The BANKEN.md §V BROKEN-METRIC guard is a **structural
+   unconstructible. The BROKEN-METRIC guard is a **structural
    cap** consulting no catalog row, so omitting / filtering / mis-authoring the
    `broken-scrape` rule cannot switch it off. A guard that depends on a catalog
    row is a guard with an off switch. Fail-once measured: deleting the cap line
@@ -869,7 +869,7 @@ unused field masquerading as an invariant.
 
 ## Governing methods
 
-banken is a **Quadro** (terminal UI) — QUADRO.md governs the render; it composes
+banken is a **Quadro** (terminal UI) — the design governs the render; it composes
 egaku + egaku-term + moldura (host: mado), shikumi config, ishou theme, awase keys.
 It is a **naturalize** worked example — a **half-citizen by design** (naturalizes
 k9s's observe half, not its mutate half). Per its own 4-check citizenship test it
@@ -881,7 +881,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
 - **SHIPPED (mock-green, no cluster):** `banken-spec` = the `postigo` TYPED-SPEC +
   INTERPRETER triplet, plus the four health/diagnosis/navigation domains below
   (**105 tests green** — `cargo test -p banken-spec`). The
-  citizenship core, provable without a cluster, per BANKEN.md §III.
+  citizenship core, provable without a cluster.
 - **SHIPPED (fixture-green, no cluster):** the `banken` **binary crate** — a
   runnable `:pods` navigator (`cargo run -p banken`, `cargo run -p banken -- --help`).
   The full render + interaction pipeline over a **fixture source**
@@ -980,7 +980,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
     and `prescribed_mirrors_the_authored_lisp` makes a fleet re-theme a loud
     failure there instead of silent drift.
 - **SHIPPED (unit-green):** the **awase keybinding layer** — closes a documented
-  BANKEN.md over-claim. §II rowed `awase BindingMap/KeyChord + detect_conflicts +
+  over-claim. The design rowed `awase BindingMap/KeyChord + detect_conflicts +
   KeyRepeatGate` as **SHIPPED** while `K8sActionSpec.keys` was a bare `String`
   and banken consumed **zero** awase. Now: `banken_spec::chord::ActionChord`
   wraps `awase::Hotkey` (parse-time-rejected: an unparseable chord has no typed
@@ -988,7 +988,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
   `SpecError::ChordConflict` naming both sides — **never last-write-wins** — and
   `awase::KeyRepeatGate` debounces the three postigo action chords at the
   dispatcher (navigation deliberately exempt).
-  - **Correction to BANKEN.md §III.a:** the right awase type is **`Hotkey`, not
+  - **Correction to the design:** the right awase type is **`Hotkey`, not
     `KeyChord`** — `awase::KeyChord` (`awase/src/chord.rs:11-21`) is a two-step
     leader→follower chord; `KeyMode.bindings` is keyed on `Hotkey`
     (`awase/src/mode.rs:20`). Naming `KeyChord` was a type error.
@@ -1062,7 +1062,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
     autorevivy taxonomy is 35 classes. Authoring rules whose evidence nothing
     supplies would be a catalog of rules that can never fire, so the backfill
     is gated on autorevivy's detection stream deploying beyond alpha-shadow
-    (BANKEN.md §V's ~15% live-data-reuse note).
+    (~15% live-data-reuse note).
   - **`pending-banken: per-dimension-band-evidence`** /
     **`pending-banken: drill-step-view-resolution`** /
     **`pending-banken: render-green-gate`** — `EvidenceKind::BandPhase` reads
@@ -1109,7 +1109,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
   `#[ignore]`d, refuses to guess a context). 224 workspace tests green with and
   without `--features live`.
   - **The C-watch ceiling was a fact about this crate's Cargo features, not
-    about kube-rs.** BANKEN.md §IX called the informer "unbuilt substrate banken
+    about kube-rs.** the design called the informer "unbuilt substrate banken
     must build"; `kube-runtime` 0.99 — the version already resolved — ships
     `Config::streaming_lists()`, `bookmarks: true` by default, `metadata_watcher`
     and the whole resourceVersion/410 machine. Enabling the `runtime` feature was
@@ -1122,7 +1122,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
   - **One reader, two producers.** The app holds a `Despensa` and never learns
     which producer filled it: `--live` attaches the watch stream, the fixture
     attaches `spawn_poll_absorber` over `izumi::refresh` (consumed, not
-    re-rolled — QUADRO §T14). An enum of `Watched|Polled` in the app would have
+    re-rolled). An enum of `Watched|Polled` in the app would have
     put the transport in the app's own type.
   - **The wake is content-gated, and a PHASE change also wakes.**
     `LiveStore::push` bumped its generation unconditionally, so the old feed
@@ -1160,7 +1160,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
       running the fail-once.
     - `pending-banken: grip-window` — the object can still change between the
       grip and the act itself. Microseconds rather than think-time, but not
-      zero, and no local type closes it (BANKEN.md C1).
+      zero, and no local type closes it (C1).
   - **SHIPPED: a typed `ListStrategy{Streaming, ListWatch}`** — named, never
     probed, and **no `Auto` variant**: an unannounced downgrade to a weaker read
     path is the silent-degradation class banken refuses. A typo REFUSES and the

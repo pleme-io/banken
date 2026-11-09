@@ -88,7 +88,7 @@ arc-swap = "1"
 # no fleet edit could reach; it is now the theme's own error/warning/success.
 ishou-tokens = "0.1"
 
-# ── The live-cluster read path (BANKEN.md §VI M0 destination-tier). ──
+# ── The live-cluster read path (M0 destination-tier). ──
 # Gated behind the `live` feature so the default build (the fixture path
 # proven this session) stays lean + green. NO `kubectl` subprocess — the
 # NO-SHELL rule holds; this is a typed apiserver client. The code is real
@@ -96,7 +96,7 @@ ishou-tokens = "0.1"
 # reachable — bravo/alpha VPN-gated, local k3s down). `pending-banken:
 # live-read` — the row lights up the instant a cluster returns.
 # *** `runtime` added 2026-08-08 — the watch informer was never missing upstream. ***
-# BANKEN.md's C-watch ceiling read as "unbuilt substrate banken must build", and
+# C-watch ceiling read as "unbuilt substrate banken must build", and
 # that was a fact about this feature list, not about kube-rs. `kube-runtime`
 # 0.99 already ships `InitialListStrategy::StreamingList` + `Config::streaming_lists()`
 # (`watcher.rs:405`), `bookmarks: true` by default (`:287`), `metadata_watcher`

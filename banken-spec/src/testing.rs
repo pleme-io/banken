@@ -1,5 +1,5 @@
 //! `MockClusterEnv` — the mock seam that proves the triplet with **no
-//! live cluster** (BANKEN.md §III.c; the sui-spec `MockEnv` pattern).
+//! live cluster** (the sui-spec `MockEnv` pattern).
 //!
 //! It records every emitted `DeclareChange` and every break-glass
 //! action, and lets tests assert:

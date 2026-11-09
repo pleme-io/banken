@@ -1,4 +1,4 @@
-//! The `ClusterEnv` seam (BANKEN.md §III.c) — the trait with **no
+//! The `ClusterEnv` seam — the trait with **no
 //! unwitnessed-mutate method**.
 //!
 //! This copies sui-spec's verified `GcEnvironment`/`apply<E>` shape
@@ -24,7 +24,7 @@
 //! The re-add case (an author *extending* the trait with a mutate
 //! method) is not forbidden by the type system — it is CI-caught by the
 //! substrate-invariant guard in `tests/`. Its honest tier is
-//! only-mitigated → CI-caught (BANKEN.md §III.d). Do NOT claim
+//! only-mitigated → CI-caught. Do NOT claim
 //! "imperative mutation is unrepresentable" unqualified.
 
 use crate::{
@@ -1033,7 +1033,7 @@ impl std::fmt::Display for GripError {
 /// across the await, and for staging without one (the argument type). It is
 /// **only-mitigated** that the object does not change between the grip and the
 /// act itself — that window is microseconds rather than the operator's think
-/// time, but it is not zero, and no local type can close it. See BANKEN.md C1.
+/// time, but it is not zero, and no local type can close it (ceiling C1).
 ///
 /// # The `!Send` seal, asserted
 ///

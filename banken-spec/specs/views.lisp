@@ -1,4 +1,4 @@
-;; banken canonical views — the (defk8sview) authoring surface (BANKEN.md §III.b).
+;; banken canonical views — the (defk8sview) authoring surface.
 ;;
 ;; These forms declare banken's navigable views as Lisp data and are
 ;; driven into typed K8sViewSpec values by banken_spec::load_views

@@ -1,6 +1,6 @@
 //! banken 番犬 — the pleme-io-native k9s (naturalize).
 //!
-//! This crate is the **runnable** half of banken (BANKEN.md §VI M0): the
+//! This crate is the **runnable** half of banken (M0): the
 //! `:pods` table render + interaction pipeline, built on the shipped
 //! [`banken_spec`] citizenship primitive (the `postigo` action-legality
 //! triplet). It is an **observe-first, GitOps-native cluster navigator** —

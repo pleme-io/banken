@@ -35,7 +35,7 @@
 //! | no two chords collide, across actions AND nav keys AND bancadas | [`SpecError::ChordConflict`] |
 //!
 //! An **unreferenced** drill is deliberately NOT an error: a drill is also
-//! reachable from the `:` command bar (BANKEN.md §V makes the command bar a
+//! reachable from the `:` command bar (the design makes the command bar a
 //! first-class peer of the ward), so requiring a `drill_to` referent would
 //! forbid a legitimate authoring.
 
@@ -826,7 +826,7 @@ mod tests {
     }
 
     /// An unreferenced drill is ALLOWED — the `:` command bar is a
-    /// first-class peer of the ward (BANKEN.md §V), so requiring a
+    /// first-class peer of the ward, so requiring a
     /// `drill_to` referent would forbid a legitimate authoring.
     #[test]
     fn an_unreferenced_drill_is_allowed() {

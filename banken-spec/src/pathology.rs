@@ -1,9 +1,9 @@
 //! `(defpathology)` — the symptom→cause rule domain, and the health
-//! verdict it feeds (BANKEN.md §V + the §V drill-flow).
+//! verdict it feeds (the drill-flow).
 //!
 //! # What this domain is
 //!
-//! BANKEN.md §V's Popeye lane consumes a *taxonomy*: the fleet
+//! Popeye lane consumes a *taxonomy*: the fleet
 //! agentic-observability doctrine's symptom→cause rules (§II/§III) plus
 //! autorevivy's 35-class detection stream, rendered as a read-only linter
 //! whose every remedy routes through
@@ -14,14 +14,14 @@
 //! for it to fire, how badly it bites, and which rail fixes it.
 //!
 //! Third-use test: passed by a wide margin. autorevivy's `MaintenanceJob`
-//! taxonomy is 35 classes (BANKEN.md §II, verified), the
+//! taxonomy is 35 classes (verified), the
 //! agentic-observability doctrine names more, and three ship authored here
 //! on day one.
 //!
 //! # The BROKEN-METRIC guard is STRUCTURAL, not a catalog row
 //!
 //! The marquee invariant — *no workload shows GREEN unless
-//! `up==1 && count(core_metric)>0`* (BANKEN.md §V / agentic-observability
+//! `up==1 && count(core_metric)>0`* (agentic-observability
 //! §II.9) — is **not** implemented as a pathology, deliberately. A rule in a
 //! catalog can be omitted, mis-authored, or filtered out by a ward's
 //! `:pathologies` list, and then the guard silently stops guarding. Instead
@@ -187,7 +187,7 @@ pub struct PathologySpec {
     /// What the operator observes (the surface symptom).
     pub symptom: String,
     /// The load-bearing cause the symptom resolves to — the whole point of
-    /// the taxonomy (BANKEN.md §V: *"walks the symptom→cause path to the
+    /// the taxonomy (*"walks the symptom→cause path to the
     /// load-bearing cause"*).
     pub cause: String,
     /// How badly a firing bites.
@@ -287,7 +287,7 @@ impl Verdict {
 ///
 /// Fields are private and [`Self::evaluate`] is the sole constructor, so a
 /// caller cannot mint a ward verdict at all, let alone one claiming
-/// [`Verdict::Green`] over an absent core metric. That is the BANKEN.md §V
+/// [`Verdict::Green`] over an absent core metric. That is the
 /// BROKEN-METRIC guard realized as a construction invariant rather than a
 /// render-time `if`.
 ///
@@ -334,7 +334,7 @@ impl WardVerdict {
             folded = folded.worse_of(p.severity.verdict());
         }
 
-        // *** THE BROKEN-METRIC GUARD (BANKEN.md §V, agentic-observability §II.9). ***
+        // *** THE BROKEN-METRIC GUARD (agentic-observability §II.9). ***
         // Structural and catalog-independent: a would-be Green over an
         // absent core metric is Unknown. Deleting this line is what the
         // `a_dead_scrape_can_never_report_green` gate catches.
@@ -409,7 +409,7 @@ mod tests {
         assert!(v.fired().is_empty());
     }
 
-    /// **THE GATE.** The BANKEN.md §V BROKEN-METRIC guard: an absent core
+    /// **THE GATE.** The BROKEN-METRIC guard: an absent core
     /// metric can never read as calm — and crucially this holds with an
     /// EMPTY pathology catalog, which is what makes the guard structural
     /// rather than a catalog row that could be omitted.

@@ -54,7 +54,7 @@ use tokio::sync::watch;
 
 /// How often the feed re-reads the cluster when the caller does not say.
 ///
-/// One second is BANKEN.md §VI M0's stated poll cadence. It is a *poll*, and
+/// One second is M0's stated poll cadence. It is a *poll*, and
 /// naming it one is deliberate: a true `kube` watch informer is M1, and
 /// calling this a watch is precisely the round-up that `pending-banken:
 /// live-watch` was written to prevent.
