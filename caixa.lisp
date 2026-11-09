@@ -60,4 +60,4 @@
   ;; banken-spec on purpose, so the postigo primitive does not drag
   ;; shikumi's figment/notify/gen-platform tree into a consumer that only
   ;; wants the legality gate.
-  :bibliotecas ("banken-spec" "banken-config"))
+  :caixotes ("banken-spec" "banken-config"))
