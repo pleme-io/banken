@@ -2,8 +2,8 @@
 //!
 //! # What this closes
 //!
-//! `theory/BANKEN.md` §III.a declares `K8sActionSpec { pub keys: KeyChord }`
-//! and §II's reuse map rows the hotkey layer as
+//! The design declares `K8sActionSpec { pub keys: KeyChord }`
+//! and its reuse map rows the hotkey layer as
 //! *"awase `BindingMap`/`KeyChord` + `detect_conflicts` + `KeyRepeatGate`
 //! — **SHIPPED**"*. Until now `keys` was a bare `String` and banken
 //! consumed **zero** awase. That over-claim is now closed: the field is a
@@ -11,7 +11,7 @@
 //! rejected when the `(defk8saction)` form compiles rather than discovered
 //! at keypress time.
 //!
-//! # Correction to §III.a: the right awase type is `Hotkey`, not `KeyChord`
+//! # Correction to the design: the right awase type is `Hotkey`, not `KeyChord`
 //!
 //! `awase::KeyChord` (`awase/src/chord.rs:11-21`) is a **two-step
 //! leader→follower** chord: `{ leader: Hotkey, follower: Hotkey,

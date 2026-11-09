@@ -3,7 +3,7 @@
 //!
 //! # Why banken owns this instead of enabling it
 //!
-//! `theory/BANKEN.md`'s **C-discovery** ceiling, measured 2026-08-08. It is the
+//! banken's **C-discovery** ceiling, measured 2026-08-08. It is the
 //! inverse of the C-watch lesson: there, a capability read as absent and was
 //! merely *unenabled*; here the capability is genuinely **absent from kube-rs**
 //! while being **rich on the wire**.

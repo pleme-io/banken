@@ -27,7 +27,7 @@
 //! `None` from `Key::from_name` and can never become chords — verified against
 //! awase 0.1.8. Routing vim through chords would have dropped two motions from
 //! the agreed v1 alphabet, and would have collided `G` with the authored
-//! `shift+g` (pod-break-glass). See `theory/UNSOKU.md` §V.
+//! `shift+g` (pod-break-glass).
 //!
 //! The **erase chords** are the deliberate exception, and they run the other
 //! way for the same reason: `ctrl+w` / `ctrl+u` / `ctrl+k` and the `delete`

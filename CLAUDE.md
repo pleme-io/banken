@@ -49,12 +49,6 @@ One-sentence purpose: an **observe-first, GitOps-native cluster-navigator TUI** 
 keep k9s's fast keyboard navigation + health surfaces, structurally refuse its
 imperative-mutation console.
 
-## Canonical design
-
-The full design, tier-honest ledger, phased path, and Care live in
-**`theory/BANKEN.md`** (pleme-io/theory) — read it before any non-trivial change.
-Do not restate theory here; cite it.
-
 ## The one primitive banken owns — `postigo`
 
 Every cluster action is typed into a three-class **action-legality** gate:
@@ -534,7 +528,7 @@ thing, the chord namespace, and `Catalog::resolve` checks it.
 
 **bancada** (pt-BR: a workbench — tools already laid out, work starts the
 instant you sit down). Renamed from `guarita` 2026-07-31: that word was
-already double-claimed (`theory/NAMING.md:88`), and on Law 2 it belongs to
+already double-claimed, and on Law 2 it belongs to
 the per-request credential check in a host organization's VPN design, whose
 "gatehouse sentry checking papers per visit" gloss teaches that job exactly.
 This domain took the *container* half of the metaphor and dropped the
@@ -1255,7 +1249,7 @@ proven-live ✗ until a cluster is reachable / known ✓).
 
 ## Standing rule
 
-Every PR advances a `theory/BANKEN.md` §VII ledger row's tier or leaves a typed
+Every PR advances a ledger row's tier or leaves a typed
 `pending-banken: <row>` note. The `substrate_invariant.rs` guard stays green (any
 `ClusterEnv` mutating-method addition fails the build). No DECLARE rail is
 direct-to-main. Toolchain: **`tatara-lisp = "0.3.3"`, and it is the ONLY tatara
