@@ -41,9 +41,6 @@
   :deps ()
   :deps-dev ()
 
-  ;; The wired-up binary is what `feira publish` releases.
-  :exe ("banken")
-
   ;; The downstream-consumable typed surfaces.
   ;;
   ;; banken-spec — the postigo action-legality border + the SEVEN authored
@@ -60,4 +57,4 @@
   ;; banken-spec on purpose, so the postigo primitive does not drag
   ;; shikumi's figment/notify/gen-platform tree into a consumer that only
   ;; wants the legality gate.
-  :caixotes ("banken-spec" "banken-config"))
+  :caixotes ("banken" "banken-spec" "banken-config"))
